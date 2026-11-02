@@ -14,7 +14,7 @@ Under that, every agent is tied to the person who authorized it. Each hire can o
 
 Each payment is also checked on-chain: counterparty in scope, invoice not already paid, within the per-payment cap, the hash-chain budget and the daily rate, not expired. So a fooled agent cannot pay anyone it was not authorized to pay.
 
-**Live on NEAR testnet:** contract [`writ-mandate-writ.testnet`](https://testnet.nearblocks.io/address/writ-mandate-writ.testnet), every step with its transaction in [`docs/testnet.md`](docs/testnet.md). It has no full-access key.
+**Live on NEAR testnet:** contract [`writ-credit-writ.testnet`](https://testnet.nearblocks.io/address/writ-credit-writ.testnet), every step with its transaction in [`docs/testnet.md`](docs/testnet.md). It has no full-access key.
 
 **It settles in real stablecoins too:** one payment in Circle's testnet USDC, with an injected payment rejected, in [`docs/testnet-usdc.md`](docs/testnet-usdc.md).
 
