@@ -1,8 +1,16 @@
 # 合約：建置與攻擊台。第一次跑測試會下載 near-sandbox 二進位（需網路一次）。
 # .cargo/config.toml 已加 --cfg near（near-sdk 5.30 需要；cargo-near 會自動加，這裡用 plain cargo）。
+WASM_OPT := $(wildcard ../app/node_modules/.bin/wasm-opt)
 build:
 	cargo build --target wasm32-unknown-unknown --release
-	sha256sum target/wasm32-unknown-unknown/release/writ.wasm
+	mkdir -p res
+ifneq ($(WASM_OPT),)
+	$(WASM_OPT) -Oz --strip-debug target/wasm32-unknown-unknown/release/writ.wasm -o res/writ.wasm
+else
+	cp target/wasm32-unknown-unknown/release/writ.wasm res/writ.wasm
+endif
+	ls -l res/writ.wasm
+	sha256sum res/writ.wasm
 
 # 跑攻擊台並重產 docs/bench.md；任何測試失敗則 exit 1
 test: build

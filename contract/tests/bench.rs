@@ -12,7 +12,7 @@ use near_workspaces::{Account, AccountId, Contract, Worker};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-const WASM: &str = "target/wasm32-unknown-unknown/release/writ.wasm";
+const WASM: &str = "res/writ.wasm";
 const UNIT: u128 = 10_000_000_000_000_000_000_000; // 0.01 NEAR / 鏈節
 
 // ---------------------------------------------------------------- 工具

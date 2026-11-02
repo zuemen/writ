@@ -32,7 +32,7 @@ for (const [name, amt] of Object.entries(plan)) {
 writeJson(join(DEMO, "accounts.json"), accts);
 
 const writ = as(accts.writ.id, accts.writ.sk);
-const wasm = readFileSync(join(ROOT, "contract/target/wasm32-unknown-unknown/release/writ.wasm"));
+const wasm = readFileSync(join(ROOT, "contract/res/writ.wasm"));
 const d = await writ.deployContract(wasm);
 console.log(`  deployed writ.wasm (${wasm.length} bytes) tx ${d.transaction.hash}`);
 await call(writ, accts.writ.id, "new", { unseal_delay_secs: Number(process.env.UNSEAL_DELAY ?? 10) });

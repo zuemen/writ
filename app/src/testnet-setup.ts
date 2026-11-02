@@ -29,7 +29,7 @@ for (const n of names) {
 }
 
 const writ = as(accts.writ.id, accts.writ.sk);
-const wasm = readFileSync(join(ROOT, "contract/target/wasm32-unknown-unknown/release/writ.wasm"));
+const wasm = readFileSync(join(ROOT, "contract/res/writ.wasm"));
 const d = await writ.deployContract(wasm);
 console.log(`  deployed ${accts.writ.id} tx ${d.transaction.hash}`);
 for (const [m, args] of [

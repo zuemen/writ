@@ -18,5 +18,8 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   },
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "binaryen": "^123.0.0"
+  }
 }
