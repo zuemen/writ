@@ -68,6 +68,30 @@ DEMO_RESULT|PASS|paid=true|injection=SCOPE|attacker_gain=0|disclosed=true|revoke
              anyone submits the ixn → contract ed25519_verify + seal check → delete key, refund vault
 ```
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant LE as Legal entity (vLEI)
+    participant H as Employee (ECR holder)
+    participant V as Verifier
+    participant W as Writ contract (NEAR)
+    participant A as Agent
+    participant M as Merchant / anyone
+    LE->>H: ECR (role credential, natural person)
+    H->>A: AMC (scope, hash-chain budget, rate, expiry) to a delegated AID
+    V->>V: fresh keystore: verify KEL, TEL, ACDC, delegation
+    V-->>LE: attestation (Ed25519)
+    LE->>W: register(attestation) + deposit
+    W->>W: ed25519_verify, add function-call key (spend only)
+    H-->>A: release PayWord links off-chain
+    A->>W: spend(preimage, j, to)
+    W-->>M: pay, or Rejected{reason} with a tx hash
+    H->>H: revoke AMC in KERI (TEL rev, KEL ixn)
+    M->>W: revoke_by_kel(ixn, signature)
+    W->>W: ed25519_verify, seal check, delete agent key
+    A--xW: spend → AccessKeyNotFound
+```
+
 **One key, two worlds.** The agent's KERI identifier is a *delegated AID* under the employee's key event log (GLEIF discussion paper, Annex A p.44). Its Ed25519 signing key is the same key that is added as a NEAR function-call key on the contract account. `keri/issuer.py` exports it as a NEAR secret key; `app/src/flow.ts` signs NEAR transactions with it.
 
 **Budget is a hash chain** (PayWord, Rivest & Shamir 1996). The AMC carries `paywordRoot = w0 = sha256^n(seed)`. The employee holds the seed and releases links to the agent off-chain; paying `j` links requires the preimage `w_{idx+j}`. The NEAR key decides *who can act*; the preimage decides *how much*. A function-call key's allowance limits gas only, so the money limit has to live somewhere else — here, in the credential.
@@ -142,7 +166,7 @@ Rejection reasons: `EXPIRED`, `SCOPE`, `LIMIT`, `CHAIN`, `RATE`, `FUNDS`. Events
 - **Privacy is selective disclosure, not anonymity.** Until a disclosure, only `sha256(LEI‖salt)` is on-chain (salt held by the verifier). Funding accounts, the agent key and payments are public and linkable on-chain. Only tier 1 (the LEI) is disclosable; the employee's identity is out of scope.
 - **Single verifier per cell**; no sub-delegation between agents. The NEP-141 path is tested with a mock token (`contract/ft-mock`), not a live stablecoin.
 - **Not deployed to testnet yet.**
-- **Dockerfile is provided but not yet verified** (no Docker daemon in the build environment).
+- **Dockerfile is provided but not yet verified** (no Docker daemon in the build environment). `.github/workflows/ci.yml` runs the README steps on every push.
 
 ## Repository layout
 
