@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/.demo-testnet/site"
 rm -rf "$OUT"; mkdir -p "$OUT"
-cp "$ROOT/site/index.html" "$OUT/index.html"
+cp "$ROOT/site/index.html" "$ROOT/site/og.png" "$OUT/"
 node -e '
 const fs=require("fs");const d=process.argv[1];
 const b=JSON.parse(fs.readFileSync(d+"/bounty.json"));const p=JSON.parse(fs.readFileSync(d+"/pool.json"));

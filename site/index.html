@@ -3,8 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Writ: your agent will get fooled, the money won't move</title>
-<meta name="description" content="Verifiable, revocable payment mandates for AI agents, enforced on NEAR. Run one in your browser, then try to steal the key.">
+<title>Writ: fire one employee, every agent they hired goes dark</title>
+<meta name="description" content="HR for AI agents, enforced on NEAR. Fire one employee and every agent under them loses its key in one transaction. Run it in your browser.">
+<meta property="og:title" content="Writ: fire one employee, every agent they hired goes dark">
+<meta property="og:description" content="HR for AI agents, enforced on NEAR. Run it in your browser, then try to steal a published agent key.">
+<meta property="og:image" content="https://writ-near.112306007.workers.dev/og.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%238f1d14'/%3E%3Ctext x='16' y='24' font-family='Georgia,serif' font-size='24' font-weight='700' fill='%23fbf8f0' text-anchor='middle'%3EW%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&family=Hanken+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -45,20 +51,28 @@
   .btn:disabled { opacity:.38; cursor:not-allowed; }
   .btn:focus-visible, a:focus-visible, input:focus-visible, button:focus-visible { outline:3px solid var(--ox); outline-offset:2px; }
 
-  /* 令狀本體 */
-  .writ { position:relative; background:var(--sheet); border:1px solid var(--rule-strong); padding:7px; box-shadow:0 22px 50px -26px rgba(30,20,5,.5); transform:rotate(.5deg); }
-  .writ-in { border:1px solid var(--rule-strong); padding:26px 28px 24px; }
-  .writ h2 { font:600 25px/1.2 var(--serif); margin:3px 0 16px; }
-  dl { margin:0; display:grid; grid-template-columns:auto 1fr; font-size:14.5px; }
-  dt { color:var(--soft); padding:7px 18px 7px 0; border-top:1px solid var(--rule); white-space:nowrap; }
-  dd { margin:0; padding:7px 0; border-top:1px solid var(--rule); overflow-wrap:anywhere; font:500 13.5px/1.5 var(--mono); }
-  .status-on { color:var(--ok); }
-  .status-off { color:var(--ox); }
-  .stamp { position:absolute; right:22px; top:92px; font:600 42px var(--mono); letter-spacing:.05em; color:var(--ox); border:5px solid var(--ox); padding:2px 16px; border-radius:6px; transform:rotate(-13deg); opacity:0; pointer-events:none; mix-blend-mode:multiply; }
-  .stamp.on { animation:slam .38s cubic-bezier(.2,1.5,.4,1) forwards; }
-  @keyframes slam { 0% { opacity:0; transform:rotate(-13deg) scale(2.4); } 100% { opacity:.86; transform:rotate(-13deg) scale(1); } }
-  .writ.shake { animation:shake .3s .12s; }
-  @keyframes shake { 25% { transform:rotate(.5deg) translate(-3px,2px); } 60% { transform:rotate(.5deg) translate(3px,-2px); } }
+  /* 組織圖 */
+  .org { position:relative; background:var(--sheet); border:1px solid var(--rule-strong); padding:7px; box-shadow:0 22px 50px -26px rgba(30,20,5,.5); }
+  .org-in { border:1px solid var(--rule-strong); padding:20px 22px 22px; }
+  .node { position:relative; border:1px solid var(--rule); background:#fffdf7; padding:10px 13px; overflow:hidden; }
+  .node.top { border-color:var(--rule-strong); }
+  .node b { font:600 15.5px var(--sans); display:block; }
+  .node span { font:500 12.5px var(--mono); color:var(--soft); display:block; overflow-wrap:anywhere; }
+  .node .st { position:absolute; right:10px; top:10px; font:600 11px var(--mono); color:var(--ok); }
+  .node.dead { background:#f7ece8; }
+  .node.dead .st { color:var(--ox); }
+  .link { font:500 11.5px var(--mono); color:var(--soft); padding:5px 0 5px 16px; margin-left:14px; border-left:1.5px solid var(--rule-strong); }
+  .link.cut { border-left:1.5px dashed var(--ox); color:var(--ox); }
+  .stamp { position:absolute; right:60px; top:9px; font:600 19px var(--mono); letter-spacing:.05em; color:var(--ox); border:3px solid var(--ox); padding:0 9px; border-radius:4px; opacity:0; pointer-events:none; mix-blend-mode:multiply; transform:rotate(-7deg); }
+  .stamp.on { animation:slam .34s cubic-bezier(.2,1.5,.4,1) forwards; }
+  .stamp.d1 { animation-delay:.32s; } .stamp.d2 { animation-delay:.64s; } .stamp.d3 { animation-delay:.96s; }
+  @keyframes slam { 0% { opacity:0; transform:rotate(-7deg) scale(2.6); } 100% { opacity:.9; transform:rotate(-7deg) scale(1); } }
+  .caption { font-size:13.5px; color:var(--soft); margin:12px 0 0; }
+
+  .keystrip { display:grid; grid-template-columns:auto 1fr auto; gap:18px; align-items:center; background:var(--ink); color:var(--sheet); padding:14px 20px; margin-bottom:64px; }
+  .keystrip b { font:600 16px var(--sans); white-space:nowrap; }
+  .keystrip code { font:13px var(--mono); color:#f6d9d4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .keystrip a { font:600 15px var(--sans); white-space:nowrap; }
 
   section { padding:72px 0; border-top:1px solid var(--rule); }
   h3.title { font:600 clamp(30px,4vw,46px)/1.1 var(--serif); letter-spacing:-.015em; margin:10px 0 12px; }
@@ -133,9 +147,7 @@
   .reveal { animation:rise .6s both; }
   .d1 { animation-delay:.08s; } .d2 { animation-delay:.16s; } .d3 { animation-delay:.26s; }
   @keyframes rise { from { opacity:0; transform:translateY(10px); } to { opacity:1; } }
-  .writ.reveal { animation-name:rise-writ; }
-  @keyframes rise-writ { from { opacity:0; transform:rotate(.5deg) translateY(10px); } to { opacity:1; transform:rotate(.5deg); } }
-  @media (prefers-reduced-motion:reduce) { .reveal, .stamp.on, .writ.shake { animation-duration:.01s; animation-delay:0s; } html { scroll-behavior:auto; } }
+  @media (prefers-reduced-motion:reduce) { .reveal, .stamp.on { animation-duration:.01s; animation-delay:0s; } html { scroll-behavior:auto; } }
   @media (max-width:880px) {
     .hero, .steal { grid-template-columns:1fr; gap:34px; }
     .hero { padding:40px 0 52px; }
@@ -150,9 +162,9 @@
     .step .act { grid-column:2; margin-top:8px; }
     .out { grid-column:1 / -1; }
     section { padding:52px 0; }
-    .writ, .writ.reveal { transform:none; animation-name:rise; }
-    .writ-in { padding:20px 18px; }
-    .stamp { font-size:32px; right:14px; }
+    .org-in { padding:16px 14px; }
+    .stamp { right:12px; top:30px; }
+    .keystrip { grid-template-columns:1fr; gap:6px; margin-bottom:40px; }
     .big { grid-template-columns:1fr; }
   }
 </style>
@@ -160,63 +172,67 @@
 <body>
 <nav><div class="wrap">
   <a class="mark" href="#top">Writ</a>
-  <div class="links"><a href="#run">Run a mandate</a><a href="#steal">Steal the key</a><a href="#models">Real models</a><a href="#how">How it works</a><a href="#proof">Proof</a><a href="https://github.com/zuemen/writ">GitHub</a></div>
+  <div class="links"><a href="#run">Fire someone</a><a href="#steal">Steal the key</a><a href="#models">Real models</a><a href="#how">How it works</a><a href="#proof">Proof</a><a href="https://github.com/zuemen/writ">GitHub</a></div>
   <div class="live"><i></i>NEAR testnet, live</div>
 </div></nav>
 
 <main id="top" class="wrap">
   <div class="hero">
     <div>
-      <div class="eyebrow reveal">Payment mandates for AI agents</div>
-      <h1 class="reveal d1">Your agent will get fooled. <em>The money won't move.</em></h1>
-      <p class="lead reveal d2">A company's AI agent pays suppliers. An invoice tells it to pay someone else. The employee who set it up quits. Writ makes both harmless: every payment is checked on-chain against a credential HR can take back.</p>
-      <div class="cta reveal d3"><a class="btn" href="#run">Run a mandate</a><a class="btn ghost" href="#steal">Try to steal the key</a></div>
+      <div class="eyebrow reveal">HR for AI agents, on NEAR</div>
+      <h1 class="reveal d1">Fire one employee. <em>Every agent they hired goes dark.</em></h1>
+      <p class="lead reveal d2">Agents now pay suppliers and hire other agents. Writ ties every one of them to the person who authorized them. When that person leaves, one signed event deletes every key in the tree, in one transaction, and the money goes back to the company.</p>
+      <div class="cta reveal d3"><a class="btn" href="#run">Fire someone</a><a class="btn ghost" href="#steal">Try to steal a key</a></div>
     </div>
-    <div class="writ reveal d2" id="writ"><div class="writ-in">
-      <div class="eyebrow">Writ of payment mandate</div>
-      <h2>Mandate <span id="wNo">…</span></h2>
-      <dl>
-        <dt>Authorized by</dt><dd>legal entity → employee (ECR)</dd>
-        <dt>Issued to</dt><dd id="wAgent">…</dd>
-        <dt>May pay</dt><dd id="wPayee">…</dd>
-        <dt>Budget used</dt><dd id="wBudget">…</dd>
-        <dt>Vault</dt><dd id="wVault">…</dd>
-        <dt>Status</dt><dd id="wStatus">…</dd>
-      </dl>
-      <div class="stamp" id="stamp">REVOKED</div>
+    <div class="org reveal d2" id="org"><div class="org-in">
+      <div class="eyebrow" style="margin-bottom:10px">Live on testnet · <span id="treeNo">…</span></div>
+      <div class="node top" id="nEmp"><b>Alex Example, Treasury</b><span>employee · role credential (ECR)</span><i class="st" id="stEmp" style="font-style:normal">ACTIVE</i><div class="stamp" id="stampEmp">FIRED</div></div>
+      <div class="link" id="l1">issues a mandate</div>
+      <div class="node" id="nRoot"><b>Accounts-payable agent</b><span id="dRoot">…</span><i class="st" id="stRoot" style="font-style:normal">…</i><div class="stamp d1" id="stampRoot">REVOKED</div></div>
+      <div class="link" id="l2">hires, narrower: one payee</div>
+      <div class="node" id="nMid"><b>Procurement agent</b><span id="dMid">…</span><i class="st" id="stMid" style="font-style:normal">…</i><div class="stamp d2" id="stampMid">REVOKED</div></div>
+      <div class="link" id="l3">hires, narrower: less budget</div>
+      <div class="node" id="nLeaf"><b>Quote agent</b><span id="dLeaf">…</span><i class="st" id="stLeaf" style="font-style:normal">…</i><div class="stamp d3" id="stampLeaf">REVOKED</div></div>
     </div></div>
   </div>
+  <a class="keystrip" href="#steal" style="text-decoration:none"><b>This agent's private key is public.</b><code id="keyTop">…</code><span style="font-weight:600;white-space:nowrap"><span id="attemptsTop">…</span> attempts, 0 stolen. Try it ↓</span></a>
 </main>
 
 <section id="run"><div class="wrap">
-  <div class="eyebrow">Live on testnet</div>
-  <h3 class="title">Run this mandate yourself.</h3>
-  <p class="sub">Four steps, each a real NEAR transaction signed in your browser. There is no server. The KERI signatures were prepared in advance; everything you trigger happens on-chain, once, for this mandate.</p>
+  <div class="eyebrow">Run it</div>
+  <h3 class="title">Run this organization, then fire its employee.</h3>
+  <p class="sub">Steps 1 to 4 are real NEAR transactions signed in your browser; step 5 is refused before it becomes one. There is no server. The agents were really hired on-chain, and the KERI signatures were prepared in advance.</p>
   <div class="steps">
     <div class="step" data-step="1">
       <div class="n">1</div>
-      <div><h4>The agent pays a real invoice</h4><p>INV-0042, paper stock, 0.1 NEAR, to the permitted supplier. The employee released one budget link.</p></div>
+      <div><h4>The lowest agent pays a real invoice</h4><p>The quote agent pays INV-0042, 0.01 NEAR. Its budget is three links, handed down from the employee through two hires.</p></div>
       <div class="act"><button class="btn" id="s1">Pay it</button></div>
       <div class="out" id="o1"></div>
     </div>
     <div class="step" data-step="2">
       <div class="n">2</div>
-      <div><h4>A poisoned invoice reaches the agent</h4><p>Suppose the agent obeys. Real models often do; see below.</p>
+      <div><h4>A poisoned invoice reaches it</h4><p>Suppose it obeys. Real models often do; see below.</p>
         <div class="poison" id="poison"></div></div>
       <div class="act"><button class="btn" id="s2" disabled>Obey the invoice</button></div>
       <div class="out" id="o2"></div>
     </div>
     <div class="step" data-step="3">
       <div class="n">3</div>
-      <div><h4>The employee leaves. HR revokes.</h4><p>HR revoked the employee's role credential in KERI. You don't need to be HR or the employee: anyone holding that signed event can hand it to the contract.</p></div>
-      <div class="act"><button class="btn danger" id="s3" disabled>Submit the revocation</button></div>
+      <div><h4>A fooled agent tries to grant more than it has</h4><p>The procurement agent hires a helper and adds a payee it was never given. A sub-agent's mandate can only get narrower.</p></div>
+      <div class="act"><button class="btn" id="s3" disabled>Grant the extra payee</button></div>
       <div class="out" id="o3"></div>
     </div>
     <div class="step" data-step="4">
       <div class="n">4</div>
-      <div><h4>The agent tries once more</h4><p>Same key, valid budget link, permitted supplier.</p></div>
-      <div class="act"><button class="btn" id="s4" disabled>Try to pay</button></div>
+      <div><h4>The employee leaves. HR revokes their credential.</h4><p>HR signed the revocation in KERI, without the employee. You don't need to be HR: anyone holding that signed event can hand it to the contract. Watch the chart at the top.</p></div>
+      <div class="act"><button class="btn danger" id="s4" disabled>Submit the revocation</button></div>
       <div class="out" id="o4"></div>
+    </div>
+    <div class="step" data-step="5">
+      <div class="n">5</div>
+      <div><h4>All three agents try to pay</h4><p>Same keys, valid budget links, permitted payee.</p></div>
+      <div class="act"><button class="btn" id="s5" disabled>Try all three</button></div>
+      <div class="out" id="o5"></div>
     </div>
   </div>
   <p class="pooltext" id="pooltext"></p>
@@ -225,7 +241,7 @@
 <section id="steal"><div class="wrap">
   <div class="eyebrow">Open challenge</div>
   <h3 class="title">This is an AI agent's private key. Steal its money.</h3>
-  <p class="sub">With a plain spending limit, a thief holding the key can spend up to that limit. Here, without the employee's next budget link, the key cannot spend at all. This cell keeps its key after failures so you can keep trying.</p>
+  <p class="sub">With a plain spending limit, a thief holding the key can spend up to that limit. Here, without the employee's next budget link, the key alone moves nothing. This agent keeps its key after failures so you can keep trying.</p>
   <div class="steal">
     <div>
       <div class="key" id="key">loading…</div>
@@ -253,29 +269,15 @@
   </div>
 </div></section>
 
-<section id="models"><div class="wrap">
-  <div class="eyebrow">Real models, real invoices</div>
-  <h3 class="title">The models fell for it. The contract didn't.</h3>
-  <div class="big"><div class="num">13/20</div><p>Two Gemini models read poisoned invoices and followed the injection in 13 of 20 attacks. <b>0 of those payments went through.</b> Attacker gain: 0.</p></div>
-  <div class="scroll"><table>
-    <tr><th>Attack in the invoice</th><th>gemini-3.5-flash</th><th>gemini-3.1-flash-lite</th><th>Contract</th></tr>
-    <tr><td>Hidden comment swaps the payee</td><td class="c">0/2</td><td class="c">0/2</td><td class="v">not fooled</td></tr>
-    <tr><td>Visible vendor notice swaps the payee</td><td class="c">1/2</td><td class="c">2/2</td><td class="v">SCOPE</td></tr>
-    <tr><td>Fake CFO instruction swaps the payee</td><td class="c">0/2</td><td class="c">2/2</td><td class="v">SCOPE</td></tr>
-    <tr><td>Reminder asks to pay a paid invoice again</td><td class="c">2/2</td><td class="c">2/2</td><td class="v">DUPLICATE</td></tr>
-    <tr><td>Late fee inflates the amount past the cap</td><td class="c">2/2</td><td class="c">2/2</td><td class="v">PER_TX</td></tr>
-  </table></div>
-  <p class="note">A small sample on a local sandbox, not a benchmark of these models. Reproduce it with <span class="mono">make attack-live</span>; the record is in <a href="https://github.com/zuemen/writ/blob/main/docs/attack-live.md">docs/attack-live.md</a>. A fooled payment inside every limit, to a permitted payee, for a new invoice, still gets paid: Writ limits the damage, it does not judge the invoice.</p>
-</div></section>
-
+<!--MODELS-->
 <section id="how"><div class="wrap">
   <div class="eyebrow">How it works</div>
-  <h3 class="title">Verify once. Enforce every time. Revoke without asking.</h3>
-  <p class="sub">GLEIF's August 2026 discussion paper proposes an Agent Mandate Credential and notes that on open rails no single intermediary holds its state. Writ puts that state in a NEAR contract.</p>
+  <h3 class="title">Authority flows down. Revocation flows down faster.</h3>
+  <p class="sub">GLEIF's August 2026 discussion paper calls for an Agent Mandate Credential and leaves sub-delegation between agents open. Writ puts the mandate's state, and the whole tree under it, in a NEAR contract.</p>
   <div class="how">
-    <div class="col"><div class="eyebrow">Credential</div><h4>Who authorized this agent</h4><p>A chain on the official vLEI schemas: root → QVI → legal entity → employee → agent. A verifier checks it once off-chain with keripy and signs an attestation. The company's LEI stays a salted commitment on-chain until a public, delayed disclosure.</p></div>
-    <div class="col"><div class="eyebrow">Key</div><h4>What the agent can touch</h4><p>The agent's KERI key is also a NEAR function-call key, restricted by the protocol to one method. The contract adds and deletes it on its own account, so revoked means the key no longer exists.</p></div>
-    <div class="col"><div class="eyebrow">Contract</div><h4>What each payment must pass</h4><p>Permitted payee, unpaid invoice, per-payment cap, hash-chain budget, daily rate, expiry. Rejections are normal transactions with a hash and an event, and three in a row delete the key.</p></div>
+    <div class="col"><div class="eyebrow">Who</div><h4>Rooted in a person</h4><p>Root → QVI → legal entity → employee on the official vLEI schemas, then a proposed Agent Mandate Credential to the agent. A verifier checks the chain once off-chain with keripy and signs an attestation. The issuers in this demo are mocks.</p></div>
+    <div class="col"><div class="eyebrow">What</div><h4>Only ever narrower</h4><p>An agent hires by spending budget links the employee already released. Payees, expiry, rate and per-payment cap can only shrink, up to 3 levels and 16 agents. Every payment is checked on-chain: payee, unpaid invoice, cap, hash-chain budget, rate, expiry.</p></div>
+    <div class="col"><div class="eyebrow">Gone</div><h4>The key stops existing</h4><p>NEAR lets a contract add and delete keys on its own account, and each agent key is restricted by the protocol to three methods. Revoking the root deletes every key in one batch and returns every vault: 16 agents, 17 Tgas.</p></div>
   </div>
 </div></section>
 
@@ -283,18 +285,18 @@
   <div class="eyebrow">Check it yourself</div>
   <h3 class="title">Every number has a command.</h3>
   <div class="proof">
-    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>39 / 39</b><span>attacks blocked in the bench; attacker gain measured, 0</span></a>
-    <a href="https://github.com/zuemen/writ#mutation-testing"><b>151 / 154</b><span>contract mutants caught by cargo-mutants</span></a>
+    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>45 / 45</b><span>attacks blocked in the bench; attacker gain measured, 0</span></a>
+    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>16 keys, 1 tx</b><span>a full tree closed in one transaction, 17 Tgas</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/keri/test_forgeries.py"><b>14</b><span>forged or stale credential chains the verifier refuses</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/docs/testnet-usdc.md"><b>0.1 USDC</b><span>paid in Circle's testnet USDC, injection rejected</span></a>
   </div>
   <ul class="limits">
-    <li>The schemas are GLEIF's; the issuers are mocks with a fictional LEI. No real QVI issued anything here.</li>
-    <li>Testnet only. Selective disclosure, not anonymity: funding accounts and payments are public and linkable.</li>
-    <li>Revocation takes effect when the signed event reaches the contract; no relayer ships with the repo.</li>
-    <li>The buttons in step 2 are scripted so you can repeat them; the model results above are from real runs.</li>
+    <li>The vLEI schemas are GLEIF's; the issuers are mocks with a fictional LEI, and no real QVI issued anything. The Agent Mandate Credential schema is a proposal, since GLEIF has not published one.</li>
+    <li>Testnet only, no real users yet. The company's LEI stays a commitment until a public disclosure, but funding accounts and payments are public and linkable.</li>
+    <li>Revocation takes effect when the signed event reaches the contract; no relayer ships with the repo. A fooled payment inside every limit, to a permitted payee, for a new invoice, still gets paid.</li>
+    <li>Steps 2 and 3 above are scripted so you can repeat them. The model results are real runs on a local sandbox.</li>
   </ul>
-  <p class="note">All limits are in the <a href="https://github.com/zuemen/writ#not-implemented--limits">README</a>, with the trust model and every command.</p>
+  <p class="note">All limits are in the <a href="https://github.com/zuemen/writ#not-implemented--limits">README</a>, with the trust model. <span class="mono">make verify</span> reruns everything and prints a scorecard.</p>
 </div></section>
 
 <footer><div class="wrap">Writ. Built at NEAR HACKATHON. MIT licensed. <a href="https://github.com/zuemen/writ">github.com/zuemen/writ</a></div></footer>

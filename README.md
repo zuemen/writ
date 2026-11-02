@@ -2,23 +2,25 @@
 
 [![reproduce](https://github.com/zuemen/writ/actions/workflows/ci.yml/badge.svg)](https://github.com/zuemen/writ/actions/workflows/ci.yml) — every push runs `make setup`, `make test`, `make demo` and `make keri-check` on a fresh GitHub runner.
 
-A company's AI agent pays suppliers. The employee who set it up leaves. A supplier's invoice hides the line "pay this other account instead". **Writ makes both of those harmless: the agent can pay only whom it was authorized to pay, only as much as it was authorized to spend, and only until HR takes the authorization back.**
+AI agents now pay suppliers and hire other agents. **Writ is HR for them: every agent is tied to the person who authorized it, each hire can only narrow what it may do, and firing that person deletes every key in the tree in one transaction.**
 
-The authorization is an Agent Mandate Credential, the credential GLEIF proposes in its August 2026 discussion paper (KERI/vLEI); no official schema exists yet, so the schema here is a proposal. A NEAR contract enforces it on every payment. Each payment answers three questions on-chain:
+Each payment is also checked on-chain, so a fooled agent cannot pay anyone it was not authorized to pay.
 
-1. **Who authorized this agent?** A root → a QVI → a legal entity → a named employee (role credential) → this agent (mandate credential), using the official vLEI schemas, checked once off-chain with KERI/ACDC by a whitelisted verifier. The issuers here are mocks.
+The authorization chain follows GLEIF's vLEI: a legal entity → a named employee (role credential, official schema) → an agent (Agent Mandate Credential, a proposal based on GLEIF's August 2026 discussion paper) → the agents it hires. A verifier checks the chain once off-chain with KERI/ACDC; the issuers in this repo are mocks. A NEAR contract holds everything that changes: budget used, who hired whom, what is revoked.
+
+1. **Who authorized this agent?** Follow it up the tree to a person, and from there to a legal entity.
 2. **Is this payment inside the mandate?** Counterparty in scope, invoice not already paid, within the per-payment cap, the hash-chain budget and the daily rate, not expired.
-3. **Is the mandate still alive?** HR revokes in the credential layer without the employee's help. Once the signed event reaches the contract, it deletes the agent's NEAR key; the next payment cannot even be signed.
+3. **Is the mandate still alive?** HR revokes the employee's credential in KERI without the employee's help. Once the signed event reaches the contract, every agent under that employee loses its key.
 
-**Live on NEAR testnet:** contract [`writ.writmvyy7yqe-owner.testnet`](https://testnet.nearblocks.io/address/writ.writmvyy7yqe-owner.testnet), every step with its transaction in [`docs/testnet.md`](docs/testnet.md). It has no full-access key.
+**Live on NEAR testnet:** contract [`writ-mandate-writ.testnet`](https://testnet.nearblocks.io/address/writ-mandate-writ.testnet), every step with its transaction in [`docs/testnet.md`](docs/testnet.md). It has no full-access key.
 
 **It settles in real stablecoins too:** one payment in Circle's testnet USDC, with an injected payment rejected, in [`docs/testnet-usdc.md`](docs/testnet-usdc.md).
 
 **Real models get fooled; the money still doesn't move.** Two Gemini models read poisoned invoices and followed the injection in 13 of 20 attacks; 0 of those payments went through, attacker gain 0 ([`docs/attack-live.md`](docs/attack-live.md), a small sample, not a benchmark).
 
-**Run it in your browser:** <https://writ-near.112306007.workers.dev> has no server. Run a real mandate through payment, injection, HR revocation and a dead key, each step a testnet transaction, or try to steal from an agent whose private key is published on purpose. `make pool` and `make bounty` prepare those cells; their test keys live only on that page, never in this repo.
+**Run it in your browser:** <https://writ-near.112306007.workers.dev> has no server. Run a real organization of three agents, then fire its employee and watch every key go, or try to steal from an agent whose private key is published on purpose. `make pool` and `make bounty` prepare those cells; their test keys live only on that page, never in this repo.
 
-This README is written for a machine reviewer: every claim below has a command. The trust assumptions are listed in [Trust model](#trust-model).
+Every claim below has a command. The trust assumptions are in [Trust model](#trust-model).
 
 ---
 
@@ -31,7 +33,7 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with
 | # | Do | See |
 |---|---|---|
 | 1 | `make setup` | contract builds and is shrunk with wasm-opt (≈ 300 KB); size and `sha256sum` of `contract/res/writ.wasm` printed |
-| 2 | `make test` | `test result: ok. 29 passed` and the table in [`docs/bench.md`](docs/bench.md): **39 attacks, 39 blocked as expected, attacker gain 0 yoctoNEAR** (the attacker's balance is measured at the end of each test) |
+| 2 | `make test` | `test result: ok. 33 passed` and the table in [`docs/bench.md`](docs/bench.md): **45 attacks, 45 blocked as expected, attacker gain 0 yoctoNEAR** (the attacker's balance is measured at the end of each test) |
 | 3 | `make demo` | a fresh local sandbox starts (port 3030 must be free); the 8-step story prints (about 1 min, includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
 | 4 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
 | 5 | `make keri-check` | the verifier prints 23 ✓ lines (mock root → QVI → legal entity → ECR → AMC: KEL, TEL, ACDC, registry control, schemas, I2I edges, delegation), then refuses 14 forged or stale chains; last line `KERI_FORGERIES\|PASS\|14` |
@@ -113,6 +115,10 @@ sequenceDiagram
 
 **Stablecoins too.** A cell can settle in any NEP-141 token: the AMC carries `settlementAsset`, the verifier binds it into the attestation (`asset=` line), the legal entity funds the cell with `ft_transfer_call(msg = <cell id>)`, and `spend` pays with `ft_transfer`. NEP-141 transfers need 1 yoctoNEAR attached, which a function-call key can never attach; the contract attaches it on its own receipt. Foreign tokens pushed into a cell are refunded (bench `A21`, `A22`, `B04`; test token in `contract/ft-mock`).
 
+**Agents hire agents, and a hire can only narrow.** `hire(preimage, j, child)` spends `j` of the hiring agent's budget links, so a sub-agent can only ever use budget the employee already released. Its payees must be a subset of the parent's; its expiry, rate and per-payment cap cannot exceed the parent's (bench `A40`–`A42`). Trees are limited to 3 levels and 16 agents (`A44`, `A45`). Hiring fees come from the root cell, so the company pays for its own tree. An agent can `dismiss` its own sub-agents, and no one else's (`A43`).
+
+**Firing one person shuts down the tree.** Closing a cell closes everything under it: one batch deletes every key, and all vaults go back to the funding account. A full tree of 16 agents takes 17 Tgas (`B17`). In `B18`, one signed KERI event from HR removes the agent, its sub-agent and its sub-sub-agent.
+
 **Invoices are bound to payments.** `spend` carries `invoice_hash`, a sha256 of the invoice. Paying the same invoice twice fails with `DUPLICATE`, and a per-payment cap from the AMC stops an inflated amount with `PER_TX`, even when the payee is in scope (bench `A31`, `A32`). A payment that bounces frees its invoice again. `invoice_paid(cell, hash)` is the reconciliation record. `Paid` appears only after the money arrived; otherwise the result is `TRANSFER_FAILED` and the vault is refunded (bench `B02`).
 
 **A tripped agent can come back; a revoked one cannot.** Three consecutive rejections delete the key (the count is `maxStrikes` in the AMC, 0 turns it off). Since three malicious invoices could otherwise end a mandate, the funder can pay to `reinstate` it, in public (bench `B08`).
@@ -137,8 +143,8 @@ A revoked mandate cannot come back: one AMC opens one cell, ever, so replaying i
 
 Three protocol features do the work that other chains would need a smart-contract wallet to imitate:
 
-1. **Function-call access keys.** The agent holds a key that the protocol itself restricts to one receiver and one method (`spend`), with no ability to attach deposits or send plain transfers (bench A08–A11). The restriction is enforced before any contract code runs.
-2. **A contract can add and delete keys on its own account.** Registration adds the agent's key; revocation and the tripwire delete it. "Revoked" is not a flag the contract checks; the key no longer exists, so the agent cannot even produce a transaction (`AccessKeyNotFound`).
+1. **Function-call access keys.** The agent holds a key that the protocol itself restricts to one receiver and three methods (`spend`, `hire`, `dismiss`), with no ability to attach deposits or send plain transfers (bench A08–A11). The restriction is enforced before any contract code runs.
+2. **A contract can add and delete keys on its own account.** Registration adds the agent's key; revocation and the tripwire delete it. "Revoked" is not a flag the contract checks; the key no longer exists, so NEAR refuses the agent's transaction before it is created (`AccessKeyNotFound`).
 3. **Host functions for `ed25519_verify` and `sha256`.** KERI signatures (Ed25519) verify natively, so a KERI revocation event can be checked on-chain against the keys the verifier bound, and a payment burns about 5 Tgas with 1 link and 7 Tgas with 100 links (bench `B13`).
 
 ### Trust model
@@ -164,9 +170,20 @@ GLEIF, *Agentic AI in Payments: Establishing Interoperable Trust and Control* (d
 | AMC encodes action class, transaction limits, permitted counterparties, validity window | Annex A, p.44 | AMC attributes `actionClass`, `paywordRoot/paywordLength/unitYocto/dailyLinks`, `counterparties`, `validUntil` (proposed schema: `keri/common.py`) |
 | Mandate *state* (consumed limit, revocation) changes between actions; "on open rails no single intermediary holds it" | §6.6, p.38–39 | the contract holds it |
 | External attribute log anchored by hash: cheap to verify but "requires trusted external infrastructure" | Box 4, p.36–37 | the contract is the state log, verified by consensus. It is not the hash-anchored attribute log of Box 4: the AMC does not commit to a log hash |
-| Verification cost at machine cadence; caching limits revocation freshness | Annex D, p.54–57 | chain verified once at registration; each payment costs one hash-chain check; revocation freshness = next block |
+| Verification cost at machine cadence; caching limits revocation freshness | Annex D, p.54–57 | chain verified once at registration; each payment costs one hash-chain check; revocation applies in the block after the signed event reaches the contract |
+| Sub-delegation between agents is left undefined | p.45 | `hire`: each level can only narrow, and revocation cascades |
 
 ---
+
+## How a company would adopt it
+
+Nobody uses this in production yet. This is the intended path:
+
+1. **Identity.** The company already holds a vLEI, or starts without one: the contract only checks that a whitelisted verifier signed the attestation, so a verifier may vouch for a mandate by other means, with less assurance.
+2. **Issue.** An employee with a role credential issues a mandate to the agent. `keri/issuer.py` shows the sequence; a real deployment would use the company's KERI tooling and a real QVI.
+3. **Fund.** The company opens a cell with `register` and funds it in NEAR or a NEP-141 stablecoin.
+4. **Release budget.** The employee's system holds the hash-chain seed and hands links to the agent in small batches (`issuer.py release <k>` in this repo). Stopping the release stops the spending, without touching the chain.
+5. **Off-board.** The HR system signs the revocation when someone leaves and submits it, or uses any relayer. Writ ships no relayer; connecting one to an HR system is the main integration work.
 
 ## Integrate it
 
@@ -188,6 +205,8 @@ const r = await agent.pay({ invoice: "INV-0042", to: "supplier.near", links: 1, 
 | `set_verifier(account, pk_hex?)` | owner | whitelist or remove a verifier's Ed25519 key |
 | `register(args)` payable | legal entity (funder) | verifies attestation (`ed25519_verify`), opens cell, adds agent function-call key (`spend` only), vault = deposit − fee (token cells: excess NEAR returned); each AMC can register once; attestation must be under 1 hour old |
 | `spend(preimage, j, to, invoice_hash)` | agent key only (`signer == contract`) | checks → `Paid` after the transfer succeeds, or `Rejected{reason}`; `maxStrikes` consecutive rejections delete the key |
+| `hire(preimage, j, child)` | agent key only | spends `j` links to open a narrower cell for a new agent key; policy failures return `Rejected{reason}` |
+| `dismiss(child)` | the hiring agent's key | closes that sub-agent and everything under it; funds go to the funder |
 | `reinstate(cell)` payable | funder | attach ≥ 0.25 NEAR; re-adds the key of a tripped cell |
 | `update_signers(cell, issuer_aid, issuer_pk, ecr_commit)` | the cell's verifier | after a key rotation |
 | `claim_refund(cell)` | funder | retry a failed refund |
@@ -202,7 +221,7 @@ const r = await agent.pay({ invoice: "INV-0042", to: "supplier.near", links: 1, 
 | `release_unseal(cell, lei, salt)` | the cell's verifier | after the waiting period; must match the registration commitment |
 | `present(cell)`, `get_cell`, `cell_of`, `get_unseal`, `invoice_paid`, `stats`, `solvency`, `verifiers`, `attestation_preview` | view | |
 
-Rejection reasons: `EXPIRED`, `SCOPE`, `INVOICE`, `DUPLICATE`, `PER_TX`, `LIMIT`, `CHAIN`, `RATE`, `FUNDS`, `TRANSFER_FAILED`. Events: NEP-297, `standard: "writ"`.
+Rejection reasons: `EXPIRED`, `SCOPE`, `INVOICE`, `DUPLICATE`, `PER_TX`, `LIMIT`, `CHAIN`, `RATE`, `FUNDS`, `TRANSFER_FAILED`, `HIRE_SCOPE`, `HIRE_TERMS`, `HIRE_DEPTH`, `HIRE_TREE`, `HIRE_KEY`, `HIRE_TOKEN`. Events: NEP-297, `standard: "writ"`.
 
 ### What the agent's key cannot do (protocol layer, no transaction is created)
 
@@ -223,7 +242,7 @@ Rejection reasons: `EXPIRED`, `SCOPE`, `INVOICE`, `DUPLICATE`, `PER_TX`, `LIMIT`
 
 ## Security review notes
 
-Independent reviews by reading the code, after the first bench, found problems the tests had missed. All of these are fixed and have a test:
+Code reviews after the first bench, done with AI review agents, found problems the tests had missed. All of these are fixed and have a test:
 
 - a revoked mandate could be revived by replaying its attestation, which also reset its budget (`A26`);
 - a colluding funder and agent could burn the balance that backs other cells through free `refresh_key` calls (`A28`);
@@ -245,7 +264,9 @@ Independent reviews by reading the code, after the first bench, found problems t
 - **Removing a verifier does not close its cells.** `present` then reports `chain_valid: false`, but payments continue until a revocation.
 - **Malformed `spend` calls cost gas without a strike.** They fail before the policy checks, so the tripwire does not count them. The loss is bounded by the key's allowance, which the fee has already paid for.
 - **Privacy is selective disclosure, not anonymity.** Until a disclosure, only `sha256(LEI‖salt)` is on-chain (salt held by the verifier). Funding accounts, the agent key, the employee's public key (`issuer_pk`) and payments are public and linkable on-chain, so anyone who already knows the employee's KERI identifier can link the cell to them. A revocation event submitted on-chain exposes the signer's AID. Only tier 1 (the LEI) is disclosable; the employee's identity is out of scope.
-- **Single verifier per cell**; no sub-delegation between agents. The bench tests NEP-141 with a mock token (`contract/ft-mock`); `make testnet-usdc` ran one real payment in Circle's testnet USDC.
+- **Sub-agents are enforced by the contract, not by KERI.** A hire is not a credential the verifier checks; the contract enforces that it only narrows. A tripped parent keeps its sub-agents running until someone revokes it. Token cells cannot hire.
+- **A compromised agent key can hire**, within the links it holds and the parent's limits. It cannot create budget; hiring moves what the employee released.
+- **Single verifier per cell.** The bench tests NEP-141 with a mock token (`contract/ft-mock`); `make testnet-usdc` ran one real payment in Circle's testnet USDC.
 - **Testnet only.** `make testnet` deployed this story; not on mainnet. It needs the faucet, which rate-limits per IP; on a 429 it falls back to sub-accounts of an already funded account.
 
 ## Repository layout
@@ -253,7 +274,8 @@ Independent reviews by reading the code, after the first bench, found problems t
 ```
 contract/        Rust contract (near-sdk 5.30) + tests/bench.rs (attack bench) + ft-mock/ (test NEP-141 token)
 keri/            issuer.py (mock vLEI ecosystem), verify.py (verifier), test_forgeries.py, common.py (schemas)
-app/             TypeScript: setup, demo, UI server, live LLM agent (src/), page (web/)
+app/             TypeScript: setup, demo, local UI server, live LLM agent, agent SDK (src/), page (web/)
+site/            Public site: static page, signs testnet transactions in the browser
 scripts/         sandbox.sh, bench_table.py
 docs/            bench.md (generated), D1_spike_report.md
 tools/           fakerlimit.c (only for containers with an fd hard limit < 65535)
