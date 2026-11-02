@@ -28,10 +28,10 @@ use near_sdk::{
 
 /// 連續拒絕幾次就自動刪鑰匙。
 pub const TRIPWIRE: u32 = 3;
-/// 開格費：留在合約裡付鑰匙與狀態的儲存、以及 agent 交易的 gas（allowance 從合約帳號扣）。
-pub const REGISTER_FEE: NearToken = NearToken::from_millinear(100);
-/// 給 agent 鑰匙的預設 gas allowance。
+/// 給 agent 鑰匙的預設 gas allowance（agent 交易的 gas 從合約帳號扣，這是單把鑰匙能燒掉的上限）。
 pub const DEFAULT_ALLOWANCE: NearToken = NearToken::from_millinear(250);
+/// 開格費 = 整把鑰匙的 gas 上限 + 儲存。一格燒光 allowance 也動不到別格的金庫。
+pub const REGISTER_FEE: NearToken = NearToken::from_millinear(350);
 /// agent 鑰匙能呼叫的方法——只有這一個寫入方法。
 pub const AGENT_METHODS: &str = "spend";
 /// scope 最多幾個收款人。
@@ -48,6 +48,7 @@ enum StorageKey {
     KeyToCell,
     Supervisors,
     Unseals,
+    UsedAmcs,
 }
 
 /// 格的狀態。Revoked / Tripped 之後鑰匙已不在合約帳號上。
@@ -71,6 +72,7 @@ pub struct Cell {
     pub verifier: AccountId,       // 哪個驗證者擔保了這條鏈
     pub funder: AccountId,         // 法人出資帳號（入金、撤銷、續命）
     pub lei_commit: String,        // sha256(LEI ‖ salt) hex —— LEI 本身不上鏈
+    pub ecr_commit: String,        // sha256(LE 公鑰 hex|ECR SAID|salt) hex —— HR 撤銷 ECR 時才打開
     pub scope: Vec<AccountId>,     // 允許的交易對手
     pub valid_until: U64,          // 有效期（Unix ns）
     pub unit: U128,                // 每個鏈節值多少 yoctoNEAR
@@ -111,12 +113,22 @@ pub struct RegisterArgs {
     pub valid_until: U64,
     pub daily_links: u32,
     pub lei_commit: String,
+    pub ecr_commit: String,
     pub verifier: AccountId,
     /// 驗證者對 attestation_message 的 Ed25519 簽章（hex，64 bytes）
     pub signature: String,
     /// 結算資產：省略 = NEAR；NEP-141 合約帳號 = 以該代幣支付（綁在 attestation 裡）
     #[serde(default)]
     pub asset: Option<AccountId>,
+}
+
+/// 打開 ecr_commit：HR（法人）撤銷 ECR 時用。LE 公鑰與 ECR SAID 平常不上鏈。
+#[near(serializers = [json])]
+#[derive(Clone)]
+pub struct EcrOpening {
+    pub le_pk: String,
+    pub ecr_said: String,
+    pub salt: String,
 }
 
 /// 全域計數（README 首頁總表用）。
@@ -155,6 +167,7 @@ pub struct Contract {
     supervisors: IterableMap<AccountId, bool>,
     unseals: LookupMap<u64, Unseal>,
     unseal_delay_ns: u64,
+    used_amcs: LookupMap<String, u64>, // 一張 AMC 只能開一格；撤銷後不能用同一張 attestation 復活
 }
 
 // ---------------- 小工具 ----------------
@@ -171,10 +184,11 @@ fn event(name: &str, data: Value) {
 
 /// 規範的 attestation 字串：驗證者鏈下簽這段 bytes，合約鏈上重建再驗。
 /// 欄位順序固定、以 \n 分隔；agent_pk 用 NEAR 字串格式（ed25519:<base58>）。
-pub fn attestation_message(a: &RegisterArgs, funder: &AccountId) -> String {
+pub fn attestation_message(a: &RegisterArgs, funder: &AccountId, contract: &AccountId) -> String {
     let scope: Vec<&str> = a.scope.iter().map(|s| s.as_str()).collect();
     format!(
-        "writ:attest:v1\namc={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nlei_commit={}\nfunder={}\nverifier={}\nasset={}",
+        "writ:attest:v2\ncontract={}\namc={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nasset={}",
+        contract,
         a.amc_said,
         a.issuer_pk,
         String::from(&a.agent_pk),
@@ -185,6 +199,7 @@ pub fn attestation_message(a: &RegisterArgs, funder: &AccountId) -> String {
         a.valid_until.0,
         a.daily_links,
         a.lei_commit,
+        a.ecr_commit,
         funder,
         a.verifier,
         a.asset.as_ref().map(|t| t.as_str()).unwrap_or("near")
@@ -207,6 +222,7 @@ impl Contract {
             supervisors: IterableMap::new(StorageKey::Supervisors),
             unseals: LookupMap::new(StorageKey::Unseals),
             unseal_delay_ns: unseal_delay_secs.unwrap_or(120) * 1_000_000_000,
+            used_amcs: LookupMap::new(StorageKey::UsedAmcs),
         }
     }
 
@@ -241,6 +257,8 @@ impl Contract {
         hex32(&args.w0, "w0");
         hex32(&args.issuer_pk, "issuer_pk");
         hex32(&args.lei_commit, "lei_commit");
+        hex32(&args.ecr_commit, "ecr_commit");
+        require!(!self.used_amcs.contains_key(&args.amc_said), "AMC_ALREADY_USED");
 
         // 謂詞 1：鏈有效 —— 白名單驗證者的簽章
         let vpk_hex = self.verifiers.get(&args.verifier).unwrap_or_else(|| env::panic_str("UNKNOWN_VERIFIER"));
@@ -249,7 +267,7 @@ impl Contract {
             .ok()
             .and_then(|v| v.as_slice().try_into().ok())
             .unwrap_or_else(|| env::panic_str("BAD_SIGNATURE_ENCODING"));
-        let msg = attestation_message(&args, &funder);
+        let msg = attestation_message(&args, &funder, &env::current_account_id());
         require!(env::ed25519_verify(&sig, msg.as_bytes(), &vpk), "BAD_ATTESTATION");
 
         // NEAR 格：附帶的 NEAR 扣掉開格費進金庫。代幣格：附帶的 NEAR 全當開格費／gas 準備，金庫用 ft_transfer_call 入金。
@@ -263,6 +281,7 @@ impl Contract {
             verifier: args.verifier.clone(),
             funder: funder.clone(),
             lei_commit: args.lei_commit.clone(),
+            ecr_commit: args.ecr_commit.clone(),
             scope: args.scope.clone(),
             valid_until: args.valid_until,
             unit: args.unit,
@@ -281,6 +300,7 @@ impl Contract {
         };
         self.cells.insert(id, cell);
         self.key_to_cell.insert(args.agent_pk.clone(), id);
+        self.used_amcs.insert(args.amc_said.clone(), id);
         self.vault_total += vault;
         self.stats.cells += 1;
         event(
@@ -411,11 +431,16 @@ impl Contract {
         }
         // 轉帳失敗（例如收款帳號不存在）：錢退回金庫；鏈節已消耗不退（防重放）
         if let Some(mut c) = self.cells.get(&cell.0).cloned() {
-            c.vault = U128(c.vault.0 + amount.0);
-            if c.asset.is_none() {
-                self.vault_total += amount.0;
+            if matches!(c.status, Status::Revoked { .. }) {
+                // 轉帳途中格已被撤銷：關閉的格不能再領錢，直接退給法人
+                self.pay_out(&c.asset, c.funder.clone(), amount.0, format!("writ cell {} closed", cell.0));
+            } else {
+                c.vault = U128(c.vault.0 + amount.0);
+                if c.asset.is_none() {
+                    self.vault_total += amount.0;
+                }
+                self.cells.insert(cell.0, c);
             }
-            self.cells.insert(cell.0, c);
         }
         event("refunded", serde_json::json!({"cell": cell.0.to_string(), "amount": amount.0.to_string()}));
         false
@@ -446,17 +471,28 @@ impl Contract {
     /// 無須信任的撤銷：任何人提交 AMC 簽發者 KEL 上錨定撤銷的 ixn 事件（原始 bytes）＋簽章，
     /// 合約驗簽並確認 seal = {i: 這格的 AMC SAID, s: "1"}（簡單 TEL：sn 0 = iss，sn 1 只能是 rev）。
     /// 限制：簽發者若輪替金鑰，issuer_pk 需由驗證者重新 attest（README 揭露）。
-    pub fn revoke_by_kel(&mut self, cell: U64, ixn: Base64VecU8, signature: Base64VecU8) {
+    ///
+    /// ecr 省略：員工（AMC 簽發者）撤銷 AMC。
+    /// ecr 帶上：HR（法人）撤銷員工的 ECR，員工離職也不需要他配合；打開承諾會公開 LE 的公鑰。
+    pub fn revoke_by_kel(&mut self, cell: U64, ixn: Base64VecU8, signature: Base64VecU8, ecr: Option<EcrOpening>) {
         let c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
         let sig: [u8; 64] = signature.0.as_slice().try_into().unwrap_or_else(|_| env::panic_str("BAD_SIG_LEN"));
-        let pk = hex32(&c.issuer_pk, "issuer_pk");
+        let (pk_hex, said) = match &ecr {
+            None => (c.issuer_pk.clone(), c.amc_said.clone()),
+            Some(o) => {
+                let digest = hex::encode(env::sha256(format!("{}|{}|{}", o.le_pk, o.ecr_said, o.salt).as_bytes()));
+                require!(digest == c.ecr_commit, "BAD_ECR_OPENING");
+                (o.le_pk.clone(), o.ecr_said.clone())
+            }
+        };
+        let pk = hex32(&pk_hex, "signer_pk");
         require!(env::ed25519_verify(&sig, &ixn.0, &pk), "BAD_KEL_SIGNATURE");
         let ev: Value = serde_json::from_slice(&ixn.0).unwrap_or_else(|_| env::panic_str("BAD_IXN_JSON"));
         require!(ev["t"] == "ixn", "NOT_IXN");
         let seals = ev["a"].as_array().unwrap_or_else(|| env::panic_str("NO_SEALS"));
         let rev = seals
             .iter()
-            .find(|s| s["i"] == c.amc_said.as_str() && s["s"] == "1")
+            .find(|s| s["i"] == said.as_str() && s["s"] == "1")
             .unwrap_or_else(|| env::panic_str("NO_REVOCATION_SEAL"));
         let rev_said = rev["d"].as_str().unwrap_or("").to_string();
         let who = env::predecessor_account_id();
@@ -485,22 +521,30 @@ impl Contract {
             Promise::new(env::current_account_id()).delete_key(pk).detach();
         }
         if refund > 0 {
-            match asset {
-                None => Promise::new(funder).transfer(NearToken::from_yoctonear(refund)).detach(),
-                Some(token) => Promise::new(token)
-                    .function_call(
-                        "ft_transfer".to_string(),
-                        serde_json::to_vec(&serde_json::json!({"receiver_id": funder, "amount": refund.to_string(), "memo": format!("writ cell {} closed", id)})).unwrap(),
-                        NearToken::from_yoctonear(1),
-                        GAS_FOR_FT,
-                    )
-                    .detach(),
-            }
+            self.pay_out(&asset, funder, refund, format!("writ cell {} closed", id));
+        }
+    }
+
+    /// 把 NEAR 或 NEP-141 轉給法人（不等結果）。
+    fn pay_out(&self, asset: &Option<AccountId>, to: AccountId, amount: u128, memo: String) {
+        match asset {
+            None => Promise::new(to).transfer(NearToken::from_yoctonear(amount)).detach(),
+            Some(token) => Promise::new(token.clone())
+                .function_call(
+                    "ft_transfer".to_string(),
+                    serde_json::to_vec(&serde_json::json!({"receiver_id": to, "amount": amount.to_string(), "memo": memo})).unwrap(),
+                    NearToken::from_yoctonear(1),
+                    GAS_FOR_FT,
+                )
+                .detach(),
         }
     }
 
     /// 續命：gas allowance 用完時由法人或驗證者重掛同一把鑰匙（同 batch 先刪後加）。
+    /// 呼叫者要附上新 allowance 的費用，否則串通的 agent 可以無限燒合約餘額（等於吃別格的金庫）。
+    #[payable]
     pub fn refresh_key(&mut self, cell: U64) {
+        require!(env::attached_deposit() >= DEFAULT_ALLOWANCE, "REFRESH_UNPAID");
         let c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
         let who = env::predecessor_account_id();
         require!(who == c.funder || who == c.verifier, "NOT_AUTHORIZED");
@@ -604,7 +648,7 @@ impl Contract {
         let now = env::block_timestamp();
         Some(serde_json::json!({
             "cell": cell.0.to_string(),
-            "chain_valid": true,
+            "chain_valid": self.verifiers.contains_key(&c.verifier),
             "verifier": c.verifier,
             "not_revoked": c.status == Status::Active,
             "not_expired": now <= c.valid_until.0,
@@ -634,10 +678,54 @@ impl Contract {
 
     /// 讓驗證者確認自己要簽的 bytes 跟合約重建的一致。
     pub fn attestation_preview(&self, args: RegisterArgs, funder: AccountId) -> String {
-        attestation_message(&args, &funder)
+        attestation_message(&args, &funder, &env::current_account_id())
     }
 
     pub fn owner(&self) -> AccountId {
         self.owner.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use near_sdk::test_utils::{get_created_receipts, VMContextBuilder};
+    use near_sdk::{testing_env, PromiseResult};
+
+    /// 轉帳途中格被撤銷，轉帳又失敗：錢不能卡在已關閉的格，要直接退給法人。
+    #[test]
+    fn failed_transfer_on_a_revoked_cell_refunds_the_funder() {
+        let writ: AccountId = "writ.near".parse().unwrap();
+        let funder: AccountId = "funder.near".parse().unwrap();
+        let ctx = |results: Vec<PromiseResult>| {
+            let c = VMContextBuilder::new()
+                .current_account_id(writ.clone())
+                .predecessor_account_id(writ.clone())
+                .account_balance(NearToken::from_near(10))
+                .build();
+            testing_env!(c, near_sdk::test_vm_config(), near_sdk::RuntimeFeesConfig::test(), Default::default(), results);
+        };
+        ctx(vec![]);
+        let mut w = Contract::new(None);
+        let pk: PublicKey = "ed25519:6E8sCci9badyRkXb3JoRpBj5p8C6Tw41ELDZoiihKEtp".parse().unwrap();
+        let cell = |status: Status| Cell {
+            amc_said: "E".into(), issuer_pk: String::new(), agent_pk: pk.clone(), verifier: writ.clone(), funder: funder.clone(),
+            lei_commit: String::new(), ecr_commit: String::new(), scope: vec![], valid_until: U64(0), unit: U128(1), n: 1, idx: 1,
+            w_cur: String::new(), daily_links: 1, day: 0, day_used: 1, vault: U128(0), spends: 1, rejects: 0, strikes: 0, status, asset: None,
+        };
+        w.cells.insert(1, cell(Status::Revoked { by: funder.clone(), evidence: "x".into() }));
+        w.cells.insert(2, cell(Status::Active));
+
+        ctx(vec![PromiseResult::Failed]);
+        assert!(!w.on_transfer(U64(1), U128(5), Err(PromiseError::Failed)));
+        assert_eq!(w.cells.get(&1).unwrap().vault.0, 0, "closed cell must not hold money");
+        assert_eq!(w.vault_total, 0);
+        let receipts = get_created_receipts();
+        assert!(receipts.iter().any(|r| r.receiver_id == funder), "refund goes to the funder");
+
+        ctx(vec![PromiseResult::Failed]);
+        assert!(!w.on_transfer(U64(2), U128(5), Err(PromiseError::Failed)));
+        assert_eq!(w.cells.get(&2).unwrap().vault.0, 5, "active cell gets the money back");
+        assert_eq!(w.vault_total, 5);
     }
 }

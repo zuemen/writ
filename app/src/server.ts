@@ -29,7 +29,7 @@ async function snapshot() {
   const st = keriState();
   return {
     accounts: Object.fromEntries(Object.entries(a).map(([k, v]) => [k, v.id])),
-    keri: { le: st.le, human: st.human, agent: st.agent, ecr: st.ecr, amc: st.amc, agent_near_pk: st.agent_near_pk, amcRevoked: keriRevoked },
+    keri: { le: st.le, human: st.human, agent: st.agent, ecr: st.ecr, amc: st.amc, agent_near_pk: st.agent_near_pk, ecrRevoked: keriRevoked },
     cell,
     present: cell ? await present(cell) : null,
     unseal: cell ? await view(a.writ.id, "get_unseal", { cell }) : null,
@@ -47,7 +47,7 @@ async function act(path: string) {
     r.checks.forEach((c) => add({ who: "verifier", text: c.replace(/^✓ /, "✓ "), kind: "info" }));
     if (!r.ok) return add({ who: "verifier", text: "refused: " + r.error, kind: "reject" });
     cell = r.cell;
-    add({ who: a.acme.id, text: `register → cell #${cell}, 5 NEAR vault; agent key added as function-call key (spend only)`, kind: "ok", hash: r.hash });
+    add({ who: a.acme.id, text: `register → cell #${cell}, 5 NEAR deposited (0.35 fee, rest is the vault); agent key added as function-call key (spend only)`, kind: "ok", hash: r.hash });
   } else if (path === "/api/pay" || path === "/api/pay-injected") {
     if (!cell) return add({ who: "agent", text: "no mandate yet", kind: "info" });
     const injected = path.endsWith("injected");
@@ -60,9 +60,9 @@ async function act(path: string) {
     if (!cell) return;
     const r = await revoke(cell);
     keriRevoked = true;
-    add({ who: "HR", text: `AMC revoked in KERI: TEL rev ${r.rev.rev_said.slice(0, 10)}… anchored by ixn sn=${r.rev.ixn_sn} (off-chain)`, kind: "info" });
+    add({ who: "HR", text: `employee's ECR revoked in KERI: TEL rev ${r.rev.rev_said.slice(0, 10)}… anchored by ixn sn=${r.rev.ixn_sn} (off-chain)`, kind: "info" });
     if (r.error) add({ who: "merchant", text: "revoke_by_kel failed: " + r.error, kind: "reject" });
-    else add({ who: a.merchant.id, text: "submits signed ixn → revoke_by_kel verifies Ed25519 + seal → agent key deleted", kind: "ok", hash: r.hash });
+    else add({ who: a.merchant.id, text: "submits signed ixn → revoke_by_kel opens the ECR commitment, verifies Ed25519 + seal → agent key deleted", kind: "ok", hash: r.hash });
   } else if (path === "/api/unseal-request") {
     if (!cell) return;
     const r = await requestUnseal(cell);

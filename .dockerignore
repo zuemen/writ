@@ -1,0 +1,9 @@
+target
+node_modules
+.venv
+.git
+contract/res
+.demo
+.sandbox
+keri/.keystore
+keri/bundle

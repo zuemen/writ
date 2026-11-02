@@ -8,7 +8,7 @@ An AI agent pays suppliers on behalf of a company. Writ answers three questions 
 
 1. **Who authorized this agent?** A verified legal entity → a named employee (role credential) → this agent (mandate credential), checked once with KERI/ACDC.
 2. **Is this payment inside the mandate?** Counterparty in scope, within the hash-chain budget, within the daily rate, not expired — checked on every payment by the contract.
-3. **Is the mandate still alive?** Revocation in the credential layer deletes the agent's NEAR key in the next block.
+3. **Is the mandate still alive?** HR revokes in the credential layer without the employee's help. Once anyone submits that signed event, the contract deletes the agent's NEAR key; the next payment cannot even be signed.
 
 This README is written for a machine reviewer: every claim below has a command.
 
@@ -20,11 +20,13 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.11+ with l
 
 | # | Do | See |
 |---|---|---|
-| 1 | `make setup` | contract builds and is shrunk with wasm-opt (≈ 260 KB); size and `sha256sum` of `contract/res/writ.wasm` printed |
-| 2 | `make test` | `test result: ok. 15 passed` and the table in [`docs/bench.md`](docs/bench.md): **25 attacks, 25 blocked as expected, attacker gain 0 yoctoNEAR** |
+| 1 | `make setup` | contract builds and is shrunk with wasm-opt (≈ 280 KB); size and `sha256sum` of `contract/res/writ.wasm` printed |
+| 2 | `make test` | `test result: ok. 19 passed` and the table in [`docs/bench.md`](docs/bench.md): **30 attacks, 30 blocked as expected, attacker gain 0 yoctoNEAR** |
 | 3 | `make demo` | local sandbox starts (port 3030 must be free); the 8-step story prints (about 1 min, includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
-| 4 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → revoke AMC**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
+| 4 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
 | 5 | `make keri-check` | the independent verifier prints 10 ✓ lines (KEL, TEL, ACDC, delegation, I2I chain) |
+
+| 6 | optional: `NEARAI_API_KEY=... make attack-live` | a real LLM on NEAR AI Cloud reads both invoices and chooses the tool calls; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in `docs/attack-live.md` |
 
 `make test` runs the bench in a fresh sandbox per test. `make demo` / `make ui` run `scripts/sandbox.sh` (a local `neard` sandbox on :3030; data in `.sandbox/`).
 
@@ -43,7 +45,8 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.11+ with l
 6  regulator.test.near requests disclosure (reason hash of "Taipei District Court order 2026-TPE-001") → public, waiting period starts
 6  verifier tries to disclose immediately → TOO_EARLY
 6  after the waiting period, verifier discloses; contract checks sha256(LEI|salt) == commitment → LEI 5493001KJTIIGC8Y1R12
-7  merchant.test.near submits the signed ixn (sn=4) → key deleted
+7  treasury officer leaves; HR revokes the officer's ECR in KERI (TEL rev anchored by the legal entity's KEL ixn), off-chain; the officer's key is not needed
+7  merchant.test.near submits the signed ixn (sn=3) and opens the ECR commitment → key deleted
 8  agent tries again → MANDATE REVOKED (AccessKeyNotFound: …)
 8  verifier re-check: REFUSED — AMC TEL state is issued (not revoked) — failed: revoked (TEL rev)
 DEMO_RESULT|PASS|paid=true|injection=SCOPE|attacker_gain=0|disclosed=true|revoked=MANDATE REVOKED
@@ -66,7 +69,7 @@ DEMO_RESULT|PASS|paid=true|injection=SCOPE|attacker_gain=0|disclosed=true|revoke
  contract: ed25519_verify(attestation) → add function-call key                       vault covers j × unit?
            (receiver = contract, methods = ["spend"])                      → pay, or Rejected{reason} + event
                                                                            3 strikes → delete key
- revocation: employee revokes AMC in KERI (TEL rev, anchored by KEL ixn)
+ revocation: HR revokes the employee's ECR (or the employee revokes the AMC) in KERI (TEL rev, anchored by KEL ixn)
              anyone submits the ixn → contract ed25519_verify + seal check → delete key, refund vault
 ```
 
@@ -88,7 +91,7 @@ sequenceDiagram
     H-->>A: release PayWord links off-chain
     A->>W: spend(preimage, j, to)
     W-->>M: pay, or Rejected{reason} with a tx hash
-    H->>H: revoke AMC in KERI (TEL rev, KEL ixn)
+    LE->>LE: employee leaves: revoke ECR in KERI (TEL rev, KEL ixn)
     M->>W: revoke_by_kel(ixn, signature)
     W->>W: ed25519_verify, seal check, delete agent key
     A--xW: spend → AccessKeyNotFound
@@ -100,7 +103,14 @@ sequenceDiagram
 
 **Stablecoins too.** A cell can settle in any NEP-141 token: the AMC carries `settlementAsset`, the verifier binds it into the attestation (`asset=` line), the legal entity funds the cell with `ft_transfer_call(msg = <cell id>)`, and `spend` pays with `ft_transfer`. NEP-141 transfers need 1 yoctoNEAR attached, which a function-call key can never attach; the contract attaches it on its own receipt. Foreign tokens pushed into a cell are refunded (bench `A21`, `A22`, `B04`; test token in `contract/ft-mock`).
 
-**Revocation needs no trusted watcher.** `revoke_by_kel` takes the raw `ixn` event and the signature attached to it in the issuer's KEL, verifies it with `env::ed25519_verify` against the issuer key bound at registration, and checks that a seal `{i: <AMC SAID>, s: "1"}` is present (a simple TEL has `iss` at sn 0 and `rev` at sn 1). Anyone can submit it (bench `B01`).
+**Revocation needs no trusted party, but someone must submit it.** `revoke_by_kel` takes the raw `ixn` event and the signature attached to it in the signer's KEL, verifies it with `env::ed25519_verify`, and checks for a seal `{i: <credential SAID>, s: "1"}` (a simple TEL has `iss` at sn 0 and `rev` at sn 1). Anyone can submit it, and no watcher ships with this repo: the key stays live until the event reaches the contract. There are two paths:
+
+- **HR revokes the employee's ECR** (bench `B07`, used by the demo). The departing employee is not needed. The legal entity's key and the ECR SAID are not stored on-chain, only `ecr_commit = sha256(le_pk|ecr_said|salt)`; the submitter opens it, which makes the legal entity's key public. A company that wants to stay sealed can call `revoke` from its funding account instead.
+- **The employee revokes the AMC** (bench `B01`), checked against `issuer_pk` bound at registration.
+
+A mandate cannot come back: one AMC opens one cell, ever, so replaying its attestation fails (bench `A26`).
+
+**Gas is paid up front.** Agent transactions burn gas from the contract account. The 0.35 NEAR registration fee covers the key's whole 0.25 NEAR allowance plus storage, and `refresh_key` must attach another 0.25 NEAR, so one cell's key cannot eat into another cell's vault (bench `A28`).
 
 **Disclosure is a public, time-delayed transaction.** At registration the verifier commits to `sha256(LEI‖salt)`; the LEI itself never touches the chain. A whitelisted supervisor calls `request_unseal(cell, sha256(reason))`, so everyone can see who asked and when. After the waiting period (constructor parameter; 10 s in the demo) only that cell's verifier can call `release_unseal(cell, LEI, salt)`, and the contract rejects any LEI that does not match the commitment (bench `A19`). The legal entity can `object_unseal`, which is recorded publicly but is not a veto, in line with the view-key model the paper describes (Box 3, p.28–29).
 
@@ -130,13 +140,13 @@ GLEIF, *Agentic AI in Payments: Establishing Interoperable Trust and Control* (d
 
 | Method | Caller | Effect |
 |---|---|---|
-| `new()` | deployer | owner = deployer |
+| `new(unseal_delay_secs?)` | deployer | owner = deployer; sets the disclosure waiting period (default 120 s) |
 | `set_verifier(account, pk_hex?)` | owner | whitelist or remove a verifier's Ed25519 key |
-| `register(args)` payable | legal entity (funder) | verifies attestation (`ed25519_verify`), opens cell, adds agent function-call key (`spend` only), vault = deposit − 0.1 NEAR |
+| `register(args)` payable | legal entity (funder) | verifies attestation (`ed25519_verify`), opens cell, adds agent function-call key (`spend` only), vault = deposit − 0.35 NEAR fee; each AMC can register once |
 | `spend(preimage, j, to)` | agent key only (`signer == contract`) | five checks → `Paid` (transfer + callback refund on failure) or `Rejected{reason}`; 3 consecutive rejections delete the key |
 | `revoke(cell, evidence)` | funder / verifier / owner | delete key, refund vault |
-| `revoke_by_kel(cell, ixn, signature)` | anyone | verify KERI revocation anchor, delete key, refund vault |
-| `refresh_key(cell)` | funder / verifier | re-add the same key with a fresh gas allowance |
+| `revoke_by_kel(cell, ixn, signature, ecr?)` | anyone | verify KERI revocation anchor (AMC by the employee, or ECR by the legal entity when `ecr` opens the commitment), delete key, refund vault |
+| `refresh_key(cell)` payable | funder / verifier | attach ≥ 0.25 NEAR; re-add the same key with a fresh gas allowance |
 | `top_up(cell)` payable | funder | add NEAR to a NEAR cell |
 | `ft_on_transfer(sender_id, amount, msg)` | NEP-141 token (via `ft_transfer_call`) | fund a token cell; `msg` = cell id; anything else is refunded |
 | `set_supervisor(account, enabled)` | owner | whitelist a supervisor |
@@ -162,24 +172,32 @@ Rejection reasons: `EXPIRED`, `SCOPE`, `LIMIT`, `CHAIN`, `RATE`, `FUNDS`. Events
 
 ## Mutation testing
 
-`cargo mutants` (config in `contract/.cargo/mutants.toml`; `WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source) generated 122 mutants of `contract/src/lib.rs`. First pass: 81 caught, 35 missed. Every survivor was turned into a new assertion or attack (A23–A25, B05, B06). Re-running the survivors: 33 caught, 3 missed. Of those three, two are boundary mutants we consider equivalent (`now > valid_until` vs `>=` at a single nanosecond; `refund > 0` vs `>= 0`, where a zero refund changes nothing), and the third (`j * unit` vs `j + unit` in the FUNDS check) was addressed by a test added after the re-run, which has not itself been re-run under cargo-mutants.
+`cargo mutants` (config in `contract/.cargo/mutants.toml`; `WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source) generated 122 mutants of `contract/src/lib.rs`. First pass: 81 caught, 35 missed. Every survivor was turned into a new assertion or attack (A23–A25, B05, B06). Re-running the survivors: 33 caught, 3 missed. Of those three, two are boundary mutants we consider equivalent (`now > valid_until` vs `>=` at a single nanosecond; `refund > 0` vs `>= 0`, where a zero refund changes nothing), and the third (`j * unit` vs `j + unit` in the FUNDS check) was addressed by a test added after the re-run. These numbers predate A26–A30 and B07; the contract changes they brought have not been through cargo-mutants.
+
+## Security review notes
+
+A second review, by reading the code rather than mutating it, found three holes that the first 25 attacks missed. All three are fixed and have tests: a revoked mandate could be revived by replaying its attestation, which also reset its budget (A26); free `refresh_key` let a colluding funder and agent burn the contract's balance, which backs other cells' vaults (A28); and a transfer that failed after its cell was revoked left the refund stuck in the closed cell (`cargo test --lib`).
 
 ## Not implemented / limits
 
+- **The agent in `make demo` and `make ui` is a script.** It issues the malicious call directly, because the point is the gate, not the model, and a script is reproducible. `make attack-live` runs a real LLM instead and needs an API key. Writ does not stop an agent from being fooled; it stops the payment.
+- **The contract account has a full-access key.** The demo deploys with one and keeps it, and whoever holds it can take every vault. A production deployment must delete it after deploying.
 - **Mock trust root.** The legal entity AID is pinned in `keri/bundle/trust.json`. In production the LE vLEI is issued by a QVI and chains to GLEIF's root; the QVI layer is out of scope.
 - **Mock schemas.** The ECR schema here mirrors the vLEI ECR attribute block but has its own SAID. GLEIF has not published an AMC schema (paper p.45); `keri/common.py` is a proposal.
-- **Key rotation.** `revoke_by_kel` checks the issuer key bound at registration. If the employee rotates keys, the verifier must re-attest.
-- **Privacy is selective disclosure, not anonymity.** Until a disclosure, only `sha256(LEI‖salt)` is on-chain (salt held by the verifier). Funding accounts, the agent key and payments are public and linkable on-chain. Only tier 1 (the LEI) is disclosable; the employee's identity is out of scope.
+- **Key rotation.** `revoke_by_kel` checks keys bound at registration. If the employee or the legal entity rotates keys, the verifier must re-attest. The contract checks the signature and the seal, not the rest of the KEL.
+- **Removing a verifier does not close its cells.** `present` then reports `chain_valid: false`, but payments continue until a revocation.
+- **Malformed `spend` calls cost gas without a strike.** They fail before the policy checks, so the tripwire does not count them. The loss is bounded by the key's allowance, which the fee has already paid for.
+- **Privacy is selective disclosure, not anonymity.** Until a disclosure, only `sha256(LEI‖salt)` is on-chain (salt held by the verifier). Funding accounts, the agent key, the employee's public key (`issuer_pk`) and payments are public and linkable on-chain, so anyone who already knows the employee's KERI identifier can link the cell to them. A revocation event submitted on-chain exposes the signer's AID. Only tier 1 (the LEI) is disclosable; the employee's identity is out of scope.
 - **Single verifier per cell**; no sub-delegation between agents. The NEP-141 path is tested with a mock token (`contract/ft-mock`), not a live stablecoin.
 - **Not deployed to testnet yet.**
-- **Dockerfile is provided but not yet verified** (no Docker daemon in the build environment).
+- **Dockerfile is provided but not yet verified.**
 
 ## Repository layout
 
 ```
 contract/        Rust contract (near-sdk 5.30) + tests/bench.rs (attack bench) + ft-mock/ (test NEP-141 token)
 keri/            issuer.py (mock vLEI ecosystem), verify.py (independent verifier), common.py (schemas)
-app/             TypeScript: setup, demo, UI server (src/), page (web/)
+app/             TypeScript: setup, demo, UI server, live LLM agent (src/), page (web/)
 scripts/         sandbox.sh, bench_table.py
 docs/            bench.md (generated), D1_spike_report.md
 tools/           fakerlimit.c (only for containers with an fd hard limit < 65535)

@@ -3,7 +3,7 @@
  */
 import { join } from "node:path";
 import { teraToGas, type KeyPairString } from "near-api-js";
-import { accounts, as, call, events, view, provider, NEAR, ROOT, readJson, type CallOut } from "./near.js";
+import { accounts, as, call, DEMO, events, view, provider, NEAR, ROOT, readJson, writeJson, type CallOut } from "./near.js";
 import { keriPrivate, py, pyBoth, releaseLink } from "./keri.js";
 
 export const A = () => accounts();
@@ -17,10 +17,11 @@ export async function balance(id: string): Promise<bigint> {
 /** 1+2：驗證者驗 KERI 鏈並簽 attestation → 法人帶著它開格入金 */
 export async function register(depositNear = "5") {
   const a = A();
-  const v = pyBoth("verify.py", "attest", "--verifier", a.verifier.id);
+  const v = pyBoth("verify.py", "attest", "--verifier", a.verifier.id, "--contract", a.writ.id);
   const checks = v.err.trim().split("\n").filter(Boolean);
   if (v.code !== 0) return { ok: false, checks, error: v.err.trim() };
   const att = JSON.parse(v.out);
+  writeJson(join(DEMO, "ecr_opening.json"), att.ecr_opening); // 法人保管：HR 撤銷 ECR 時才用
   const acme = as(a.acme.id, a.acme.sk);
   const r = await call(acme, a.writ.id, "register", { args: att.args }, { deposit: NEAR(depositNear), gas: teraToGas("100") });
   return { ok: !r.error, checks, cell: r.value as string, hash: r.hash, error: r.error, agent_pk: att.args.agent_pk };
@@ -40,14 +41,14 @@ export async function pay(cell: string, j: number, to: string): Promise<CallOut 
   return { ...r, preimageIndex: k };
 }
 
-/** 職員離職：human 在 KERI 撤銷 AMC；任何人把簽過的 ixn 交給合約 */
+/** 職員離職：HR（LE）在 KERI 撤銷他的 ECR，不需要他配合；任何人把簽過的 ixn 交給合約 */
 export async function revoke(cell: string, submitter = "merchant") {
-  py("issuer.py", "revoke");
+  py("issuer.py", "revoke-ecr");
   const rv = readJson(join(ROOT, "keri/bundle/revocation.json"));
   const a = A();
   const who = as(a[submitter].id, a[submitter].sk);
   const b64 = (h: string) => Buffer.from(h, "hex").toString("base64");
-  const r = await call(who, a.writ.id, "revoke_by_kel", { cell, ixn: b64(rv.ixn_hex), signature: b64(rv.sig_hex) }, { gas: teraToGas("100") });
+  const r = await call(who, a.writ.id, "revoke_by_kel", { cell, ixn: b64(rv.ixn_hex), signature: b64(rv.sig_hex), ecr: readJson(join(DEMO, "ecr_opening.json")) }, { gas: teraToGas("100") });
   return { ...r, rev: rv, events: events(r.logs) };
 }
 

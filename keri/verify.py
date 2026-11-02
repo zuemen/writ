@@ -60,6 +60,13 @@ def verify_chain():
 
         amc_said = trust["amc_said"]
         amc = rgy.reger.creds.get(keys=amc_said)
+        # keripy 不收鏈上游已撤銷的憑證：先講清楚真正原因，不要只說「AMC 解析失敗」
+        for said in (trust.get("ecr_said"), amc_said):
+            for tever in rgy.tevers.values():
+                st = tever.vcState(said) if said else None
+                if st is not None and st.et == "rev":
+                    name = "ECR" if said == trust.get("ecr_said") else "AMC"
+                    raise ChainError(f"{name} revoked in its TEL ({said})")
         ok("AMC parsed, SAID + schema valid, anchored in TEL", amc is not None, amc_said)
         ecr_said = amc.edge["ecr"]["n"]
         ecr = rgy.reger.creds.get(keys=ecr_said)
@@ -89,6 +96,7 @@ def verify_chain():
             amc_said=amc_said, ecr_said=ecr_said, lei=ecr.attrib["LEI"],
             human=human, agent=agent,
             issuer_pk=hk.verfers[0].raw.hex(),
+            le_pk=hby.kevers[ecr.issuer].verfers[0].raw.hex(),
             agent_near_pk="ed25519:" + b58(ak.verfers[0].raw),
             w0=a["paywordRoot"], n=a["paywordLength"], unit=a["unitYocto"], daily=a["dailyLinks"],
             scope=a["counterparties"], funder=a["settlementRail"], asset=a.get("settlementAsset"),
@@ -96,13 +104,13 @@ def verify_chain():
         )
 
 
-def attestation_message(r, lei_commit, verifier):
+def attestation_message(r, lei_commit, ecr_commit, verifier, contract):
     """必須與合約 attestation_message 逐字一致。"""
     return (
-        "writ:attest:v1\n"
-        f"amc={r['amc_said']}\nissuer_pk={r['issuer_pk']}\nagent_pk={r['agent_near_pk']}\nw0={r['w0']}\n"
+        "writ:attest:v2\n"
+        f"contract={contract}\namc={r['amc_said']}\nissuer_pk={r['issuer_pk']}\nagent_pk={r['agent_near_pk']}\nw0={r['w0']}\n"
         f"n={r['n']}\nunit={r['unit']}\nscope={','.join(r['scope'])}\nvalid_until={r['valid_until_ns']}\n"
-        f"daily_links={r['daily']}\nlei_commit={lei_commit}\nfunder={r['funder']}\nverifier={verifier}\n"
+        f"daily_links={r['daily']}\nlei_commit={lei_commit}\necr_commit={ecr_commit}\nfunder={r['funder']}\nverifier={verifier}\n"
         f"asset={r['asset'] or 'near'}"
     )
 
@@ -134,7 +142,10 @@ def cmd_attest(a):
     key = read_json(VKEY)
     salt = secrets.token_hex(16)
     lei_commit = hashlib.sha256(f"{r['lei']}|{salt}".encode()).hexdigest()
-    msg = attestation_message(r, lei_commit, a.verifier).encode()
+    # HR 撤銷 ECR 用的承諾：LE 公鑰與 ECR SAID 平常不上鏈；打開用的 salt 交給法人（不是驗證者獨有）
+    ecr_salt = secrets.token_hex(16)
+    ecr_commit = hashlib.sha256(f"{r['le_pk']}|{r['ecr_said']}|{ecr_salt}".encode()).hexdigest()
+    msg = attestation_message(r, lei_commit, ecr_commit, a.verifier, a.contract).encode()
     sig = pysodium.crypto_sign_detached(msg, bytes.fromhex(key["sk_hex"]))
     # LEI 與 salt 只留在驗證者這裡（解封時才用）
     recs = read_json(RECORDS) if os.path.exists(RECORDS) else {}
@@ -142,10 +153,11 @@ def cmd_attest(a):
     write_json(RECORDS, recs)
     args = dict(amc_said=r["amc_said"], issuer_pk=r["issuer_pk"], agent_pk=r["agent_near_pk"], w0=r["w0"],
                 n=r["n"], unit=r["unit"], scope=r["scope"], valid_until=str(r["valid_until_ns"]),
-                daily_links=r["daily"], lei_commit=lei_commit, verifier=a.verifier, signature=sig.hex())
+                daily_links=r["daily"], lei_commit=lei_commit, ecr_commit=ecr_commit, verifier=a.verifier, signature=sig.hex())
     if r["asset"]:
         args["asset"] = r["asset"]
-    print(json.dumps(dict(funder=r["funder"], args=args), indent=1))
+    opening = dict(le_pk=r["le_pk"], ecr_said=r["ecr_said"], salt=ecr_salt)
+    print(json.dumps(dict(funder=r["funder"], args=args, ecr_opening=opening), indent=1))
 
 
 def cmd_reveal(a):
@@ -160,7 +172,7 @@ if __name__ == "__main__":
     sp = p.add_subparsers(dest="cmd", required=True)
     k = sp.add_parser("keygen"); k.add_argument("--force", action="store_true")
     sp.add_parser("check")
-    t = sp.add_parser("attest"); t.add_argument("--verifier", required=True)
+    t = sp.add_parser("attest"); t.add_argument("--verifier", required=True); t.add_argument("--contract", required=True)
     rv = sp.add_parser("reveal"); rv.add_argument("--amc", required=True)
     a = p.parse_args()
     dict(keygen=cmd_keygen, check=cmd_check, attest=cmd_attest, reveal=cmd_reveal)[a.cmd](a)

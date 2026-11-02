@@ -16,6 +16,7 @@ endif
 
 # 跑攻擊台並重產 docs/bench.md；任何測試失敗則 exit 1
 test: build
+	cargo test --lib
 	cargo test --test bench -- --nocapture --test-threads=2 2>&1 | tee /tmp/writ_bench.log | python3 ../scripts/bench_table.py > ../docs/bench.md
 	cat ../docs/bench.md
 	grep -q "test result: ok" /tmp/writ_bench.log
@@ -24,6 +25,7 @@ test: build
 test-lowfd: build ../tools/fakerlimit.so
 	LD_PRELOAD=$(abspath ../tools/fakerlimit.so) $(MAKE) test-inner
 test-inner:
+	cargo test --lib
 	cargo test --test bench -- --nocapture --test-threads=2 2>&1 | tee /tmp/writ_bench.log | python3 ../scripts/bench_table.py > ../docs/bench.md
 	cat ../docs/bench.md
 	grep -q "test result: ok" /tmp/writ_bench.log

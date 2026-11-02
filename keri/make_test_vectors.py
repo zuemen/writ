@@ -109,6 +109,13 @@ with habbing.openHby(name="spike7", temp=True, salt=signing.Salter(raw=b"0123456
     state = reg_hu.tever.vcState(amc.said)
     print("AMC TEL state after revoke:", state.et if state else None, "sn=", state.s if state else None)
 
+    # ---- 3b. HR 路徑：LE 撤銷員工的 ECR ----
+    rev_e = reg_le.revoke(said=ecr.said)
+    ixn_e_msg, seal_e = anchor(le, reg_le, rev_e, "1"); rgy.processEscrows()
+    ixn_e = serdering.SerderKERI(raw=bytes(ixn_e_msg))
+    ixn_e_body = bytes(ixn_e_msg[:ixn_e.size])
+    ixn_e_sig = indexing.Siger(qb64b=bytes(hby.db.getSigs(eventing.dgKey(le.pre, ixn_e.said))[0])).raw
+
     # ---- 4. 一把鑰匙兩個世界：原始 Ed25519 bytes ----
     agent_pk = agent.kever.verfers[0].raw
     msg_for_agent = b"spend|cell=1|j=3|to=merchant.testnet"
@@ -136,6 +143,8 @@ with habbing.openHby(name="spike7", temp=True, salt=signing.Salter(raw=b"0123456
         iss_ixn=dict(raw_hex=iss_body.hex(), sig_hex=iss_sig.hex(), seal=iss_seal),
         amc=dict(said=amc.said, sad=amc.sad),
         ecr=dict(said=ecr.said),
+        ecr_revocation=dict(ecr_said=ecr.said, le_pk_hex=le.kever.verfers[0].raw.hex(),
+                            raw_hex=ixn_e_body.hex(), sig_hex=ixn_e_sig.hex(), seal=seal_e),
     )
     with open(os.path.join(OUT, "vectors.json"), "w") as f:
         json.dump(vectors, f, indent=1)

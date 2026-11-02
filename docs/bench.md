@@ -1,4 +1,4 @@
-**25 attacks, 25 blocked as expected, attacker gain 0 yoctoNEAR.**
+**30 attacks, 30 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -27,6 +27,11 @@
 | A23 | spend more than the vault holds (valid links, within rate) | Rejected:FUNDS | Rejected:FUNDS | 0 |
 | A24 | genuine signed KERI event that anchors the AMC issuance, not a revocation | NO_REVOCATION_SEAL | NO_REVOCATION_SEAL | 0 |
 | A25 | non-funder pushes the cell's own stablecoin into it | refunded, vault unchanged | refunded | 0 |
+| A26 | revoked mandate revived by replaying its own attestation (resets the budget) | AMC_ALREADY_USED | AMC_ALREADY_USED | 0 |
+| A27 | attestation signed for another deployment replayed on this contract | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
+| A28 | colluding funder + agent burn gas and refresh for free to drain other cells' vaults | REFRESH_UNPAID | REFRESH_UNPAID | 0 |
+| A29 | attacker presents its own key as the legal entity to revoke the mandate | BAD_ECR_OPENING | BAD_ECR_OPENING | 0 |
+| A30 | forged ECR revocation event with a valid commitment opening | BAD_KEL_SIGNATURE | BAD_KEL_SIGNATURE | 0 |
 | B00 | legit payment 3+2 links to in-scope merchant | Paid | Paid | 0 |
 | B01 | AMC revoked in KERI TEL, ixn submitted by anyone | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
 | B02 | payment to a non-existent account | vault refunded by callback | refunded | 0 |
@@ -34,3 +39,4 @@
 | B04 | stablecoin cell: agent pays 3 links in NEP-141 (contract attaches the 1 yocto) | merchant +0.3 tUSDC | merchant +0.3 tUSDC | 0 |
 | B05 | boundaries: vault == amount pays, last link spendable, top_up, counters, solvency | all exact | all exact | 0 |
 | B06 | gas allowance consumed → funder refresh_key (stranger refused) | allowance restored, agent keeps paying | restored | 0 |
+| B07 | HR revokes the employee's ECR in KERI; anyone submits it; employee not needed | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |

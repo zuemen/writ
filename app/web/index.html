@@ -85,9 +85,9 @@
     <div class="chain" id="chain"></div>
     <div class="row">
       <button id="bReg" onclick="post('/api/register')">Verify chain &amp; open mandate</button>
-      <button id="bRev" class="danger" onclick="post('/api/revoke')">Officer leaves → revoke AMC</button>
+      <button id="bRev" class="danger" onclick="post('/api/revoke')">Officer leaves → HR revokes ECR</button>
     </div>
-    <p class="muted">Revocation happens in KERI, off-chain. Anyone can hand the signed event to the contract; it checks the signature and deletes the agent's key.</p>
+    <p class="muted">HR revokes the employee's role credential in KERI, off-chain, without the employee. Anyone can hand the signed event to the contract; it checks the signature and deletes the agent's key.</p>
   </section>
 
   <section>
@@ -140,8 +140,8 @@ function render(s) {
   const k = s.keri;
   $("chain").innerHTML = [
     node("Legal entity", "LE", k.le, ""), `<div class="arrow">issues ECR (role credential, natural person) ↓</div>`,
-    node("Employee", "human", k.human, "iss"), `<div class="arrow">issues AMC (scope, limit, expiry) ↓</div>`,
-    node("Mandate", "AMC", k.amc, k.amcRevoked ? "rev" : "iss"), `<div class="arrow">held by delegated identifier ↓</div>`,
+    node("Employee", "human", k.human, k.ecrRevoked ? "rev" : "iss"), `<div class="arrow">issues AMC (scope, limit, expiry) ↓</div>`,
+    node("Mandate", "AMC", k.amc, k.ecrRevoked ? "rev" : "iss"), `<div class="arrow">held by delegated identifier ↓</div>`,
     node("Agent", "agent", k.agent, ""),
   ].join("");
   $("mer").textContent = s.accounts.merchant;

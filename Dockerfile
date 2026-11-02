@@ -1,5 +1,5 @@
 # 給沒有 Rust／libsodium 的評審環境：docker build -t writ . && docker run --rm writ
-# 預設跑 make test（攻擊台）與 make demo（7 步故事）。網頁：docker run --rm -p 8787:8787 writ make ui
+# 預設跑 make test（攻擊台）與 make demo（8 步故事）。網頁：docker run --rm -p 8787:8787 writ make ui
 FROM rust:1.97-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-venv python3-pip libsodium23 curl ca-certificates gcc make \

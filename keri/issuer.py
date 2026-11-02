@@ -11,6 +11,7 @@ counterparties（允許的交易對手）、validUntil、settlementRail（出資
   python issuer.py export            # 匯出公開 CESR 到 keri/bundle/（驗證端只吃這個）
   python issuer.py release K         # human 撥鏈節：印出 links[K]（agent 付到第 K 節所需的 preimage）
   python issuer.py revoke            # human 撤銷 AMC：TEL rev + KEL ixn 錨定；印出 revocation.json
+  python issuer.py revoke-ecr        # HR（LE）撤銷員工的 ECR：同樣產生 revocation.json，不需要員工的鑰匙
   python issuer.py status
 
 私密資料（agent 私鑰、PayWord 種子）只寫在 keri/.keystore/（.gitignore）。這是 demo 的 mock 生態系：
@@ -141,7 +142,7 @@ def cmd_export(a):
         f.write(stream)
     write_json(os.path.join(BUNDLE, "schemas.json"), {ECR.said: ECR.sed, AMC.said: AMC.sed})
     # 驗證端唯一的「信任錨」：mock LE 的 AID（正式版由 QVI 發的 LE vLEI 鏈回 GLEIF 根）
-    write_json(os.path.join(BUNDLE, "trust.json"), dict(le_aid=st["le"], amc_said=st["amc"], agent_aid=st["agent"]))
+    write_json(os.path.join(BUNDLE, "trust.json"), dict(le_aid=st["le"], ecr_said=st["ecr"], amc_said=st["amc"], agent_aid=st["agent"]))
     print(f"exported {len(stream)} bytes → keri/bundle/chain.cesr")
     hby.close(); rgy.close()
 
@@ -177,6 +178,26 @@ def cmd_revoke(a):
     cmd_export(a)
 
 
+def cmd_revoke_ecr(a):
+    """HR（法人）撤銷員工的 ECR：TEL rev + LE KEL ixn 錨定。不需要員工的鑰匙。"""
+    st = read_json(STATE)
+    hby, rgy = open_all()
+    le = hby.habByName("le")
+    reg_le = rgy.registryByName("le-reg")
+    rev = reg_le.revoke(said=st["ecr"])
+    msg = anchor(le, reg_le, rev, "1")
+    rgy.processEscrows()
+    ixn = serdering.SerderKERI(raw=bytes(msg))
+    body = bytes(msg[:ixn.size])
+    siger = indexing.Siger(qb64b=bytes(hby.db.getSigs(eventing.dgKey(le.pre, ixn.said))[0]))
+    out = dict(ecr_said=st["ecr"], rev_said=rev.said, ixn_hex=body.hex(), ixn_said=ixn.said, ixn_sn=ixn.sn,
+               sig_hex=siger.raw.hex(), seal=ixn.ked["a"][0], le_pk_hex=le.kever.verfers[0].raw.hex())
+    write_json(os.path.join(BUNDLE, "revocation.json"), out)
+    print(json.dumps(dict(rev=rev.said, ixn=ixn.said, seal=ixn.ked["a"][0]), indent=1))
+    hby.close(); rgy.close()
+    cmd_export(a)
+
+
 def cmd_status(a):
     st = read_json(STATE)
     hby, rgy = open_all()
@@ -202,6 +223,7 @@ if __name__ == "__main__":
     sp.add_parser("export")
     r = sp.add_parser("release"); r.add_argument("k")
     sp.add_parser("revoke")
+    sp.add_parser("revoke-ecr")
     sp.add_parser("status")
     a = p.parse_args()
-    dict(init=cmd_init, export=cmd_export, release=cmd_release, revoke=cmd_revoke, status=cmd_status)[a.cmd](a)
+    dict(init=cmd_init, export=cmd_export, release=cmd_release, revoke=cmd_revoke, status=cmd_status, **{"revoke-ecr": cmd_revoke_ecr})[a.cmd](a)
