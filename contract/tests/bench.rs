@@ -189,6 +189,10 @@ async fn b00_happy_path_pays_merchant_and_present_hides_lei() -> anyhow::Result<
     assert_eq!(p["lei"], "sealed");
     assert_eq!(p["within_limit"]["used"], 5);
     assert!(!p.to_string().contains("5493001KJTIIGC8Y1R12"), "LEI never appears on chain");
+    let by_key: Value = w.writ.view("cell_of").args_json(json!({"agent_pk": agent.secret_key().public_key()})).await?.json()?;
+    assert_eq!(by_key, json!(cell.to_string()), "cell_of maps the agent key to its cell");
+    let vs: Value = w.writ.view("verifiers").await?.json()?;
+    assert_eq!(vs[0][0], json!(w.verifier.id()));
     bench("B00", "legit payment 3+2 links to in-scope merchant", "Paid", "Paid", 0);
     Ok(())
 }
