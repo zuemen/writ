@@ -8,14 +8,14 @@
 import { KeyPair, actions, type KeyPairString } from "near-api-js";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { NEAR, ROOT, DEMO, as, call, readJson, writeJson, provider } from "./near.js";
+import { NEAR, ROOT, DEMO, as, call, deployLocked, readJson, writeJson, provider } from "./near.js";
 import { py } from "./keri.js";
 
 const ROOTACC = "test.near";
 const rootKey = readJson(join(ROOT, ".sandbox", "validator_key.json")).secret_key as KeyPairString;
 const root = as(ROOTACC, rootKey);
 
-const plan: Record<string, string> = { writ: "60", verifier: "10", acme: "100", merchant: "10", attacker: "10", regulator: "10" };
+const plan: Record<string, string> = { writ: "60", owner: "10", verifier: "10", acme: "100", merchant: "10", attacker: "10", regulator: "10" };
 const accts: Record<string, { id: string; sk: KeyPairString }> = {};
 
 for (const [name, amt] of Object.entries(plan)) {
@@ -31,15 +31,14 @@ for (const [name, amt] of Object.entries(plan)) {
 }
 writeJson(join(DEMO, "accounts.json"), accts);
 
-const writ = as(accts.writ.id, accts.writ.sk);
 const wasm = readFileSync(join(ROOT, "contract/res/writ.wasm"));
-const d = await writ.deployContract(wasm);
-console.log(`  deployed writ.wasm (${wasm.length} bytes) tx ${d.transaction.hash}`);
-await call(writ, accts.writ.id, "new", { unseal_delay_secs: Number(process.env.UNSEAL_DELAY ?? 10) });
-await call(writ, accts.writ.id, "set_supervisor", { account: accts.regulator.id, enabled: true });
+const d = await deployLocked(accts.writ.id, accts.writ.sk, wasm, accts.owner.id, Number(process.env.UNSEAL_DELAY ?? 10));
+console.log(`  deployed writ.wasm (${wasm.length} bytes), full-access key deleted, tx ${d}`);
+const owner = as(accts.owner.id, accts.owner.sk);
+await call(owner, accts.writ.id, "set_supervisor", { account: accts.regulator.id, enabled: true });
 
 const vpk = py("verify.py", "keygen", "--force").trim();
-const r = await call(writ, accts.writ.id, "set_verifier", { account: accts.verifier.id, pk_hex: vpk });
+const r = await call(owner, accts.writ.id, "set_verifier", { account: accts.verifier.id, pk_hex: vpk });
 if (r.error) throw new Error(r.error);
 console.log(`  verifier ${accts.verifier.id} whitelisted (pk ${vpk.slice(0, 16)}…)`);
 

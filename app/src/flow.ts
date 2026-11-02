@@ -1,6 +1,7 @@
 /**
  * Writ 的四個動作，CLI（demo.ts）與網頁（server.ts）共用同一份程式碼。
  */
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { teraToGas, type KeyPairString } from "near-api-js";
 import { accounts, as, call, DEMO, events, view, provider, NEAR, ROOT, readJson, writeJson, type CallOut } from "./near.js";
@@ -32,12 +33,12 @@ export async function present(cell: string) {
 }
 
 /** agent 付款：向 human 要第 idx+j 節（鏈下），交給合約 */
-export async function pay(cell: string, j: number, to: string): Promise<CallOut & { preimageIndex: number }> {
+export async function pay(cell: string, j: number, to: string, invoice: string): Promise<CallOut & { preimageIndex: number }> {
   const c: any = await view(W(), "get_cell", { cell });
   const k = (c?.idx ?? 0) + j;
   const pre = releaseLink(Math.min(k, c?.n ?? k));
   const agent = as(W(), keriPrivate().agent_near_secret_key as KeyPairString);
-  const r = await call(agent, W(), "spend", { preimage: pre, j, to }, { gas: teraToGas("50") });
+  const r = await call(agent, W(), "spend", { preimage: pre, j, to, invoice_hash: createHash("sha256").update(invoice).digest("hex") }, { gas: teraToGas("50") });
   return { ...r, preimageIndex: k };
 }
 
@@ -63,7 +64,6 @@ export const INJECTED_INVOICE = (attacker: string) =>
 /** 監理方提出調閱（理由本文不上鏈，只放雜湊） */
 export async function requestUnseal(cell: string, reason = "Taipei District Court order 2026-TPE-001") {
   const a = A();
-  const { createHash } = await import("node:crypto");
   const reason_hash = createHash("sha256").update(reason).digest("hex");
   const r = await call(as(a.regulator.id, a.regulator.sk), a.writ.id, "request_unseal", { cell, reason_hash });
   return { ...r, reason, events: events(r.logs) };

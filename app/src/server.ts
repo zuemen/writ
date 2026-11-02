@@ -52,7 +52,7 @@ async function act(path: string) {
     if (!cell) return add({ who: "agent", text: "no mandate yet", kind: "info" });
     const injected = path.endsWith("injected");
     const to = injected ? a.attacker.id : a.merchant.id;
-    const r = await pay(cell, injected ? 2 : 1, to);
+    const r = await pay(cell, injected ? 2 : 1, to, injected ? "INV-0043" : "INV-0042");
     if (r.value?.Paid) add({ who: "agent", text: `spend → ${to}: PAID ${fmt(r.value.Paid.amount)} (link ${r.value.Paid.idx}/${r.value.Paid.idx + r.value.Paid.remaining_links})`, kind: "ok", hash: r.hash });
     else if (r.value?.Rejected) add({ who: "agent", text: `spend → ${to}: POLICY REJECTED ${r.value.Rejected.reason} (strike ${r.value.Rejected.strikes}/3${r.value.Rejected.tripped ? ", key deleted" : ""})`, kind: "reject", hash: r.hash });
     else add({ who: "agent", text: `spend → ${to}: ${r.tag ?? "ERROR"} — ${r.error} (rejected by the protocol, no transaction)`, kind: "protocol" });

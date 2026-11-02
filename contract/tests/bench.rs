@@ -14,7 +14,9 @@ use sha2::{Digest, Sha256};
 
 const WASM: &str = "res/writ.wasm";
 const UNIT: u128 = 10_000_000_000_000_000_000_000; // 0.01 NEAR / 鏈節
-const REGISTER_FEE: u128 = 350_000_000_000_000_000_000_000; // 0.35 NEAR，必須 >= agent 鑰匙的 gas allowance
+// 開格費 = 0.35 NEAR（>= agent 鑰匙的 gas allowance）+ 每節 0.001 NEAR（發票紀錄的儲存）
+fn fee(n: u32) -> u128 { 350_000_000_000_000_000_000_000 + (n as u128) * 1_000_000_000_000_000_000_000 }
+const AMC_ISSUER: &str = "EISSUER_AID";
 
 // ---------------------------------------------------------------- 工具
 
@@ -69,7 +71,7 @@ fn wasm_bytes() -> anyhow::Result<Vec<u8>> {
 async fn world() -> anyhow::Result<World> {
     let worker = near_workspaces::sandbox().await?;
     let writ = worker.dev_deploy(&wasm_bytes()?).await?;
-    writ.call("new").args_json(json!({"unseal_delay_secs": 5})).transact().await?.into_result()?;
+    writ.call("new").args_json(json!({"owner": writ.id(), "unseal_delay_secs": 5})).transact().await?.into_result()?;
     let verifier = worker.dev_create_account().await?;
     let funder = worker.dev_create_account().await?;
     let merchant = worker.dev_create_account().await?;
@@ -92,19 +94,24 @@ struct Opts {
     asset: Option<AccountId>,
     unit: u128,
     ecr_commit: String,
+    max_links: u32,
+    max_strikes: u32,
+    issuer_aid: String,
 }
 
 const ECR_COMMIT_SALT: &str = "salt-ecr";
+/// 測試裡的 attestation 一律用「遠在未來」的時間，表示剛簽完；A33 另外測過期。
+const ATTESTED_NOW: u64 = u64::MAX / 2;
 
 /// 與合約 attestation_message 完全一致的規範字串。
 fn attest_msg(a: &Value, funder: &AccountId, contract: &AccountId) -> String {
     let scope: Vec<String> = a["scope"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect();
     format!(
-        "writ:attest:v2\ncontract={}\namc={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nasset={}",
-        contract, a["amc_said"].as_str().unwrap(), a["issuer_pk"].as_str().unwrap(), a["agent_pk"].as_str().unwrap(),
+        "writ:attest:v3\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}",
+        contract, a["amc_said"].as_str().unwrap(), a.get("issuer_aid").and_then(|v| v.as_str()).unwrap(), a["issuer_pk"].as_str().unwrap(), a["agent_pk"].as_str().unwrap(),
         a["w0"].as_str().unwrap(), a["n"], a["unit"].as_str().unwrap(), scope.join(","),
-        a["valid_until"].as_str().unwrap(), a["daily_links"], a["lei_commit"].as_str().unwrap(), a["ecr_commit"].as_str().unwrap(), funder,
-        a["verifier"].as_str().unwrap(),
+        a["valid_until"].as_str().unwrap(), a["daily_links"], a["max_links"], a["max_strikes"], a["lei_commit"].as_str().unwrap(), a["ecr_commit"].as_str().unwrap(), funder,
+        a["verifier"].as_str().unwrap(), a["attested_at"].as_str().unwrap(),
         a.get("asset").and_then(|v| v.as_str()).unwrap_or("near")
     )
 }
@@ -120,7 +127,7 @@ async fn open_cell(w: &World, o: Opts) -> anyhow::Result<(u64, Account, Payword)
     let lei_commit = hex::encode(Sha256::digest(b"WRITDEMO000000000017|salt-demo"));
     let valid_until = now_ns(w).await? + o.valid_secs * 1_000_000_000;
     let mut args = json!({
-        "amc_said": o.amc_said, "issuer_pk": o.issuer_pk, "agent_pk": agent_sk.public_key(),
+        "amc_said": o.amc_said, "issuer_aid": o.issuer_aid, "issuer_pk": o.issuer_pk, "max_links": o.max_links, "max_strikes": o.max_strikes, "attested_at": ATTESTED_NOW.to_string(), "agent_pk": agent_sk.public_key(),
         "w0": pw.w0(), "n": o.n, "unit": o.unit.to_string(), "scope": o.scope,
         "valid_until": valid_until.to_string(), "daily_links": o.daily, "lei_commit": lei_commit,
         "ecr_commit": o.ecr_commit,
@@ -145,12 +152,15 @@ fn default_opts(w: &World) -> Opts {
         issuer_pk: hex::encode([7u8; 32]),
         asset: None,
         unit: UNIT,
-        ecr_commit: hex::encode(Sha256::digest(format!("{}|ECR|{}", hex::encode([9u8; 32]), ECR_COMMIT_SALT))),
+        ecr_commit: hex::encode(Sha256::digest(format!("LE|{}|ECR|{}", hex::encode([9u8; 32]), ECR_COMMIT_SALT))),
+        max_links: 1000,
+        max_strikes: 3,
+        issuer_aid: AMC_ISSUER.into(),
     }
 }
 
 async fn spend(agent: &Account, writ: &AccountId, preimage: &str, j: u32, to: &AccountId) -> Result<Value, String> {
-    match agent.call(writ, "spend").args_json(json!({"preimage": preimage, "j": j, "to": to})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await {
+    match agent.call(writ, "spend").args_json(json!({"preimage": preimage, "j": j, "to": to, "invoice_hash": hex::encode(rand::random::<[u8; 32]>())})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await {
         Ok(out) => match out.clone().into_result() {
             Ok(v) => Ok(v.json::<Value>().unwrap()),
             Err(e) => Err(format!("EXEC:{:?}", e)),
@@ -338,7 +348,7 @@ async fn a12_forged_or_tampered_attestation_is_refused() -> anyhow::Result<()> {
     let mut args = json!({
         "amc_said": "EX", "issuer_pk": hex::encode([1u8;32]), "agent_pk": agent_sk.public_key(), "w0": pw.w0(), "n": 10,
         "unit": UNIT.to_string(), "scope": [w.merchant.id()], "valid_until": vu.to_string(), "daily_links": 10,
-        "lei_commit": hex::encode([2u8;32]), "ecr_commit": hex::encode([3u8;32]), "verifier": w.verifier.id(),
+        "lei_commit": hex::encode([2u8;32]), "ecr_commit": hex::encode([3u8;32]), "issuer_aid": AMC_ISSUER, "max_links": 1000, "max_strikes": 3, "attested_at": ATTESTED_NOW.to_string(), "verifier": w.verifier.id(),
     });
     // (a) 非白名單的人自己簽
     let rogue = SigningKey::generate(&mut rand::thread_rng());
@@ -367,6 +377,7 @@ async fn a15_revoke_by_kel_real_keri_event_is_permissionless() -> anyhow::Result
     let mut o = default_opts(&w);
     o.amc_said = v["amc"]["said"].as_str().unwrap().into();
     o.issuer_pk = v["issuer"]["pk_hex"].as_str().unwrap().into();
+    o.issuer_aid = v["issuer"]["aid"].as_str().unwrap().into();
     let (cell, agent, pw) = open_cell(&w, o).await?;
     assert!(spend(&agent, w.writ.id(), &pw.link(1), 1, w.merchant.id()).await.unwrap().get("Paid").is_some());
 
@@ -417,7 +428,7 @@ async fn a16_failed_transfer_refunds_vault_and_others_cannot_revoke() -> anyhow:
     assert!(v.get("Paid").is_some());
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
     let vault: u128 = c["vault"].as_str().unwrap().parse()?;
-    assert_eq!(vault, 1_000_000_000_000_000_000_000_000 - REGISTER_FEE, "transfer to non-existent account refunded");
+    assert_eq!(vault, 1_000_000_000_000_000_000_000_000 - fee(20), "transfer to non-existent account refunded");
     bench("B02", "payment to a non-existent account", "vault refunded by callback", "refunded", 0);
 
     let r = w.attacker.call(w.writ.id(), "revoke").args_json(json!({"cell": cell.to_string(), "evidence": "x"})).transact().await?;
@@ -559,7 +570,7 @@ async fn a21_token_cell_refuses_foreign_deposits_and_asset_swap() -> anyhow::Res
         .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
     assert_eq!(ft_balance(&w, &token, w.attacker.id()).await, 1_000 * T, "foreign token refunded in full");
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
-    assert_eq!(c["vault"], "650000000000000000000000");
+    assert_eq!(c["vault"], (1_000_000_000_000_000_000_000_000 - fee(20)).to_string());
     bench("A21", "foreign token pushed into a cell via ft_transfer_call", "refunded, vault unchanged", "refunded", 0);
 
     // 驗證者簽的是 NEAR 格，法人想改成代幣格
@@ -568,7 +579,7 @@ async fn a21_token_cell_refuses_foreign_deposits_and_asset_swap() -> anyhow::Res
     let vu = now_ns(&w).await? + 3_600_000_000_000;
     let mut args = json!({"amc_said": "EY", "issuer_pk": hex::encode([1u8;32]), "agent_pk": agent_sk.public_key(), "w0": pw.w0(), "n": 5,
         "unit": UNIT.to_string(), "scope": [w.merchant.id()], "valid_until": vu.to_string(), "daily_links": 5,
-        "lei_commit": hex::encode([2u8;32]), "ecr_commit": hex::encode([3u8;32]), "verifier": w.verifier.id()});
+        "lei_commit": hex::encode([2u8;32]), "ecr_commit": hex::encode([3u8;32]), "issuer_aid": AMC_ISSUER, "max_links": 1000, "max_strikes": 3, "attested_at": ATTESTED_NOW.to_string(), "verifier": w.verifier.id()});
     args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
     args["asset"] = json!(token.id());
     let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_near(1)).max_gas().transact().await?;
@@ -591,9 +602,9 @@ async fn b05_boundaries_accounting_and_events() -> anyhow::Result<()> {
     let vu = now_ns(&w).await? + 3_600_000_000_000;
     let mut args = json!({"amc_said": "EB05", "issuer_pk": hex::encode([7u8;32]), "agent_pk": agent_sk.public_key(), "w0": pw.w0(), "n": 5,
         "unit": UNIT.to_string(), "scope": [w.merchant.id()], "valid_until": vu.to_string(), "daily_links": 5,
-        "lei_commit": hex::encode([2u8;32]), "ecr_commit": hex::encode([3u8;32]), "verifier": w.verifier.id()});
+        "lei_commit": hex::encode([2u8;32]), "ecr_commit": hex::encode([3u8;32]), "issuer_aid": AMC_ISSUER, "max_links": 1000, "max_strikes": 3, "attested_at": ATTESTED_NOW.to_string(), "verifier": w.verifier.id()});
     args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
-    let deposit = REGISTER_FEE + 3 * UNIT;
+    let deposit = fee(5) + 3 * UNIT;
     let out = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_yoctonear(deposit)).max_gas().transact().await?;
     assert!(out.logs().iter().any(|l| l.contains("\"event\":\"registered\"")), "registered event emitted");
     let cell: String = out.into_result()?.json()?;
@@ -632,7 +643,7 @@ async fn b05_boundaries_accounting_and_events() -> anyhow::Result<()> {
     assert_eq!(st["paid_yocto"], (5 * UNIT).to_string());
     // 償付能力：金庫總和 = 0.9 NEAR（第二格）+ 0（第一格已用完）
     let sol: Value = w.writ.view("solvency").await?.json()?;
-    assert_eq!(sol["vault_total"], "650000000000000000000000");
+    assert_eq!(sol["vault_total"], (1_000_000_000_000_000_000_000_000 - fee(20)).to_string());
     assert_eq!(sol["solvent"], true);
     bench("B05", "boundaries: vault == amount pays, last link spendable, top_up, counters, solvency", "all exact", "all exact", 0);
     Ok(())
@@ -675,7 +686,7 @@ async fn send_register(w: &World, args: &Value) -> anyhow::Result<near_workspace
 fn signed_args(w: &World, o: &Opts, agent_pk: &near_workspaces::types::PublicKey, pw: &Payword, valid_until: u64, contract: &AccountId) -> Value {
     let lei_commit = hex::encode(Sha256::digest(b"WRITDEMO000000000017|salt-demo"));
     let mut args = json!({
-        "amc_said": o.amc_said, "issuer_pk": o.issuer_pk, "agent_pk": agent_pk,
+        "amc_said": o.amc_said, "issuer_aid": o.issuer_aid, "issuer_pk": o.issuer_pk, "max_links": o.max_links, "max_strikes": o.max_strikes, "attested_at": ATTESTED_NOW.to_string(), "agent_pk": agent_pk,
         "w0": pw.w0(), "n": o.n, "unit": o.unit.to_string(), "scope": o.scope,
         "valid_until": valid_until.to_string(), "daily_links": o.daily, "lei_commit": lei_commit,
         "ecr_commit": o.ecr_commit, "verifier": w.verifier.id(),
@@ -761,11 +772,12 @@ async fn b07_hr_revokes_the_ecr_without_the_departing_employee() -> anyhow::Resu
     let w = world().await?;
     let v: Value = serde_json::from_str(&std::fs::read_to_string("tests/fixtures/vectors.json")?)?;
     let e = &v["ecr_revocation"];
-    let (le_pk, ecr_said) = (e["le_pk_hex"].as_str().unwrap(), e["ecr_said"].as_str().unwrap());
+    let (le_aid, le_pk, ecr_said) = (e["le_aid"].as_str().unwrap(), e["le_pk_hex"].as_str().unwrap(), e["ecr_said"].as_str().unwrap());
     let mut o = default_opts(&w);
     o.amc_said = v["amc"]["said"].as_str().unwrap().into();
     o.issuer_pk = v["issuer"]["pk_hex"].as_str().unwrap().into();
-    o.ecr_commit = hex::encode(Sha256::digest(format!("{}|{}|{}", le_pk, ecr_said, ECR_COMMIT_SALT)));
+    o.issuer_aid = v["issuer"]["aid"].as_str().unwrap().into();
+    o.ecr_commit = hex::encode(Sha256::digest(format!("{}|{}|{}|{}", le_aid, le_pk, ecr_said, ECR_COMMIT_SALT)));
     let (cell, agent, pw) = open_cell(&w, o).await?;
     assert!(spend(&agent, w.writ.id(), &pw.link(1), 1, w.merchant.id()).await.unwrap().get("Paid").is_some());
     let b64 = |h: &str| near_sdk::base64::Engine::encode(&near_sdk::base64::prelude::BASE64_STANDARD, hex::decode(h).unwrap());
@@ -773,7 +785,7 @@ async fn b07_hr_revokes_the_ecr_without_the_departing_employee() -> anyhow::Resu
 
     // 鹽值錯 → 打不開承諾，無法冒充法人
     let r = w.attacker.call(w.writ.id(), "revoke_by_kel")
-        .args_json(json!({"cell": cell.to_string(), "ixn": ixn, "signature": sig, "ecr": {"le_pk": le_pk, "ecr_said": ecr_said, "salt": "wrong"}})).max_gas().transact().await?;
+        .args_json(json!({"cell": cell.to_string(), "ixn": ixn, "signature": sig, "ecr": {"le_aid": le_aid, "le_pk": le_pk, "ecr_said": ecr_said, "salt": "wrong"}})).max_gas().transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("BAD_ECR_OPENING"));
     bench("A29", "attacker presents its own key as the legal entity to revoke the mandate", "BAD_ECR_OPENING", "BAD_ECR_OPENING", 0);
 
@@ -782,15 +794,160 @@ async fn b07_hr_revokes_the_ecr_without_the_departing_employee() -> anyhow::Resu
     let last = tampered.len() - 3;
     tampered[last] ^= 1;
     let r = w.attacker.call(w.writ.id(), "revoke_by_kel")
-        .args_json(json!({"cell": cell.to_string(), "ixn": b64(&hex::encode(tampered)), "signature": sig, "ecr": {"le_pk": le_pk, "ecr_said": ecr_said, "salt": ECR_COMMIT_SALT}})).max_gas().transact().await?;
+        .args_json(json!({"cell": cell.to_string(), "ixn": b64(&hex::encode(tampered)), "signature": sig, "ecr": {"le_aid": le_aid, "le_pk": le_pk, "ecr_said": ecr_said, "salt": ECR_COMMIT_SALT}})).max_gas().transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("BAD_KEL_SIGNATURE"));
     bench("A30", "forged ECR revocation event with a valid commitment opening", "BAD_KEL_SIGNATURE", "BAD_KEL_SIGNATURE", 0);
 
     // 真事件：任何人交都可以
     w.merchant.call(w.writ.id(), "revoke_by_kel")
-        .args_json(json!({"cell": cell.to_string(), "ixn": ixn, "signature": sig, "ecr": {"le_pk": le_pk, "ecr_said": ecr_said, "salt": ECR_COMMIT_SALT}})).max_gas().transact().await?.into_result()?;
+        .args_json(json!({"cell": cell.to_string(), "ixn": ixn, "signature": sig, "ecr": {"le_aid": le_aid, "le_pk": le_pk, "ecr_said": ecr_said, "salt": ECR_COMMIT_SALT}})).max_gas().transact().await?.into_result()?;
     let err = spend(&agent, w.writ.id(), &pw.link(2), 1, w.merchant.id()).await.unwrap_err();
     assert_eq!(proto_tag(&err), "AccessKeyNotFound");
     bench("B07", "HR revokes the employee's ECR in KERI; anyone submits it; employee not needed", "key deleted, next call AccessKeyNotFound", proto_tag(&err), 0);
+    Ok(())
+}
+
+// ---------------------------------------------------------------- 第三輪：發票、單筆上限、恢復、鎖定、輪替
+
+async fn spend_invoice(agent: &Account, writ: &AccountId, preimage: &str, j: u32, to: &AccountId, invoice: &[u8]) -> Value {
+    let inv = hex::encode(Sha256::digest(invoice));
+    agent.call(writ, "spend").args_json(json!({"preimage": preimage, "j": j, "to": to, "invoice_hash": inv}))
+        .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await.unwrap().into_result().unwrap().json().unwrap()
+}
+
+#[tokio::test]
+async fn a31_injection_inside_scope_duplicate_and_inflated_invoices() -> anyhow::Result<()> {
+    let w = world().await?;
+    let mut o = default_opts(&w);
+    o.max_links = 3;
+    let (cell, agent, pw) = open_cell(&w, o).await?;
+    let merchant_before = balance(&w.merchant).await;
+    let v = spend_invoice(&agent, w.writ.id(), &pw.link(1), 1, w.merchant.id(), b"INV-1").await;
+    assert!(v.get("Paid").is_some(), "{}", v);
+    let inv = hex::encode(Sha256::digest(b"INV-1"));
+    let paid: bool = w.writ.view("invoice_paid").args_json(json!({"cell": cell.to_string(), "invoice_hash": inv})).await?.json()?;
+    assert!(paid, "the invoice is on record for reconciliation");
+
+    let v = spend_invoice(&agent, w.writ.id(), &pw.link(2), 1, w.merchant.id(), b"INV-1").await;
+    assert_eq!(v["Rejected"]["reason"], "DUPLICATE");
+    bench("A31", "injection makes the agent pay an in-scope merchant for the same invoice twice", "Rejected:DUPLICATE", "Rejected:DUPLICATE", 0);
+
+    let v = spend_invoice(&agent, w.writ.id(), &pw.link(5), 4, w.merchant.id(), b"INV-2").await;
+    assert_eq!(v["Rejected"]["reason"], "PER_TX");
+    bench("A32", "injection inflates the amount paid to an in-scope merchant past the per-payment cap", "Rejected:PER_TX", "Rejected:PER_TX", 0);
+
+    let r = agent.call(w.writ.id(), "spend").args_json(json!({"preimage": pw.link(2), "j": 1, "to": w.merchant.id(), "invoice_hash": "not-hex"}))
+        .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json::<Value>()?;
+    assert_eq!(r["Rejected"]["reason"], "INVOICE");
+    let gained = balance(&w.merchant).await - merchant_before;
+    assert_eq!(gained, UNIT, "only the one legitimate payment moved money");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a33_stale_attestation_and_wrong_aid() -> anyhow::Result<()> {
+    let w = world().await?;
+    let o = default_opts(&w);
+    let agent_sk = SecretKey::from_random(KeyType::ED25519);
+    let pw = Payword::new(o.n);
+    let now = now_ns(&w).await?;
+    let mut args = signed_args(&w, &o, &agent_sk.public_key(), &pw, now + 3_600_000_000_000, w.writ.id());
+    args["attested_at"] = json!((now - 2 * 3_600_000_000_000).to_string());
+    args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
+    let r = send_register(&w, &args).await?;
+    assert!(format!("{:?}", r.into_result()).contains("STALE_ATTESTATION"));
+    bench("A33", "attestation signed before a revocation is used long afterwards", "STALE_ATTESTATION", "STALE_ATTESTATION", 0);
+
+    // 同一把鑰匙替別的 AID 簽的錨定事件，不能拿來撤銷這一格
+    let sk = SigningKey::generate(&mut rand::thread_rng());
+    let mut o = default_opts(&w);
+    o.issuer_pk = hex::encode(sk.verifying_key().to_bytes());
+    let amc = o.amc_said.clone();
+    let (cell, _agent, _pw) = open_cell(&w, o).await?;
+    let ixn = json!({"t": "ixn", "i": "ESOMEONE_ELSE", "a": [{"i": amc, "s": "1", "d": "EREV"}]}).to_string();
+    let b64 = |b: &[u8]| near_sdk::base64::Engine::encode(&near_sdk::base64::prelude::BASE64_STANDARD, b);
+    let r = w.attacker.call(w.writ.id(), "revoke_by_kel")
+        .args_json(json!({"cell": cell.to_string(), "ixn": b64(ixn.as_bytes()), "signature": b64(&sk.sign(ixn.as_bytes()).to_bytes())})).max_gas().transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("WRONG_AID"));
+    bench("A34", "signed anchoring event from a different KERI identifier", "WRONG_AID", "WRONG_AID", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b08_funder_reinstates_after_the_tripwire() -> anyhow::Result<()> {
+    let w = world().await?;
+    let (cell, agent, pw) = open_cell(&w, default_opts(&w)).await?;
+    for _ in 0..3 {
+        spend(&agent, w.writ.id(), &pw.link(1), 1, w.attacker.id()).await.unwrap();
+    }
+    let keys = w.worker.view_access_keys(w.writ.id()).await?;
+    assert!(keys.iter().all(|k| k.public_key != agent.secret_key().public_key()), "tripped");
+
+    let r = w.attacker.call(w.writ.id(), "reinstate").args_json(json!({"cell": cell.to_string()})).deposit(NearToken::from_millinear(250)).transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("ONLY_FUNDER"));
+    bench("A35", "stranger re-arms a tripped agent key", "ONLY_FUNDER", "ONLY_FUNDER", 0);
+    let r = w.funder.call(w.writ.id(), "reinstate").args_json(json!({"cell": cell.to_string()})).transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("REINSTATE_UNPAID"));
+
+    w.funder.call(w.writ.id(), "reinstate").args_json(json!({"cell": cell.to_string()})).deposit(NearToken::from_millinear(250)).max_gas().transact().await?.into_result()?;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(c["status"], "Active");
+    assert_eq!(c["strikes"], 0);
+    let v = spend(&agent, w.writ.id(), &pw.link(1), 1, w.merchant.id()).await.unwrap();
+    assert!(v.get("Paid").is_some(), "{}", v);
+    bench("B08", "three bad invoices trip the key; funder pays to reinstate; agent pays again", "Paid after reinstate", "Paid after reinstate", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b09_verifier_updates_signers_after_key_rotation() -> anyhow::Result<()> {
+    let w = world().await?;
+    let old = SigningKey::generate(&mut rand::thread_rng());
+    let new = SigningKey::generate(&mut rand::thread_rng());
+    let mut o = default_opts(&w);
+    o.issuer_pk = hex::encode(old.verifying_key().to_bytes());
+    let amc = o.amc_said.clone();
+    let (cell, agent, _pw) = open_cell(&w, o).await?;
+    let ixn = json!({"t": "ixn", "i": AMC_ISSUER, "a": [{"i": amc, "s": "1", "d": "EREV"}]}).to_string();
+    let b64 = |b: &[u8]| near_sdk::base64::Engine::encode(&near_sdk::base64::prelude::BASE64_STANDARD, b);
+    let submit = |sk: &SigningKey| json!({"cell": cell.to_string(), "ixn": b64(ixn.as_bytes()), "signature": b64(&sk.sign(ixn.as_bytes()).to_bytes())});
+
+    let r = w.merchant.call(w.writ.id(), "revoke_by_kel").args_json(submit(&new)).max_gas().transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("BAD_KEL_SIGNATURE"), "before the update the rotated key is unknown");
+
+    let update = json!({"cell": cell.to_string(), "issuer_aid": AMC_ISSUER, "issuer_pk": hex::encode(new.verifying_key().to_bytes()), "ecr_commit": hex::encode([4u8; 32])});
+    let r = w.attacker.call(w.writ.id(), "update_signers").args_json(update.clone()).transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("ONLY_CELL_VERIFIER"));
+    bench("A36", "stranger swaps the keys that may revoke a mandate", "ONLY_CELL_VERIFIER", "ONLY_CELL_VERIFIER", 0);
+    w.verifier.call(w.writ.id(), "update_signers").args_json(update).transact().await?.into_result()?;
+
+    let r = w.merchant.call(w.writ.id(), "revoke_by_kel").args_json(submit(&old)).max_gas().transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("BAD_KEL_SIGNATURE"), "the rotated-out key can no longer revoke");
+    w.merchant.call(w.writ.id(), "revoke_by_kel").args_json(submit(&new)).max_gas().transact().await?.into_result()?;
+    let keys = w.worker.view_access_keys(w.writ.id()).await?;
+    assert!(keys.iter().all(|k| k.public_key != agent.secret_key().public_key()));
+    bench("B09", "employee rotates keys; verifier updates the signer; new key revokes, old key cannot", "key deleted by the new key", "key deleted by the new key", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b10_locked_deployment_has_no_full_access_key() -> anyhow::Result<()> {
+    let worker = near_workspaces::sandbox().await?;
+    let owner = worker.dev_create_account().await?;
+    let root = worker.root_account()?;
+    let sk = SecretKey::from_random(KeyType::ED25519);
+    let acc = root.create_subaccount("locked").initial_balance(NearToken::from_near(20)).keys(sk.clone()).transact().await?.into_result()?;
+    acc.batch(acc.id())
+        .deploy(&wasm_bytes()?)
+        .call(near_workspaces::operations::Function::new("new").args_json(json!({"owner": owner.id(), "unseal_delay_secs": 5})))
+        .delete_key(sk.public_key())
+        .transact().await?.into_result()?;
+    let keys = worker.view_access_keys(acc.id()).await?;
+    assert!(keys.is_empty(), "no key can move the vaults: {:?}", keys.len());
+    // owner 從外部帳號管理白名單
+    owner.call(acc.id(), "set_verifier").args_json(json!({"account": owner.id(), "pk_hex": hex::encode([1u8; 32])})).transact().await?.into_result()?;
+    let got: String = worker.view(acc.id(), "owner").await?.json::<Value>()?.as_str().unwrap().to_string();
+    assert_eq!(got, owner.id().as_str());
+    bench("B10", "deploy + init + delete full-access key in one batch; owner still manages the whitelist", "0 keys on the contract account", "0 keys on the contract account", 0);
     Ok(())
 }

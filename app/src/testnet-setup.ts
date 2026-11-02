@@ -5,11 +5,11 @@
 import { KeyPair, type KeyPairString } from "near-api-js";
 import { readFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { DEMO, ROOT, as, call, writeJson, readJson, provider } from "./near.js";
+import { DEMO, ROOT, as, call, deployLocked, writeJson, readJson, provider } from "./near.js";
 import { py } from "./keri.js";
 
 const tag = process.env.WRIT_TESTNET_TAG ?? `writ${Date.now().toString(36)}`;
-const names = ["writ", "verifier", "acme", "merchant", "attacker", "regulator"];
+const names = ["writ", "owner", "verifier", "acme", "merchant", "attacker", "regulator"];
 const path = join(DEMO, "accounts.json");
 const accts: Record<string, { id: string; sk: KeyPairString }> = existsSync(path) ? readJson(path) : {};
 
@@ -28,16 +28,15 @@ for (const n of names) {
   await new Promise((r) => setTimeout(r, 1500));
 }
 
-const writ = as(accts.writ.id, accts.writ.sk);
 const wasm = readFileSync(join(ROOT, "contract/res/writ.wasm"));
-const d = await writ.deployContract(wasm);
-console.log(`  deployed ${accts.writ.id} tx ${d.transaction.hash}`);
+const hash = await deployLocked(accts.writ.id, accts.writ.sk, wasm, accts.owner.id, 10);
+console.log(`  deployed ${accts.writ.id}, full-access key deleted, tx ${hash}`);
+const owner = as(accts.owner.id, accts.owner.sk);
 for (const [m, args] of [
-  ["new", { unseal_delay_secs: 10 }],
   ["set_supervisor", { account: accts.regulator.id, enabled: true }],
   ["set_verifier", { account: accts.verifier.id, pk_hex: py("verify.py", "keygen", "--force").trim() }],
 ] as const) {
-  const r = await call(writ, accts.writ.id, m, args);
+  const r = await call(owner, accts.writ.id, m, args);
   if (r.error) throw new Error(`${m}: ${r.error}`);
 }
 rmSync(join(ROOT, "keri/.keystore"), { recursive: true, force: true });

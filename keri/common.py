@@ -70,11 +70,13 @@ AMC = _schema(
         "paywordRoot": {"type": "string"},
         "paywordLength": {"type": "integer"},
         "dailyLinks": {"type": "integer"},
+        "maxLinksPerPayment": {"type": "integer"},
+        "maxStrikes": {"type": "integer"},
         "settlementRail": {"type": "string"},
         "settlementAsset": {"type": "string"},
     },
     ["actionClass", "counterparties", "validUntil", "unitYocto", "paywordRoot", "paywordLength", "dailyLinks",
-     "settlementRail"],
+     "maxLinksPerPayment", "maxStrikes", "settlementRail"],
     {"d": {"type": "string"}, "ecr": {"type": "object"}},
 )
 

@@ -1,4 +1,4 @@
-**30 attacks, 30 blocked as expected, attacker gain 0 yoctoNEAR.**
+**36 attacks, 36 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -32,6 +32,12 @@
 | A28 | colluding funder + agent burn gas and refresh for free to drain other cells' vaults | REFRESH_UNPAID | REFRESH_UNPAID | 0 |
 | A29 | attacker presents its own key as the legal entity to revoke the mandate | BAD_ECR_OPENING | BAD_ECR_OPENING | 0 |
 | A30 | forged ECR revocation event with a valid commitment opening | BAD_KEL_SIGNATURE | BAD_KEL_SIGNATURE | 0 |
+| A31 | injection makes the agent pay an in-scope merchant for the same invoice twice | Rejected:DUPLICATE | Rejected:DUPLICATE | 0 |
+| A32 | injection inflates the amount paid to an in-scope merchant past the per-payment cap | Rejected:PER_TX | Rejected:PER_TX | 0 |
+| A33 | attestation signed before a revocation is used long afterwards | STALE_ATTESTATION | STALE_ATTESTATION | 0 |
+| A34 | signed anchoring event from a different KERI identifier | WRONG_AID | WRONG_AID | 0 |
+| A35 | stranger re-arms a tripped agent key | ONLY_FUNDER | ONLY_FUNDER | 0 |
+| A36 | stranger swaps the keys that may revoke a mandate | ONLY_CELL_VERIFIER | ONLY_CELL_VERIFIER | 0 |
 | B00 | legit payment 3+2 links to in-scope merchant | Paid | Paid | 0 |
 | B01 | AMC revoked in KERI TEL, ixn submitted by anyone | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
 | B02 | payment to a non-existent account | vault refunded by callback | refunded | 0 |
@@ -40,3 +46,6 @@
 | B05 | boundaries: vault == amount pays, last link spendable, top_up, counters, solvency | all exact | all exact | 0 |
 | B06 | gas allowance consumed → funder refresh_key (stranger refused) | allowance restored, agent keeps paying | restored | 0 |
 | B07 | HR revokes the employee's ECR in KERI; anyone submits it; employee not needed | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
+| B08 | three bad invoices trip the key; funder pays to reinstate; agent pays again | Paid after reinstate | Paid after reinstate | 0 |
+| B09 | employee rotates keys; verifier updates the signer; new key revokes, old key cannot | key deleted by the new key | key deleted by the new key | 0 |
+| B10 | deploy + init + delete full-access key in one batch; owner still manages the whitelist | 0 keys on the contract account | 0 keys on the contract account | 0 |

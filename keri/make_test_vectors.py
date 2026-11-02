@@ -143,7 +143,7 @@ with habbing.openHby(name="spike7", temp=True, salt=signing.Salter(raw=b"0123456
         iss_ixn=dict(raw_hex=iss_body.hex(), sig_hex=iss_sig.hex(), seal=iss_seal),
         amc=dict(said=amc.said, sad=amc.sad),
         ecr=dict(said=ecr.said),
-        ecr_revocation=dict(ecr_said=ecr.said, le_pk_hex=le.kever.verfers[0].raw.hex(),
+        ecr_revocation=dict(ecr_said=ecr.said, le_aid=le.pre, le_pk_hex=le.kever.verfers[0].raw.hex(),
                             raw_hex=ixn_e_body.hex(), sig_hex=ixn_e_sig.hex(), seal=seal_e),
     )
     with open(os.path.join(OUT, "vectors.json"), "w") as f:

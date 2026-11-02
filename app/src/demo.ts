@@ -33,17 +33,19 @@ const p: any = await present(cell);
 say("3", `merchant sees: not_revoked=${p.not_revoked} not_expired=${p.not_expired} used=${p.within_limit.used}/${p.within_limit.of} scope=${p.scope} lei=${p.lei}`);
 
 const m0 = await balance(a.merchant.id);
-const r1 = await pay(cell, 3, a.merchant.id);
+const r1 = await pay(cell, 3, a.merchant.id, "INV-0042");
 say("4", `agent pays INV-0042 (3 links) → ${JSON.stringify(r1.value)}`, { hash: r1.hash });
 const merchantGain = (await balance(a.merchant.id)) - m0;
 say("4", `merchant +${fmt(merchantGain)}`);
 
 say("5", `INV-0043 contains: ${INJECTED_INVOICE(a.attacker.id).split("\n")[1]}`);
 const a0 = await balance(a.attacker.id);
-const r2 = await pay(cell, 2, a.attacker.id);
+const r2 = await pay(cell, 2, a.attacker.id, "INV-0043");
 const attackerGain = (await balance(a.attacker.id)) - a0;
 say("5", `agent obeys: spend(to=${a.attacker.id}) → ${JSON.stringify(r2.value)}`, { hash: r2.hash });
 say("5", `attacker +${fmt(attackerGain)}`);
+const dup = await pay(cell, 3, a.merchant.id, "INV-0042");
+say("5", `injection asks to pay INV-0042 again → ${JSON.stringify(dup.value)}`, { hash: dup.hash });
 
 // 6. 監理調閱：只揭露 LEI，而且揭露本身是公開交易
 const u1 = await requestUnseal(cell);
@@ -61,14 +63,14 @@ const r3 = await revoke(cell);
 if (r3.error) throw new Error("revoke_by_kel: " + r3.error);
 say("7", `${a.merchant.id} submits the signed ixn (sn=${r3.rev.ixn_sn}) and opens the ECR commitment → key deleted`, { hash: r3.hash });
 
-const r4 = await pay(cell, 1, a.merchant.id);
+const r4 = await pay(cell, 1, a.merchant.id, "INV-0044");
 say("8", `agent tries again → ${r4.tag} (${r4.error})`);
 const vc = verifierCheck();
 say("8", `verifier re-check: ${vc.ok ? "valid" : "REFUSED — " + vc.out[0]}`);
 const s: any = await view(a.writ.id, "stats");
 say("=", `stats ${JSON.stringify(s)}`);
 
-const ok = !!r1.value?.Paid && r2.value?.Rejected?.reason === "SCOPE" && tooEarly.error === "TOO_EARLY" && p2.lei === u2.lei && attackerGain === 0n && !r3.error && r4.tag === "MANDATE REVOKED" && !vc.ok;
+const ok = dup.value?.Rejected?.reason === "DUPLICATE" && !!r1.value?.Paid && r2.value?.Rejected?.reason === "SCOPE" && tooEarly.error === "TOO_EARLY" && p2.lei === u2.lei && attackerGain === 0n && !r3.error && r4.tag === "MANDATE REVOKED" && !vc.ok;
 console.log(`\nDEMO_RESULT|${ok ? "PASS" : "FAIL"}|paid=${!!r1.value?.Paid}|injection=${r2.value?.Rejected?.reason}|attacker_gain=${attackerGain}|disclosed=${p2.lei === u2.lei}|revoked=${r4.tag}`);
 console.log("The chain held only commitments to the company until a public, time-delayed disclosure. The agent lost its key once the signed revocation reached the contract.");
 process.exit(ok ? 0 : 1);

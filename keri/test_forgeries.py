@@ -66,7 +66,7 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
         amc = proving.credential(issuer=human.pre, schema=AMC.said, recipient=agent.pre, status=reg_a.regk, private=True,
                                  data=dict(actionClass="supplier-payment", counterparties=["merchant.test.near"],
                                            validUntil="2099-01-01T00:00:00+00:00", unitYocto="1", paywordRoot="00" * 32,
-                                           paywordLength=5, dailyLinks=5, settlementRail="acme.test.near"),
+                                           paywordLength=5, dailyLinks=5, maxLinksPerPayment=5, maxStrikes=3, settlementRail="acme.test.near"),
                                  source=dict(d="", ecr=dict(n=ecr.said, s=edge_s or sch.said, o=edge_o)))
         iss_a = reg_a.issue(said=amc.said)
         anchor(hab_a, reg_a, iss_a, "0")

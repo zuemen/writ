@@ -109,22 +109,25 @@ def verify_chain():
             checks=checks,
             amc_said=amc_said, ecr_said=ecr_said, lei=ecr.attrib["LEI"],
             human=human, agent=agent,
+            issuer_aid=human,
             issuer_pk=hk.verfers[0].raw.hex(),
             le_pk=hby.kevers[ecr.issuer].verfers[0].raw.hex(),
             agent_near_pk="ed25519:" + b58(ak.verfers[0].raw),
             w0=a["paywordRoot"], n=a["paywordLength"], unit=a["unitYocto"], daily=a["dailyLinks"],
+            max_links=a["maxLinksPerPayment"], max_strikes=a["maxStrikes"], le_aid=ecr.issuer,
             scope=a["counterparties"], funder=a["settlementRail"], asset=a.get("settlementAsset"),
             valid_until_ns=int(valid_until.timestamp()) * 1_000_000_000,
         )
 
 
-def attestation_message(r, lei_commit, ecr_commit, verifier, contract):
+def attestation_message(r, lei_commit, ecr_commit, verifier, contract, attested_at):
     """必須與合約 attestation_message 逐字一致。"""
     return (
-        "writ:attest:v2\n"
-        f"contract={contract}\namc={r['amc_said']}\nissuer_pk={r['issuer_pk']}\nagent_pk={r['agent_near_pk']}\nw0={r['w0']}\n"
+        "writ:attest:v3\n"
+        f"contract={contract}\namc={r['amc_said']}\nissuer_aid={r['issuer_aid']}\nissuer_pk={r['issuer_pk']}\nagent_pk={r['agent_near_pk']}\nw0={r['w0']}\n"
         f"n={r['n']}\nunit={r['unit']}\nscope={','.join(r['scope'])}\nvalid_until={r['valid_until_ns']}\n"
-        f"daily_links={r['daily']}\nlei_commit={lei_commit}\necr_commit={ecr_commit}\nfunder={r['funder']}\nverifier={verifier}\n"
+        f"daily_links={r['daily']}\nmax_links={r['max_links']}\nmax_strikes={r['max_strikes']}\nlei_commit={lei_commit}\necr_commit={ecr_commit}\n"
+        f"funder={r['funder']}\nverifier={verifier}\nattested_at={attested_at}\n"
         f"asset={r['asset'] or 'near'}"
     )
 
@@ -163,19 +166,21 @@ def cmd_attest(a):
     lei_commit = hashlib.sha256(f"{r['lei']}|{salt}".encode()).hexdigest()
     # HR 撤銷 ECR 用的承諾：LE 公鑰與 ECR SAID 平常不上鏈；打開用的 salt 交給法人（不是驗證者獨有）
     ecr_salt = secrets.token_hex(16)
-    ecr_commit = hashlib.sha256(f"{r['le_pk']}|{r['ecr_said']}|{ecr_salt}".encode()).hexdigest()
-    msg = attestation_message(r, lei_commit, ecr_commit, a.verifier, a.contract).encode()
+    ecr_commit = hashlib.sha256(f"{r['le_aid']}|{r['le_pk']}|{r['ecr_said']}|{ecr_salt}".encode()).hexdigest()
+    attested_at = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) * 1_000_000_000
+    msg = attestation_message(r, lei_commit, ecr_commit, a.verifier, a.contract, attested_at).encode()
     sig = pysodium.crypto_sign_detached(msg, bytes.fromhex(key["sk_hex"]))
     # LEI 與 salt 只留在驗證者這裡（解封時才用）
     recs = read_json(RECORDS) if os.path.exists(RECORDS) else {}
     recs[r["amc_said"]] = dict(lei=r["lei"], salt=salt, lei_commit=lei_commit)
     write_json(RECORDS, recs)
-    args = dict(amc_said=r["amc_said"], issuer_pk=r["issuer_pk"], agent_pk=r["agent_near_pk"], w0=r["w0"],
+    args = dict(amc_said=r["amc_said"], issuer_aid=r["issuer_aid"], issuer_pk=r["issuer_pk"], max_links=r["max_links"],
+                max_strikes=r["max_strikes"], attested_at=str(attested_at), agent_pk=r["agent_near_pk"], w0=r["w0"],
                 n=r["n"], unit=r["unit"], scope=r["scope"], valid_until=str(r["valid_until_ns"]),
                 daily_links=r["daily"], lei_commit=lei_commit, ecr_commit=ecr_commit, verifier=a.verifier, signature=sig.hex())
     if r["asset"]:
         args["asset"] = r["asset"]
-    opening = dict(le_pk=r["le_pk"], ecr_said=r["ecr_said"], salt=ecr_salt)
+    opening = dict(le_aid=r["le_aid"], le_pk=r["le_pk"], ecr_said=r["ecr_said"], salt=ecr_salt)
     print(json.dumps(dict(funder=r["funder"], args=args, ecr_opening=opening), indent=1))
 
 

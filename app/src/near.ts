@@ -1,7 +1,7 @@
 /**
  * Writ 鏈下共用：連線、帳號、呼叫（一律拿到 tx hash 與回傳值）、四種失敗貼標。
  */
-import { Account, JsonRpcProvider, KeyPairSigner, actions, teraToGas, type KeyPairString } from "near-api-js";
+import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions, teraToGas, type KeyPairString } from "near-api-js";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,6 +54,21 @@ export async function call(
   } catch (e) {
     return { logs: [], ...label(e) };
   }
+}
+
+/** 部署 + 初始化 + 刪 full-access key 放同一個 batch：之後沒有任何鑰匙能動合約帳號的錢。 */
+export async function deployLocked(id: string, sk: KeyPairString, wasm: Uint8Array, owner: string, unsealDelaySecs: number) {
+  const signer = KeyPair.fromString(sk);
+  const r: any = await as(id, sk).signAndSendTransaction({
+    receiverId: id,
+    actions: [
+      actions.deployContract(wasm),
+      actions.functionCall("new", { owner, unseal_delay_secs: unsealDelaySecs }, teraToGas("30"), 0n),
+      actions.deleteKey(signer.getPublicKey()),
+    ],
+    waitUntil: "FINAL",
+  });
+  return r.transaction.hash as string;
 }
 
 export async function view(contractId: string, method: string, args: object = {}) {
