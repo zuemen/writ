@@ -15,6 +15,7 @@ import { keriPrivate, py, releaseLink } from "./keri.js";
 
 const a = A();
 const COUNT = Number(process.env.WRIT_POOL ?? 6);
+const DEMO_COMPANY = "Demo Trading Ltd (fictional)";
 const path = join(DEMO, "pool.json");
 const pool: any = existsSync(path) ? readJson(path) : { rpc: RPC, contract: a.writ.id, merchant: a.merchant.id, cells: [] };
 
@@ -46,15 +47,37 @@ function chain(n: number) {
 }
 const agentAcct = (sk: string) => as(a.writ.id, sk as KeyPairString);
 
+// 訪客扮演賣方；保證人的步驟在頁面上自動化。兩把都是受限鑰匙，只能呼叫這些方法。
+async function scopedKey(owner: { id: string; sk: KeyPairString }, methods: string[], allowance: string) {
+  const kp = KeyPair.fromRandom("ed25519");
+  await as(owner.id, owner.sk).signAndSendTransaction({
+    receiverId: owner.id,
+    actions: [actions.addFunctionCallAccessKey(kp.getPublicKey(), a.writ.id, methods, NEAR(allowance))],
+    waitUntil: "FINAL",
+  });
+  return { id: owner.id, sk: kp.toString() as KeyPairString };
+}
+if (!pool.seller) {
+  pool.seller = await scopedKey(a.merchant, ["accept_credit", "mark_delivered", "claim_default", "withdraw"], "1.5");
+  pool.guarantor = await scopedKey(a.verifier, ["enforce_recourse", "credit_unseal"], "1.5");
+  pool.company = DEMO_COMPANY;
+  const st = await call(as(a.verifier.id, a.verifier.sk), a.writ.id, "stake", {}, { deposit: NEAR(process.env.WRIT_STAKE ?? "4") });
+  if (st.error) throw new Error("stake: " + st.error);
+  writeJson(path, pool);
+}
+
 for (let i = 0; i < COUNT; i++) {
   for (const d of ["keri/.keystore", "keri/bundle", "keri/registrar"]) rmSync(join(ROOT, d), { recursive: true, force: true });
   // 員工 → 應付帳款 agent（兩個收款對象）
-  const init = py("issuer.py", "init", "--scope", `${a.merchant.id},${a.supplier.id}`, "--rail", a.acme.id, "--n", "10", "--unit", "1e22", "--daily", "10", "--days", "30");
+  const init = py("issuer.py", "init", "--scope", `${a.merchant.id},${a.supplier.id}`, "--rail", a.acme.id, "--n", "10", "--unit", "2e22", "--daily", "10", "--days", "30",
+    "--credit-limit", "1e23", "--bond-bps", "2500", "--min-tenor", "5", "--max-tenor", "86400", "--arbiter", a.owner.id, "--contract", a.writ.id);
   py("verify.py", "pin", "--root", JSON.parse(init.slice(init.indexOf("{"), init.lastIndexOf("}") + 1)).root);
-  const reg = await register(process.env.WRIT_POOL_DEPOSIT ?? "0.75");
+  const reg = await register(process.env.WRIT_POOL_DEPOSIT ?? "0.78");
   if (!reg.ok) throw new Error("register failed: " + reg.error);
   const rootSk = keriPrivate().agent_near_secret_key;
   const c: any = await view(a.writ.id, "get_cell", { cell: reg.cell });
+  const { lei, salt } = JSON.parse(py("verify.py", "reveal", "--amc", c.amc_said));
+  const orderLinks = { small: releaseLink(7), large: releaseLink(10) };
 
   // 應付帳款 agent → 採購 agent（只能付一個對象、6 節）
   const midKey = KeyPair.fromRandom("ed25519");
@@ -79,7 +102,9 @@ for (let i = 0; i < COUNT; i++) {
   const rv = readJson(join(ROOT, "keri/bundle/revocation.json"));
   pool.cells.push({
     cell: String(reg.cell),
-    root: { cell: String(reg.cell), sk: rootSk, pk: reg.agent_pk },
+    root: { cell: String(reg.cell), sk: rootSk, pk: reg.agent_pk, orders: orderLinks },
+    lei,
+    salt,
     mid: { cell: String(h1.value.Hired.child), sk: midKey.toString(), pk: midKey.getPublicKey().toString(), next: midChain[4] },
     leaf: { cell: String(h2.value.Hired.child), sk: leafKey.toString(), pk: leafKey.getPublicKey().toString(), links: leafChain.slice(1) },
     ixn_hex: rv.ixn_hex,

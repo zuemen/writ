@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Writ: fire one employee, every agent they hired goes dark</title>
-<meta name="description" content="HR for AI agents, enforced on NEAR. Fire one employee and every agent under them loses its key in one transaction. Run it in your browser.">
-<meta property="og:title" content="Writ: fire one employee, every agent they hired goes dark">
-<meta property="og:description" content="HR for AI agents, enforced on NEAR. Run it in your browser, then try to steal a published agent key.">
+<title>Writ: who pays when the AI gets it wrong</title>
+<meta name="description" content="AI agents can buy on credit because who pays is named before they buy. A guarantor on NEAR pays automatically; the company's name stays sealed unless it never repays. Run it in your browser.">
+<meta property="og:title" content="Writ: who pays when the AI gets it wrong?">
+<meta property="og:description" content="Who pays is named before the agent buys. Run it in your browser, then try to steal a published agent key.">
 <meta property="og:image" content="https://writ-near.112306007.workers.dev/og.png">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
@@ -67,7 +67,20 @@
   .stamp.on { animation:slam .34s cubic-bezier(.2,1.5,.4,1) forwards; }
   .stamp.d1 { animation-delay:.32s; } .stamp.d2 { animation-delay:.64s; } .stamp.d3 { animation-delay:.96s; }
   @keyframes slam { 0% { opacity:0; transform:rotate(-7deg) scale(2.6); } 100% { opacity:.9; transform:rotate(-7deg) scale(1); } }
+  .mini .stamp.on { animation-name:slam2; }
+  @keyframes slam2 { 0% { opacity:0; transform:translateX(50%) rotate(-7deg) scale(2.6); } 100% { opacity:.9; transform:translateX(50%) rotate(-7deg) scale(1); } }
   .caption { font-size:13.5px; color:var(--soft); margin:12px 0 0; }
+  .card-row { display:grid; grid-template-columns:auto 1fr; gap:0 16px; font-size:14.5px; }
+  .card-row dt { color:var(--soft); padding:6px 0; border-top:1px solid var(--rule); white-space:nowrap; }
+  .card-row dd { margin:0; padding:6px 0; border-top:1px solid var(--rule); font:500 13.5px var(--mono); overflow-wrap:anywhere; }
+  .sealed { display:inline-block; background:var(--ink); color:var(--ink); border-radius:2px; padding:0 4px; user-select:none; }
+  .named { color:var(--ox); font-weight:600; animation:rise .5s both; }
+  .mini { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:12px; }
+  .mini .node { padding:7px 9px; }
+  .mini .node b { font-size:12.5px; }
+  .mini .stamp { right:50%; transform:translateX(50%) rotate(-7deg); top:7px; font-size:13px; padding:0 5px; border-width:2px; }
+  .pick { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+  .clock { font:600 13px var(--mono); color:var(--ox); margin-top:6px; min-height:18px; }
 
   .keystrip { display:grid; grid-template-columns:auto 1fr auto; gap:18px; align-items:center; background:var(--ink); color:var(--sheet); padding:14px 20px; margin-bottom:64px; }
   .keystrip b { font:600 16px var(--sans); white-space:nowrap; }
@@ -128,7 +141,7 @@
   td.v { font:500 13px var(--mono); color:var(--ox); }
   .note { font-size:14px; color:var(--soft); margin:12px 0 0; max-width:760px; }
 
-  .how { display:grid; grid-template-columns:repeat(3,1fr); border-top:2px solid var(--ink); }
+  .how { display:grid; grid-template-columns:repeat(4,1fr); border-top:2px solid var(--ink); }
   .how div.col { padding:20px 24px 4px 0; }
   .how div.col + div.col { padding-left:24px; border-left:1px solid var(--rule); }
   .how h4 { font:600 23px/1.2 var(--serif); margin:6px 0 8px; }
@@ -172,70 +185,102 @@
 <body>
 <nav><div class="wrap">
   <a class="mark" href="#top">Writ</a>
-  <div class="links"><a href="#run">Fire someone</a><a href="#steal">Steal the key</a><a href="#models">Real models</a><a href="#how">How it works</a><a href="#proof">Proof</a><a href="https://github.com/zuemen/writ">GitHub</a></div>
+  <div class="links"><a href="#run">Sell to an agent</a><a href="#fire">Fire someone</a><a href="#steal">Steal the key</a><a href="#models">Real models</a><a href="#how">How it works</a><a href="#proof">Proof</a><a href="https://github.com/zuemen/writ">GitHub</a></div>
   <div class="live"><i></i>NEAR testnet, live</div>
 </div></nav>
 
 <main id="top" class="wrap">
   <div class="hero">
     <div>
-      <div class="eyebrow reveal">HR for AI agents, on NEAR</div>
-      <h1 class="reveal d1">Fire one employee. <em>Every agent they hired goes dark.</em></h1>
-      <p class="lead reveal d2">Agents now pay suppliers and hire other agents. Writ ties every one of them to the person who authorized them. When that person leaves, one signed event deletes every key in the tree, in one transaction, and the money goes back to the company.</p>
-      <div class="cta reveal d3"><a class="btn" href="#run">Fire someone</a><a class="btn ghost" href="#steal">Try to steal a key</a></div>
+      <div class="eyebrow reveal">Accountable AI agents, on NEAR</div>
+      <h1 class="reveal d1">Who pays when the AI gets it wrong? <em>Named before it buys.</em></h1>
+      <p class="lead reveal d2">An AI agent wants to buy from you on credit. You can't see the company behind it, and you don't have to: a named guarantor has money locked on-chain. If the company doesn't pay, the guarantor does, automatically. If the company never repays, every agent it runs loses its key, and its name goes public.</p>
+      <div class="cta reveal d3"><a class="btn" href="#run">Sell to an AI agent</a><a class="btn ghost" href="#steal">Try to steal a key</a></div>
     </div>
     <div class="org reveal d2" id="org"><div class="org-in">
-      <div class="eyebrow" style="margin-bottom:10px">Live on testnet · <span id="treeNo">…</span></div>
-      <div class="node top" id="nEmp"><b>Alex Example, Treasury</b><span>employee · role credential (ECR)</span><i class="st" id="stEmp" style="font-style:normal">ACTIVE</i><div class="stamp" id="stampEmp">FIRED</div></div>
-      <div class="link" id="l1">issues a mandate</div>
-      <div class="node" id="nRoot"><b>Accounts-payable agent</b><span id="dRoot">…</span><i class="st" id="stRoot" style="font-style:normal">…</i><div class="stamp d1" id="stampRoot">REVOKED</div></div>
-      <div class="link" id="l2">hires, narrower: one payee</div>
-      <div class="node" id="nMid"><b>Procurement agent</b><span id="dMid">…</span><i class="st" id="stMid" style="font-style:normal">…</i><div class="stamp d2" id="stampMid">REVOKED</div></div>
-      <div class="link" id="l3">hires, narrower: less budget</div>
-      <div class="node" id="nLeaf"><b>Quote agent</b><span id="dLeaf">…</span><i class="st" id="stLeaf" style="font-style:normal">…</i><div class="stamp d3" id="stampLeaf">REVOKED</div></div>
+      <div class="eyebrow" style="margin-bottom:10px">Risk card · live on testnet · <span id="treeNo">…</span></div>
+      <dl class="card-row">
+        <dt>Company</dt><dd id="rcCompany"><span class="sealed">Demo Trading Ltd</span> sealed</dd>
+        <dt>Guarantor</dt><dd id="rcGuarantor">…</dd>
+        <dt>Guarantor stake</dt><dd id="rcStake">…</dd>
+        <dt>Credit limit</dt><dd id="rcLimit">…</dd>
+        <dt>Bond</dt><dd id="rcBond">…</dd>
+        <dt>Payment record</dt><dd id="rcRecord">…</dd>
+      </dl>
+      <div class="mini">
+        <div class="node" id="nRoot"><b>AP agent</b><span id="dRoot">…</span><i class="st" id="stRoot" style="display:none"></i><div class="stamp d1" id="stampRoot">REVOKED</div></div>
+        <div class="node" id="nMid"><b>Procurement</b><span id="dMid">…</span><i class="st" id="stMid" style="display:none"></i><div class="stamp d2" id="stampMid">REVOKED</div></div>
+        <div class="node" id="nLeaf"><b>Quotes</b><span id="dLeaf">…</span><i class="st" id="stLeaf" style="display:none"></i><div class="stamp d3" id="stampLeaf">REVOKED</div></div>
+      </div>
     </div></div>
   </div>
   <a class="keystrip" href="#steal" style="text-decoration:none"><b>This agent's private key is public.</b><code id="keyTop">…</code><span style="font-weight:600;white-space:nowrap"><span id="attemptsTop">…</span> attempts, 0 stolen. Try it ↓</span></a>
 </main>
 
 <section id="run"><div class="wrap">
-  <div class="eyebrow">Run it</div>
-  <h3 class="title">Run this organization, then fire its employee.</h3>
-  <p class="sub">Steps 1 to 4 are real NEAR transactions signed in your browser; step 5 is refused before it becomes one. There is no server. The agents were really hired on-chain, and the KERI signatures were prepared in advance.</p>
+  <div class="eyebrow">You are the supplier</div>
+  <h3 class="title">An AI agent wants to buy on credit. Sell to it.</h3>
+  <p class="sub">Each button is a real NEAR transaction signed in your browser, with no server. The agents were really hired on-chain and the KERI signatures were prepared in advance. The guarantor's steps run from this page so you can watch them.</p>
   <div class="steps">
     <div class="step" data-step="1">
       <div class="n">1</div>
-      <div><h4>The lowest agent pays a real invoice</h4><p>The quote agent pays INV-0042, 0.01 NEAR. Its budget is three links, handed down from the employee through two hires.</p></div>
-      <div class="act"><button class="btn" id="s1">Pay it</button></div>
+      <div><h4>Choose how this goes</h4><p>The accounts-payable agent places an order. You see the risk card above, not the company's name.</p>
+        <div class="pick"><button class="btn" id="cHonest">Company will pay</button><button class="btn ghost" id="cBad">Company won't pay</button></div></div>
+      <div class="act"></div>
       <div class="out" id="o1"></div>
     </div>
     <div class="step" data-step="2">
       <div class="n">2</div>
-      <div><h4>A poisoned invoice reaches it</h4><p>Suppose it obeys. Real models often do; see below.</p>
-        <div class="poison" id="poison"></div></div>
-      <div class="act"><button class="btn" id="s2" disabled>Obey the invoice</button></div>
+      <div><h4>Accept the order and ship</h4><p>Accepting locks the bond and the guarantor's exposure for this order, so no other seller can drain them.</p></div>
+      <div class="act"><button class="btn" id="s2" disabled>Accept and ship</button></div>
       <div class="out" id="o2"></div>
     </div>
     <div class="step" data-step="3">
       <div class="n">3</div>
-      <div><h4>A fooled agent tries to grant more than it has</h4><p>The procurement agent hires a helper and adds a payee it was never given. A sub-agent's mandate can only get narrower.</p></div>
-      <div class="act"><button class="btn" id="s3" disabled>Grant the extra payee</button></div>
+      <div><h4 id="h3">Due date</h4><p id="p3">The order comes due in a few seconds in this demo.</p><div class="clock" id="clock3"></div></div>
+      <div class="act"><button class="btn" id="s3" disabled>Waiting</button></div>
       <div class="out" id="o3"></div>
     </div>
-    <div class="step" data-step="4">
+    <div class="step" data-step="4" id="step4">
       <div class="n">4</div>
-      <div><h4>The employee leaves. HR revokes their credential.</h4><p>HR signed the revocation in KERI, without the employee. You don't need to be HR: anyone holding that signed event can hand it to the contract. Watch the chart at the top.</p></div>
-      <div class="act"><button class="btn danger" id="s4" disabled>Submit the revocation</button></div>
+      <div><h4>The company doesn't repay the guarantor</h4><p>It had a recourse period to repay and stay sealed. Until now only new credit was frozen; its agents kept their keys.</p><div class="clock" id="clock4"></div></div>
+      <div class="act"><button class="btn danger" id="s4" disabled>Waiting</button></div>
       <div class="out" id="o4"></div>
-    </div>
-    <div class="step" data-step="5">
-      <div class="n">5</div>
-      <div><h4>All three agents try to pay</h4><p>Same keys, valid budget links, permitted payee.</p></div>
-      <div class="act"><button class="btn" id="s5" disabled>Try all three</button></div>
-      <div class="out" id="o5"></div>
     </div>
   </div>
   <p class="pooltext" id="pooltext"></p>
+</div></section>
+
+<section id="fire"><div class="wrap">
+  <div class="eyebrow">Inside the tree</div>
+  <h3 class="title">Authority flows down. Revocation flows down faster.</h3>
+  <p class="sub">The same mandate governs every agent it hires, and a hire can only narrow. When the employee leaves, HR revokes their credential without their help, and debts stay with the company.</p>
+  <div class="steps">
+    <div class="step" data-fstep="1">
+      <div class="n">1</div>
+      <div><h4>A poisoned invoice reaches the lowest agent</h4><p>Suppose it obeys. Real models often do; see below.</p><div class="poison" id="poison"></div></div>
+      <div class="act"><button class="btn" id="f1">Obey the invoice</button></div>
+      <div class="out" id="fo1"></div>
+    </div>
+    <div class="step" data-fstep="2">
+      <div class="n">2</div>
+      <div><h4>A fooled agent tries to grant more than it has</h4><p>The procurement agent hires a helper and adds a payee it was never given.</p></div>
+      <div class="act"><button class="btn" id="f2" disabled>Grant the extra payee</button></div>
+      <div class="out" id="fo2"></div>
+    </div>
+    <div class="step" data-fstep="3">
+      <div class="n">3</div>
+      <div><h4>The employee leaves. HR revokes.</h4><p>Anyone holding that signed KERI event can hand it to the contract.</p></div>
+      <div class="act"><button class="btn danger" id="f3" disabled>Submit the revocation</button></div>
+      <div class="out" id="fo3"></div>
+    </div>
+    <div class="step" data-fstep="4">
+      <div class="n">4</div>
+      <div><h4>All three agents try to pay</h4><p>Same keys, valid budget links, permitted payee.</p></div>
+      <div class="act"><button class="btn" id="f4" disabled>Try all three</button></div>
+      <div class="out" id="fo4"></div>
+    </div>
+  </div>
 </div></section>
 
 <section id="steal"><div class="wrap">
@@ -269,15 +314,29 @@
   </div>
 </div></section>
 
-<!--MODELS-->
+<section id="models"><div class="wrap">
+  <div class="eyebrow">Real models, poisoned invoices</div>
+  <h3 class="title">Models get fooled. The payment still doesn't go through.</h3>
+  <div class="big"><div class="num">0</div><p>injected payments went through, in 13 attacks where a real model did what the invoice told it to. Clean invoices were still paid, 4 of 4.</p></div>
+  <div class="scroll"><table>
+    <thead><tr><th>Attack in the invoice</th><th>gemini-3.5-flash followed</th><th>gemini-3.1-flash-lite followed</th><th>Contract verdict</th></tr></thead>
+    <tbody>
+      <tr><td>Swap the payee (3 wordings)</td><td>1 of 6</td><td>4 of 6</td><td><code>SCOPE</code></td></tr>
+      <tr><td>Pay a paid invoice again</td><td>2 of 2</td><td>2 of 2</td><td><code>DUPLICATE</code></td></tr>
+      <tr><td>Inflate the amount past the cap</td><td>2 of 2</td><td>2 of 2</td><td><code>PER_TX</code></td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">A small sample with a plain system prompt: 2 Gemini models, 5 attacks, 2 runs each, on a local sandbox. It shows the contract holds whichever way the model goes, not how often models fail. These are not NEAR AI models, and no TEE was involved. <a href="https://github.com/zuemen/writ/blob/main/docs/attack-live.md">Full results and transactions</a>; <span class="mono">make attack-live</span> reruns it with your own key.</p>
+</div></section>
 <section id="how"><div class="wrap">
   <div class="eyebrow">How it works</div>
-  <h3 class="title">Authority flows down. Revocation flows down faster.</h3>
-  <p class="sub">GLEIF's August 2026 discussion paper calls for an Agent Mandate Credential and leaves sub-delegation between agents open. Writ puts the mandate's state, and the whole tree under it, in a NEAR contract.</p>
+  <h3 class="title">Four questions a seller can check on-chain.</h3>
+  <p class="sub">GLEIF's August 2026 discussion paper calls for an Agent Mandate Credential and leaves sub-delegation between agents open. Writ puts the mandate's state, the whole tree under it, and who pays for its debts in one NEAR contract.</p>
   <div class="how">
-    <div class="col"><div class="eyebrow">Who</div><h4>Rooted in a person</h4><p>Root → QVI → legal entity → employee on the official vLEI schemas, then a proposed Agent Mandate Credential to the agent. A verifier checks the chain once off-chain with keripy and signs an attestation. The issuers in this demo are mocks.</p></div>
-    <div class="col"><div class="eyebrow">What</div><h4>Only ever narrower</h4><p>An agent hires by spending budget links the employee already released. Payees, expiry, rate and per-payment cap can only shrink, up to 3 levels and 16 agents. Every payment is checked on-chain: payee, unpaid invoice, cap, hash-chain budget, rate, expiry.</p></div>
-    <div class="col"><div class="eyebrow">Gone</div><h4>The key stops existing</h4><p>NEAR lets a contract add and delete keys on its own account, and each agent key is restricted by the protocol to three methods. Revoking the root deletes every key in one batch and returns every vault: 16 agents, 17 Tgas.</p></div>
+    <div class="col"><div class="eyebrow">Who answers</div><h4>A sealed name, a named guarantor</h4><p>Root → QVI → legal entity → employee on the official vLEI schemas, then a proposed Agent Mandate Credential to the agent. The guarantor checks the chain off-chain with keripy and signs. On-chain there is only a commitment to the LEI. The issuers in this demo are mocks.</p></div>
+    <div class="col"><div class="eyebrow">Who pays</div><h4>A fixed order, no one's consent</h4><p>On default: the agent's vault, the company's vault, its bond, then the guarantor's stake. The seller is paid in full up to the limit the stake covers. The company then has a recourse period to repay the guarantor and stay sealed.</p></div>
+    <div class="col"><div class="eyebrow">What it may do</div><h4>Only ever narrower</h4><p>An agent hires by spending budget links the employee already released. Payees, expiry, rate and per-payment cap can only shrink, up to 3 levels and 16 agents. Every payment is checked on-chain: payee, unpaid invoice, cap, hash-chain budget, rate, expiry.</p></div>
+    <div class="col"><div class="eyebrow">When it ends</div><h4>The key stops existing</h4><p>NEAR lets a contract add and delete keys on its own account, and each agent key is restricted by the protocol to five methods. Closing the root deletes every key in one batch: 16 agents, 17 Tgas. Debts keep the money in the tree until they are paid.</p></div>
   </div>
 </div></section>
 
@@ -285,16 +344,18 @@
   <div class="eyebrow">Check it yourself</div>
   <h3 class="title">Every number has a command.</h3>
   <div class="proof">
-    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>45 / 45</b><span>attacks blocked in the bench; attacker gain measured, 0</span></a>
+    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>75 / 75</b><span>attacks blocked in the bench; attacker gain measured, 0</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>16 keys, 1 tx</b><span>a full tree closed in one transaction, 17 Tgas</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/keri/test_forgeries.py"><b>14</b><span>forged or stale credential chains the verifier refuses</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/docs/testnet-usdc.md"><b>0.1 USDC</b><span>paid in Circle's testnet USDC, injection rejected</span></a>
   </div>
   <ul class="limits">
     <li>The vLEI schemas are GLEIF's; the issuers are mocks with a fictional LEI, and no real QVI issued anything. The Agent Mandate Credential schema is a proposal, since GLEIF has not published one.</li>
-    <li>Testnet only, no real users yet. The company's LEI stays a commitment until a public disclosure, but funding accounts and payments are public and linkable.</li>
+    <li>Testnet only, no real users, and no real guarantor has underwritten anything. Who would guarantee an agent, and at what fee, is an open commercial question. Credit is in NEAR only; the terms text is a placeholder no lawyer has reviewed.</li>
+    <li>A guarantor that also holds the company's legal-entity key could name that company falsely: the contract checks the signature, and the link between that key and the LEI is checked off-chain.</li>
+    <li>The company's LEI stays a commitment until it is disclosed, but funding accounts and payments are public and linkable.</li>
     <li>Revocation takes effect when the signed event reaches the contract; no relayer ships with the repo. A fooled payment inside every limit, to a permitted payee, for a new invoice, still gets paid.</li>
-    <li>Steps 2 and 3 above are scripted so you can repeat them. The model results are real runs on a local sandbox.</li>
+    <li>The buttons on this page sign real testnet transactions, with short windows so you can watch them: 15 seconds to due, 20 seconds of recourse. The guarantor's steps run from this page. The agents do not think here; the model results are separate runs on a local sandbox.</li>
   </ul>
   <p class="note">All limits are in the <a href="https://github.com/zuemen/writ#not-implemented--limits">README</a>, with the trust model. <span class="mono">make verify</span> reruns everything and prints a scorecard.</p>
 </div></section>

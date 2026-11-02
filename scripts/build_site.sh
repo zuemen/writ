@@ -9,7 +9,7 @@ cp "$ROOT/site/index.html" "$ROOT/site/og.png" "$OUT/"
 node -e '
 const fs=require("fs");const d=process.argv[1];
 const b=JSON.parse(fs.readFileSync(d+"/bounty.json"));const p=JSON.parse(fs.readFileSync(d+"/pool.json"));
-fs.writeFileSync(d+"/site/config.json",JSON.stringify({rpc:p.rpc,contract:p.contract,merchant:p.merchant,relayer:p.relayer,cells:p.cells,
+fs.writeFileSync(d+"/site/config.json",JSON.stringify({rpc:p.rpc,contract:p.contract,merchant:p.merchant,relayer:p.relayer,seller:p.seller,guarantor:p.guarantor,company:p.company,cells:p.cells,
  bounty:{cell:b.cell,agent_sk:b.agent_sk,spent_link:b.spent_link}}));' "$ROOT/.demo-testnet"
 cd "$ROOT/app"
 NODE_PATH="$ROOT/app/node_modules" npx --yes esbuild@0.25.0 "$ROOT/site/app.ts" --bundle --alias:util="$ROOT/site/util-stub.js" --format=esm --target=es2022 --platform=browser --minify --outfile="$OUT/app.js"

@@ -1,16 +1,18 @@
-# Writ: Verifiable, Revocable Payment Mandates for AI Agents
+# Writ: Who Pays Is Named Before the Agent Buys
 
-[![reproduce](https://github.com/zuemen/writ/actions/workflows/ci.yml/badge.svg)](https://github.com/zuemen/writ/actions/workflows/ci.yml) — every push runs `make setup`, `make test`, `make demo` and `make keri-check` on a fresh GitHub runner.
+[![reproduce](https://github.com/zuemen/writ/actions/workflows/ci.yml/badge.svg)](https://github.com/zuemen/writ/actions/workflows/ci.yml) — every push runs `make setup`, `make test`, `make demo`, `make credit-demo` and `make keri-check` on a fresh GitHub runner, and a Docker job does the same from a clean image.
 
-AI agents now pay suppliers and hire other agents. **Writ is HR for them: every agent is tied to the person who authorized it, each hire can only narrow what it may do, and firing that person deletes every key in the tree in one transaction.**
+Trust isn't proving an AI won't fail. It's knowing who pays when it does.
 
-Each payment is also checked on-chain, so a fooled agent cannot pay anyone it was not authorized to pay.
+An AI agent wants to buy from you on credit. Nobody can prove it won't be fooled, and you can't see the company behind it. **Writ is a standby letter of credit for agents, in a NEAR contract:**
 
-The authorization chain follows GLEIF's vLEI: a legal entity → a named employee (role credential, official schema) → an agent (Agent Mandate Credential, a proposal based on GLEIF's August 2026 discussion paper) → the agents it hires. A verifier checks the chain once off-chain with KERI/ACDC; the issuers in this repo are mocks. A NEAR contract holds everything that changes: budget used, who hired whom, what is revoked.
+1. **The company's name is sealed and a guarantor is named.** The seller reads a risk card: guarantor, locked stake, credit limit, bond, payment record, and only a commitment to the company's LEI.
+2. **If the company doesn't pay, the seller is still paid.** After delivery, the due date and an inspection window, the seller claims default. Nobody has to agree. The money comes from the agent's vault, the company's vault, its bond and then the guarantor's stake. The company can no longer pay anyone else, hire or take new credit.
+3. **If it repays the guarantor in time, it stays sealed.** If it doesn't, the guarantor closes the whole tree of agents in one transaction, any money left in the tree goes to the guarantor first, and the company's name goes public.
 
-1. **Who authorized this agent?** Follow it up the tree to a person, and from there to a legal entity.
-2. **Is this payment inside the mandate?** Counterparty in scope, invoice not already paid, within the per-payment cap, the hash-chain budget and the daily rate, not expired.
-3. **Is the mandate still alive?** HR revokes the employee's credential in KERI without the employee's help. Once the signed event reaches the contract, every agent under that employee loses its key.
+Under that, every agent is tied to the person who authorized it. Each hire can only narrow what it may do, and firing that person deletes every key in the tree. The chain follows GLEIF's vLEI: legal entity → named employee (role credential, official schema) → agent (Agent Mandate Credential, a proposal based on GLEIF's August 2026 discussion paper) → the agents it hires.
+
+Each payment is also checked on-chain: counterparty in scope, invoice not already paid, within the per-payment cap, the hash-chain budget and the daily rate, not expired. So a fooled agent cannot pay anyone it was not authorized to pay.
 
 **Live on NEAR testnet:** contract [`writ-mandate-writ.testnet`](https://testnet.nearblocks.io/address/writ-mandate-writ.testnet), every step with its transaction in [`docs/testnet.md`](docs/testnet.md). It has no full-access key.
 
@@ -18,7 +20,7 @@ The authorization chain follows GLEIF's vLEI: a legal entity → a named employe
 
 **Real models get fooled; the money still doesn't move.** Two Gemini models read poisoned invoices and followed the injection in 13 of 20 attacks; 0 of those payments went through, attacker gain 0 ([`docs/attack-live.md`](docs/attack-live.md), a small sample, not a benchmark).
 
-**Run it in your browser:** <https://writ-near.112306007.workers.dev> has no server. Run a real organization of three agents, then fire its employee and watch every key go, or try to steal from an agent whose private key is published on purpose. `make pool` and `make bounty` prepare those cells; their test keys live only on that page, never in this repo.
+**Run it in your browser:** <https://writ-near.112306007.workers.dev> has no server. Sell to an AI agent as the supplier and see who pays when the company doesn't; fire an employee and watch every key go; or try to steal from an agent whose private key is published on purpose. `make pool` and `make bounty` prepare those cells; their test keys live only on that page, never in this repo.
 
 Every claim below has a command. The trust assumptions are in [Trust model](#trust-model).
 
@@ -33,10 +35,11 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with
 | # | Do | See |
 |---|---|---|
 | 1 | `make setup` | contract builds and is shrunk with wasm-opt (≈ 300 KB); size and `sha256sum` of `contract/res/writ.wasm` printed |
-| 2 | `make test` | `test result: ok. 33 passed` and the table in [`docs/bench.md`](docs/bench.md): **45 attacks, 45 blocked as expected, attacker gain 0 yoctoNEAR** (the attacker's balance is measured at the end of each test) |
+| 2 | `make test` | `test result: ok. 54 passed` and the table in [`docs/bench.md`](docs/bench.md): **75 attacks, 45 blocked as expected, attacker gain 0 yoctoNEAR** (the attacker's balance is measured at the end of each test) |
 | 3 | `make demo` | a fresh local sandbox starts (port 3030 must be free); the 8-step story prints (about 1 min, includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
 | 4 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
 | 5 | `make keri-check` | the verifier prints 23 ✓ lines (mock root → QVI → legal entity → ECR → AMC: KEL, TEL, ACDC, registry control, schemas, I2I edges, delegation), then refuses 14 forged or stale chains; last line `KERI_FORGERIES\|PASS\|14` |
+| 6 | `make credit-demo` | the whole credit story with real KERI signatures: risk card, paid on time and sealed, unpaid and the guarantor pays, frozen, recourse over, keys deleted, a false company refused, the real one named; ends in `CREDIT_RESULT\|PASS` |
 | 6 | optional: `NEARAI_API_KEY=... make attack-live` (or `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` for any OpenAI-compatible provider) | a real LLM reads both invoices and chooses the tool calls; 5 attacks × `LLM_RUNS` per model in `LLM_MODEL`; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in `docs/attack-live.md` |
 
 `make test` runs the bench in a fresh sandbox per test. `make demo` / `make ui` run `scripts/sandbox.sh` (a local `neard` sandbox on :3030; data in `.sandbox/`).
@@ -143,7 +146,7 @@ A revoked mandate cannot come back: one AMC opens one cell, ever, so replaying i
 
 Three protocol features do the work that other chains would need a smart-contract wallet to imitate:
 
-1. **Function-call access keys.** The agent holds a key that the protocol itself restricts to one receiver and three methods (`spend`, `hire`, `dismiss`), with no ability to attach deposits or send plain transfers (bench A08–A11). The restriction is enforced before any contract code runs.
+1. **Function-call access keys.** The agent holds a key that the protocol itself restricts to one receiver and five methods (`spend`, `hire`, `dismiss`, `open_credit`, `settle`), with no ability to attach deposits or send plain transfers (bench A08–A11). The restriction is enforced before any contract code runs.
 2. **A contract can add and delete keys on its own account.** Registration adds the agent's key; revocation and the tripwire delete it. "Revoked" is not a flag the contract checks; the key no longer exists, so NEAR refuses the agent's transaction before it is created (`AccessKeyNotFound`).
 3. **Host functions for `ed25519_verify` and `sha256`.** KERI signatures (Ed25519) verify natively, so a KERI revocation event can be checked on-chain against the keys the verifier bound, and a payment burns about 5 Tgas with 1 link and 7 Tgas with 100 links (bench `B13`).
 
@@ -151,6 +154,9 @@ Three protocol features do the work that other chains would need a smart-contrac
 
 | Who | What you must trust them for | What they cannot do |
 |---|---|---|
+| Guarantor (a verifier with stake) | checked the company's credential chain before signing; pays first when the vault runs short, so it has its own money at risk | take the company's name public before its recourse period ends and the debt stays unpaid (`A49`, `A50`); withdraw stake that covers open orders. **If it also holds the company's legal-entity key it could name that company falsely**: the contract checks the signature; the link between that key and the LEI is checked off-chain |
+| Arbiter | ruling a dispute; if it does nothing, the seller wins with a delivery proof and the company otherwise | be the guarantor, the company or the seller (`ARBITER_NOT_INDEPENDENT`) |
+| Seller | filing a truthful delivery proof; a false one is a matter for the dispute | claim before due plus the inspection window (`A46`, `A68`) |
 | Verifier | checked the credential chain before signing; holds the LEI salt; may update signer keys | move money, disclose before the waiting period, disclose an LEI other than the committed one (`A18`, `A19`) |
 | Owner | the verifier and supervisor whitelists | move money or touch a cell's limits |
 | Funder | its own funds; can revoke or reinstate its own cell | raise the limits the verifier signed (`A13`) |
@@ -215,6 +221,15 @@ const r = await agent.pay({ invoice: "INV-0042", to: "supplier.near", links: 1, 
 | `refresh_key(cell)` payable | funder / verifier | attach ≥ 0.25 NEAR; re-add the same key with a fresh gas allowance |
 | `top_up(cell)` payable | funder | add NEAR to a NEAR cell |
 | `ft_on_transfer(sender_id, amount, msg)` | NEP-141 token (via `ft_transfer_call`) | fund a token cell; `msg` = cell id; anything else is refunded |
+| `stake()` payable, `request_unstake`, `withdraw_stake` | guarantor | lock stake; only stake beyond open exposure can leave, after a delay |
+| `open_credit(preimage, j, to, invoice_hash, due_at)` | agent key only | spends links, takes no money yet; refused while the company owes its guarantor (`FROZEN`) |
+| `accept_credit(credit)`, `mark_delivered(credit, hash)` | seller | accepting locks the bond and the guarantor's exposure; delivery starts the inspection window |
+| `settle(credit)` / `settle_by_funder(credit)` payable | agent key / funder | pay the seller; identity stays sealed |
+| `dispute(credit, reason)` payable, `resolve_dispute`, `resolve_timeout` | funder escrows the amount / arbiter / anyone after time runs out | no ruling: the seller wins with a delivery proof, otherwise the company gets its escrow back |
+| `claim_default(credit)` | seller (guarantor if the seller stays silent past a further recourse period) | pays the seller up to the full amount from vault, bond, then stake; starts recourse |
+| `reimburse(credit)` payable | funder | repays the guarantor, using free vault money first; unfreezes, stays sealed |
+| `enforce_recourse(credit)`, `credit_unseal(credit, lei, salt, ecr)` | guarantor after recourse | close the tree, repay from what is left; if still unpaid, name the company, checked against the commitment and the legal entity's signature |
+| `withdraw()`, `cancel_open(credit)`, `risk_card(cell)`, `credit_of`, `stake_of`, `claimable_of`, `liability_receipt` | seller / see contract / anyone | collect; release stale orders; read state |
 | `set_supervisor(account, enabled)` | owner | whitelist a supervisor |
 | `request_unseal(cell, reason_hash)` | supervisor | public disclosure request; waiting period starts |
 | `object_unseal(cell)` | funder | public objection (not a veto) |
@@ -254,6 +269,13 @@ Code reviews after the first bench, done with AI review agents, found problems t
 
 ## Not implemented / limits
 
+- **No real guarantor exists yet.** The demo guarantor is a test account. Who would underwrite agents, how a guarantor prices it and what fee it takes are open questions. The contract has no fee logic.
+- **The terms are a placeholder.** `terms_hash` commits to demo text no lawyer has reviewed. Whether an on-chain default and disclosure have legal effect depends on a real agreement and a jurisdiction.
+- **Credit is in NEAR only.** USDC works for `spend`, not for credit.
+- **The guarantor's stake is the real limit.** A guarantor's exposure across cells cannot exceed its stake while orders are open, but it can request an unstake in advance; the risk card shows `guarantor_unstake_at` so a seller can see it.
+- **The delivery proof is a hash.** The contract cannot tell a real delivery from a false one; a dispute handles that, and the arbiter is one account named in the mandate.
+- **Colluding seller and guarantor** can run a false delivery to reach disclosure, if the company does not dispute. The company's defense is the dispute window.
+- **Hire limits.** The root pays hire fees, so a tree tops out at 16 cells; `hire` is not bound by the per-payment cap, and rates in a tree add up rather than sharing one limit.
 - **The agent in `make demo` and `make ui` is a script.** It issues the malicious call directly, because the point is the gate, not the model, and a script is reproducible. `make attack-live` runs real LLMs instead and needs an API key; the recorded run used Google's Gemini free tier on a local sandbox, not NEAR AI Cloud, so it makes no TEE claim. Writ does not stop an agent from being fooled; it stops the payment.
 - **The agent's KERI key is its NEAR key.** That is the demo's point, but it makes a KERI signing key a hot key, and rotating it means a new function-call key.
 - **A prompt-injected amount inside every cap and scope still gets paid** if the invoice is new. Writ limits the damage; it does not judge the invoice.
