@@ -12,6 +12,8 @@ The authorization is an Agent Mandate Credential, the credential GLEIF proposes 
 
 **Live on NEAR testnet:** contract [`writ.writmvyy7yqe-owner.testnet`](https://testnet.nearblocks.io/address/writ.writmvyy7yqe-owner.testnet), every step with its transaction in [`docs/testnet.md`](docs/testnet.md). It has no full-access key.
 
+**It settles in real stablecoins too:** one payment in Circle's testnet USDC, with an injected payment rejected, in [`docs/testnet-usdc.md`](docs/testnet-usdc.md).
+
 **Real models get fooled; the money still doesn't move.** Two Gemini models read poisoned invoices and followed the injection in 13 of 20 attacks; 0 of those payments went through, attacker gain 0 ([`docs/attack-live.md`](docs/attack-live.md), a small sample, not a benchmark).
 
 **Try to steal from it:** <https://writ-steal.112306007.workers.dev> publishes an agent's private key on purpose and signs real testnet transactions from your browser. The key alone moves nothing. `make bounty` opens such a cell; the key lives only on that page, never in this repo.
@@ -230,7 +232,7 @@ Independent reviews by reading the code, after the first bench, found problems t
 - **Removing a verifier does not close its cells.** `present` then reports `chain_valid: false`, but payments continue until a revocation.
 - **Malformed `spend` calls cost gas without a strike.** They fail before the policy checks, so the tripwire does not count them. The loss is bounded by the key's allowance, which the fee has already paid for.
 - **Privacy is selective disclosure, not anonymity.** Until a disclosure, only `sha256(LEI‖salt)` is on-chain (salt held by the verifier). Funding accounts, the agent key, the employee's public key (`issuer_pk`) and payments are public and linkable on-chain, so anyone who already knows the employee's KERI identifier can link the cell to them. A revocation event submitted on-chain exposes the signer's AID. Only tier 1 (the LEI) is disclosable; the employee's identity is out of scope.
-- **Single verifier per cell**; no sub-delegation between agents. The NEP-141 path is tested with a mock token (`contract/ft-mock`), not a live stablecoin.
+- **Single verifier per cell**; no sub-delegation between agents. The bench tests NEP-141 with a mock token (`contract/ft-mock`); `make testnet-usdc` ran one real payment in Circle's testnet USDC.
 - **Testnet only.** `make testnet` deployed this story; not on mainnet. It needs the faucet, which rate-limits per IP; on a 429 it falls back to sub-accounts of an already funded account.
 
 ## Repository layout
@@ -251,7 +253,7 @@ tools/           fakerlimit.c (only for containers with an fd hard limit < 65535
 
 ## Baseline disclosure
 
-All code in this repository was written during the hackathon window (from 2026-11-01). Libraries: near-sdk-rs, near-contract-standards, near-workspaces, near-api-js, keripy (WebOfTrust). No code from the author's earlier projects is included. The code was written with AI coding agents (Claude Code); the author directed the design and reviewed the results.
+All code in this repository was written during the hackathon window (from 2026-11-01). Libraries: near-sdk-rs, near-contract-standards, near-workspaces, near-api-js, keripy (WebOfTrust). No code from the author's earlier projects is included. The author has worked on the same theme before, on other chains and systems (agent-passport, mandate-layer, agent-tab, mcp-vlei, evidence-at-source); those are the ideas Writ grew from, not its code. The code was written with AI coding agents (Claude Code); the author directed the design and reviewed the results.
 
 ## License
 
