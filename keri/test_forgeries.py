@@ -11,6 +11,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = tempfile.mkdtemp(prefix="writ-forge-")
 for name in ("common.py", "verify.py"):
     shutil.copy(os.path.join(HERE, name), WORK)
+shutil.copytree(os.path.join(HERE, "schemas"), os.path.join(WORK, "schemas"))
 sys.path.insert(0, WORK)
 os.environ["WRIT_VERIFIER_POLICY"] = os.path.join(WORK, "policy.json")
 
@@ -21,12 +22,8 @@ from keri.vc import proving
 from keri.vdr import credentialing
 
 import common
-from common import AMC, BUNDLE, ECR, LEV, QVI, REGISTRAR, write_json
+from common import AMC, BUNDLE, ECR, LEV, QVI, REGISTRAR, block, rules_for, write_json
 import verify as V
-
-
-def block(**fields):
-    return coring.Saider.saidify(sad=dict(d="", **fields))[1]
 
 
 def anchor(hab, reg, serder, sn):
@@ -38,7 +35,7 @@ def anchor(hab, reg, serder, sn):
 
 
 def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge_o="I2I", pin_other=False,
-          revoke_after_bundle=None, rogue_qvi=False, ecr_lei="WRITDEMO000000000017", no_rules=False, bad_edge_said=False):
+          revoke_after_bundle=None, rogue_qvi=False, ecr_lei="WRITDEMO000000000017", no_rules=False, bad_edge_said=False, altered_rules=False):
     """建一條鏈並寫出 bundle／registrar。參數決定哪裡造假。"""
     with habbing.openHby(name=name, temp=True) as hby:
         rgy = credentialing.Regery(hby=hby, name=name, temp=True)
@@ -69,10 +66,11 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
         if rogue_qvi:
             anchor(fake_root, reg_fr, reg_fr.vcp, "0"); rgy.processEscrows()
         reg_q, hab_q = (reg_fr, fake_root) if rogue_qvi else (reg_rt, root)
-        qvc = proving.credential(issuer=hab_q.pre, schema=QVI.said, recipient=qvi.pre, status=reg_q.regk, private=True, data=dict(LEI="WRITDEMOQVI000000000"))
+        qvc = proving.credential(issuer=hab_q.pre, schema=QVI.said, recipient=qvi.pre, status=reg_q.regk, data=dict(LEI="WRITDEMOQVI000000000"),
+                                 rules=block(**rules_for(QVI)))
         iss_q = reg_q.issue(said=qvc.said); anchor(hab_q, reg_q, iss_q, "0")
-        lev = proving.credential(issuer=qvi.pre, schema=LEV.said, recipient=le.pre, status=reg_qv.regk, private=True, data=dict(LEI="WRITDEMO000000000017"),
-                                 source=block(qvi=dict(n=qvc.said, s=QVI.said, o="I2I")))
+        lev = proving.credential(issuer=qvi.pre, schema=LEV.said, recipient=le.pre, status=reg_qv.regk, data=dict(LEI="WRITDEMO000000000017"),
+                                 source=block(qvi=dict(n=qvc.said, s=QVI.said)), rules=block(**rules_for(LEV)))
         iss_l = reg_qv.issue(said=lev.said); anchor(qvi, reg_qv, iss_l, "0")
         rgy.processEscrows()
 
@@ -81,8 +79,8 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
         sch = schema or ECR
         ecr = proving.credential(issuer=le.pre, schema=sch.said, recipient=human.pre, status=reg_e.regk, private=True,
                                  data=dict(LEI=ecr_lei, personLegalName="Alex Example", engagementContextRole="Treasury"),
-                                 source=block(le=dict(n=lev.said, s=LEV.said, o="I2I")) if not bad_edge_said else dict(d="", le=dict(n=lev.said, s=LEV.said, o="I2I")),
-                                 rules=None if no_rules else block(usageDisclaimer=dict(l="mock")))
+                                 source=block(le=dict(n=lev.said, s=LEV.said)) if not bad_edge_said else dict(d="", le=dict(n=lev.said, s=LEV.said)),
+                                 rules=None if no_rules else (block(usageDisclaimer=dict(l="our own terms")) if altered_rules else block(**rules_for(ECR))))
         iss_e = reg_e.issue(said=ecr.said)
         anchor(hab_e, reg_e, iss_e, "0")
 
@@ -145,6 +143,7 @@ CASES = [
     ("F11 ECR states a different LEI than the legal entity's vLEI", dict(ecr_lei="WRITDEMO999999999999"), False),
     ("F12 ECR has no rules section", dict(no_rules=True), False),
     ("F13 ECR edge section is not self-addressing", dict(bad_edge_said=True), False),
+    ("F14 ECR replaces the official rules text with its own", dict(altered_rules=True), False),
 ]
 
 fails = 0

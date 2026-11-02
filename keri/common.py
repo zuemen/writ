@@ -51,18 +51,30 @@ def _schema(title: str, attrs: dict, required: list, edges: dict | None, rules: 
     return schemer
 
 
-# vLEI 的信任鏈：GLEIF 根 → QVI → 法人 → ECR。結構照官方 vLEI（edge、I2I、ECR 的 rules），SAID 是本專案自建的 mock。
-QVI = _schema("Mock Qualified vLEI Issuer Credential", {"LEI": {"type": "string"}}, ["LEI"], None)
-LEV = _schema("Mock Legal Entity vLEI Credential", {"LEI": {"type": "string"}}, ["LEI"],
-              {"d": {"type": "string"}, "qvi": {"type": "object"}})
-# ECR：法人給「自然人」的情境角色憑證（欄位對齊 vLEI ECR 的 a 區塊），edge 指向法人的 vLEI
-ECR = _schema(
-    "Mock Engagement Context Role vLEI Credential",
-    {"LEI": {"type": "string"}, "personLegalName": {"type": "string"}, "engagementContextRole": {"type": "string"}},
-    ["LEI", "personLegalName", "engagementContextRole"],
-    {"d": {"type": "string"}, "le": {"type": "object"}},
-    rules=True,
-)
+# vLEI 的信任鏈用官方 schema（keri/schemas/，WebOfTrust/vLEI 的原檔）：GLEIF 根 → QVI → 法人 → ECR。
+# 發行者是 mock，schema 是真的。ECR 走法人直接發給員工的 le edge（官方 schema 的兩條路之一）。
+def _official(name: str, said: str):
+    with open(os.path.join(HERE, "schemas", name + ".json"), "rb") as f:
+        schemer = scheming.Schemer(raw=f.read())
+    assert schemer.said == said, f"{name}: not the official schema ({schemer.said})"
+    return schemer
+
+
+QVI = _official("qualified-vLEI-issuer-vLEI-credential", "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao")
+LEV = _official("legal-entity-vLEI-credential", "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY")
+ECR = _official("legal-entity-engagement-context-role-vLEI-credential", "EEy9PkikFcANV1l7EHukCeXqrzT1hNZjGlUk7wuMO5jw")
+
+
+def rules_for(schemer) -> dict:
+    """官方 schema 把 rules 條文定成 const：直接取用，不自己寫。"""
+    block = next(x for x in schemer.sed["properties"]["r"]["oneOf"] if x["type"] == "object")
+    return {k: {"l": v["properties"]["l"]["const"]} for k, v in block["properties"].items() if k != "d"}
+
+
+def block(**fields) -> dict:
+    """ACDC 的 e／r 區塊本身也要自我定址（d 是區塊內容的 SAID）。"""
+    return coring.Saider.saidify(sad=dict(d="", **fields))[1]
+
 
 # AMC：GLEIF《Agentic AI in Payments》Annex A p.44 —— 行動類別、交易上限、允許的交易對手、有效時間窗。
 # 討論稿 p.45 明寫 AMC 的正式 ACDC schema 尚未定義；這是本專案的提案版本。

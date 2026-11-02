@@ -25,19 +25,11 @@ from keri.core.eventing import SealEvent
 from keri.vc import proving
 from keri.vdr import credentialing, viring
 
-from common import AMC, BUNDLE, ECR, KEYSTORE, LEV, PRIVATE, QVI, REGISTRAR, b58, read_json, write_json
+from common import AMC, BUNDLE, ECR, KEYSTORE, LEV, PRIVATE, QVI, REGISTRAR, b58, block, read_json, rules_for, write_json
 
 LEI = "WRITDEMO000000000017"  # 虛構 LEI：ISO 17442 檢查碼正確，但不屬於任何真實法人
 QVI_LEI = "WRITDEMOQVI00000000" + "0"  # 虛構的 QVI 識別，只在 mock 鏈裡用
-# ECR 的 rules 區塊（官方 vLEI ECR 必填；文字是 mock，不是 GLEIF 的條款）
-RULES = dict(usageDisclaimer=dict(l="Mock credential for the Writ demo. Not issued under the vLEI Ecosystem Governance Framework."),
-             issuanceDisclaimer=dict(l="Issued by a mock legal entity; no real entity is represented."))
 STATE = os.path.join(KEYSTORE, "state.json")
-
-
-def block(**fields):
-    """ACDC 的 e／r 區塊本身也要自我定址（d 是區塊內容的 SAID）。"""
-    return coring.Saider.saidify(sad=dict(d="", **fields))[1]
 
 
 def open_all():
@@ -92,11 +84,12 @@ def cmd_init(a):
     rgy.processEscrows()
 
     # 根 → QVI → 法人
-    qvc = proving.credential(issuer=root.pre, schema=QVI.said, recipient=qvi.pre, status=reg_rt.regk, private=True, data=dict(LEI=QVI_LEI))
+    qvc = proving.credential(issuer=root.pre, schema=QVI.said, recipient=qvi.pre, status=reg_rt.regk, data=dict(LEI=QVI_LEI),
+                             rules=block(**rules_for(QVI)))
     iss_q = reg_rt.issue(said=qvc.said)
     anchor(root, reg_rt, iss_q, "0")
-    lev = proving.credential(issuer=qvi.pre, schema=LEV.said, recipient=le.pre, status=reg_qv.regk, private=True, data=dict(LEI=LEI),
-                             source=block(qvi=dict(n=qvc.said, s=QVI.said, o="I2I")))
+    lev = proving.credential(issuer=qvi.pre, schema=LEV.said, recipient=le.pre, status=reg_qv.regk, data=dict(LEI=LEI),
+                             source=block(qvi=dict(n=qvc.said, s=QVI.said)), rules=block(**rules_for(LEV)))
     iss_l = reg_qv.issue(said=lev.said)
     anchor(qvi, reg_qv, iss_l, "0")
     rgy.processEscrows()
@@ -105,7 +98,7 @@ def cmd_init(a):
     # private=True：加上 u 鹽值，SAID 才不能被字典攻擊（ECR 路徑撤銷時會公開 ecr_said）
     ecr = proving.credential(issuer=le.pre, schema=ECR.said, recipient=human.pre, status=reg_le.regk, private=True,
                              data=dict(LEI=LEI, personLegalName="Alex Example", engagementContextRole="Treasury Operations"),
-                             source=block(le=dict(n=lev.said, s=LEV.said, o="I2I")), rules=block(**RULES))
+                             source=block(le=dict(n=lev.said, s=LEV.said)), rules=block(**rules_for(ECR)))
     iss_e = reg_le.issue(said=ecr.said)
     anchor(le, reg_le, iss_e, "0")
 

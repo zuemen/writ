@@ -273,7 +273,7 @@
   <h3 class="title">Verify once. Enforce every time. Revoke without asking.</h3>
   <p class="sub">GLEIF's August 2026 discussion paper proposes an Agent Mandate Credential and notes that on open rails no single intermediary holds its state. Writ puts that state in a NEAR contract.</p>
   <div class="how">
-    <div class="col"><div class="eyebrow">Credential</div><h4>Who authorized this agent</h4><p>A vLEI-shaped chain: root → QVI → legal entity → employee → agent. A verifier checks it once off-chain with keripy and signs an attestation. The company's LEI stays a salted commitment on-chain until a public, delayed disclosure.</p></div>
+    <div class="col"><div class="eyebrow">Credential</div><h4>Who authorized this agent</h4><p>A chain on the official vLEI schemas: root → QVI → legal entity → employee → agent. A verifier checks it once off-chain with keripy and signs an attestation. The company's LEI stays a salted commitment on-chain until a public, delayed disclosure.</p></div>
     <div class="col"><div class="eyebrow">Key</div><h4>What the agent can touch</h4><p>The agent's KERI key is also a NEAR function-call key, restricted by the protocol to one method. The contract adds and deletes it on its own account, so revoked means the key no longer exists.</p></div>
     <div class="col"><div class="eyebrow">Contract</div><h4>What each payment must pass</h4><p>Permitted payee, unpaid invoice, per-payment cap, hash-chain budget, daily rate, expiry. Rejections are normal transactions with a hash and an event, and three in a row delete the key.</p></div>
   </div>
@@ -285,11 +285,11 @@
   <div class="proof">
     <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>39 / 39</b><span>attacks blocked in the bench; attacker gain measured, 0</span></a>
     <a href="https://github.com/zuemen/writ#mutation-testing"><b>151 / 154</b><span>contract mutants caught by cargo-mutants</span></a>
-    <a href="https://github.com/zuemen/writ/blob/main/keri/test_forgeries.py"><b>13</b><span>forged or stale credential chains the verifier refuses</span></a>
+    <a href="https://github.com/zuemen/writ/blob/main/keri/test_forgeries.py"><b>14</b><span>forged or stale credential chains the verifier refuses</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/docs/testnet-usdc.md"><b>0.1 USDC</b><span>paid in Circle's testnet USDC, injection rejected</span></a>
   </div>
   <ul class="limits">
-    <li>The root, QVI and legal entity are mocks with a fictional LEI; no real QVI issued anything here.</li>
+    <li>The schemas are GLEIF's; the issuers are mocks with a fictional LEI. No real QVI issued anything here.</li>
     <li>Testnet only. Selective disclosure, not anonymity: funding accounts and payments are public and linkable.</li>
     <li>Revocation takes effect when the signed event reaches the contract; no relayer ships with the repo.</li>
     <li>The buttons in step 2 are scripted so you can repeat them; the model results above are from real runs.</li>

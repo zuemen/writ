@@ -4,7 +4,8 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { teraToGas, type KeyPairString } from "near-api-js";
-import { accounts, as, call, DEMO, events, view, provider, NEAR, ROOT, readJson, writeJson, type CallOut } from "./near.js";
+import { accounts, as, call, DEMO, events, view, provider, NEAR, ROOT, RPC, readJson, writeJson, type CallOut } from "./near.js";
+import { WritAgent } from "./sdk.js";
 import { keriPrivate, py, pyBoth, releaseLink } from "./keri.js";
 
 export const A = () => accounts();
@@ -36,10 +37,15 @@ export async function present(cell: string) {
 export async function pay(cell: string, j: number, to: string, invoice: string): Promise<CallOut & { preimageIndex: number }> {
   const c: any = await view(W(), "get_cell", { cell });
   const k = (c?.idx ?? 0) + j;
-  const pre = releaseLink(Math.min(k, c?.n ?? k));
-  const agent = as(W(), keriPrivate().agent_near_secret_key as KeyPairString);
-  const r = await call(agent, W(), "spend", { preimage: pre, j, to, invoice_hash: createHash("sha256").update(invoice).digest("hex") }, { gas: teraToGas("50") });
-  return { ...r, preimageIndex: k };
+  const preimage = releaseLink(Math.min(k, c?.n ?? k));
+  const agent = new WritAgent({ contract: W(), rpc: RPC, agentKey: keriPrivate().agent_near_secret_key as KeyPairString });
+  const r = await agent.pay({ invoice, to, links: j, preimage });
+  const base = { logs: [], preimageIndex: k };
+  if (r.outcome === "paid") return { ...base, hash: r.txHash, value: { Paid: { cell, amount: r.amount, idx: k, remaining_links: r.remainingLinks } } };
+  if (r.outcome === "rejected") return { ...base, hash: r.txHash, value: { Rejected: { cell, reason: r.reason, strikes: r.strikes, tripped: r.tripped } } };
+  if (r.outcome === "revoked") return { ...base, tag: "MANDATE REVOKED", error: `AccessKeyNotFound: ${r.detail}` };
+  if (r.outcome === "out_of_gas") return { ...base, tag: "GAS ALLOWANCE EXHAUSTED", error: `NotEnoughAllowance: ${r.detail}` };
+  return { ...base, tag: "UNKNOWN", error: r.detail };
 }
 
 /** 職員離職：HR（LE）在 KERI 撤銷他的 ECR，不需要他配合；任何人把簽過的 ixn 交給合約 */

@@ -49,9 +49,13 @@ pool: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/pool-setup.ts
 	bash scripts/build_site.sh
 
+# 一個指令重現所有主張，最後印成績單
+verify:
+	PY=$(PY) bash scripts/verify_all.sh
+
 clean:
 	scripts/sandbox.sh stop; rm -rf .demo .sandbox keri/.keystore keri/bundle keri/registrar
-.PHONY: setup test keri-check demo ui clean testnet testnet-usdc attack-live bounty pool
+.PHONY: setup test keri-check demo ui clean testnet testnet-usdc attack-live bounty pool verify
 
 # 需要本人同意：會在 NEAR testnet 建帳號、部署、簽交易（測試幣，免費）。結果寫進 docs/testnet.md
 testnet: setup
