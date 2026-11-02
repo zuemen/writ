@@ -3,7 +3,7 @@
 # 基底跟 CI 相同（Ubuntu 24.04），near-sandbox 在這個環境驗證過；keripy 的依賴要比內建 3.12.3 新的 Python，用 uv 裝
 FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libsodium23 curl ca-certificates gcc libc6-dev make \
+      libsodium23 curl ca-certificates gcc libc6-dev make pkg-config libssl-dev \
  && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs \
  && rm -rf /var/lib/apt/lists/*
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
