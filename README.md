@@ -20,7 +20,7 @@ This README is written for a machine reviewer: every claim below has a command. 
 
 ## Try it (do X → see Y)
 
-Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.2+ with libsodium (`apt install libsodium23` / `brew install libsodium`), `make`, `gcc`. Network is needed once (crates, npm, pip, sandbox binary). Nothing touches testnet or mainnet. No API keys.
+Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with libsodium (`apt install libsodium23` / `brew install libsodium`), `make`, `gcc`. Network is needed once (crates, npm, pip, sandbox binary). Nothing touches testnet or mainnet. No API keys.
 
 | # | Do | See |
 |---|---|---|
