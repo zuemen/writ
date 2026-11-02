@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Writ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f4f1ea; --panel: #fffdf8; --ink: #1b1a17; --muted: #6d675c; --line: #ddd6c8;
+    --ok: #1f7a4d; --ok-bg: #e3f1e8; --bad: #b3261e; --bad-bg: #f8e2df; --proto: #7a4f00; --proto-bg: #f6ecd5;
+    --accent: #2b3a67; --seal: #8a6d3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14130f; --panel: #1d1c18; --ink: #ece7dc; --muted: #9a9284; --line: #34312a;
+      --ok: #5fc48f; --ok-bg: #16301f; --bad: #f08a80; --bad-bg: #3a1a17; --proto: #e5b45a; --proto-bg: #33270f;
+      --accent: #9fb1e8; --seal: #d2b27a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 "IBM Plex Sans", system-ui, sans-serif; }
+  header { padding: 22px 28px 14px; display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+  h1 { font: 600 30px/1 Fraunces, Georgia, serif; margin: 0; letter-spacing: .5px; }
+  .tag { color: var(--muted); }
+  header .sp { flex: 1; }
+  main { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 18px 28px; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; padding: 16px; } header { padding: 16px; } #log li { grid-template-columns: 1fr; gap: 2px; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  h2 { margin: 0; font-size: 13px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  h3 { margin: 0; font-size: 17px; }
+  .mono { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; }
+  .wrap { overflow-wrap: anywhere; }
+  button { font: 500 14px "IBM Plex Sans"; padding: 9px 14px; border-radius: 7px; border: 1px solid var(--ink); background: var(--ink); color: var(--panel); cursor: pointer; }
+  button.ghost { background: transparent; color: var(--ink); }
+  button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+  button:disabled { opacity: .4; cursor: default; }
+  .chain { display: flex; flex-direction: column; gap: 6px; }
+  .node { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; grid-template-columns: 74px 1fr auto; gap: 8px; align-items: center; }
+  .node b { font-size: 13px; }
+  .arrow { color: var(--muted); font-size: 12px; padding-left: 18px; }
+  .chip { font: 600 11px "IBM Plex Mono"; padding: 2px 7px; border-radius: 99px; background: var(--ok-bg); color: var(--ok); }
+  .chip.rev { background: var(--bad-bg); color: var(--bad); }
+  .invoice { border: 1px dashed var(--line); border-radius: 8px; padding: 10px 12px; }
+  .invoice .inj { color: var(--bad); background: var(--bad-bg); border-radius: 4px; padding: 4px 6px; margin-top: 6px; }
+  .preds { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+  .preds li { display: grid; grid-template-columns: 22px 1fr; gap: 6px; }
+  .tick { font-weight: 700; }
+  .tick.y { color: var(--ok); } .tick.n { color: var(--bad); }
+  .sealed { color: var(--seal); font-weight: 600; }
+  .bar { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 8px; text-align: center; }
+  .stat b { display: block; font: 600 22px Fraunces, serif; }
+  .stat span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+  .money { display: flex; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 10px; }
+  .money .bad { color: var(--bad); font-weight: 600; }
+  #log { grid-column: 1 / -1; }
+  #log ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow: auto; }
+  #log li { display: grid; grid-template-columns: 170px 1fr; gap: 10px; padding: 7px 10px; border-radius: 6px; border-left: 4px solid var(--line); }
+  #log li.ok { border-color: var(--ok); background: var(--ok-bg); }
+  #log li.reject { border-color: var(--bad); background: var(--bad-bg); }
+  #log li.protocol { border-color: var(--proto); background: var(--proto-bg); }
+  #log .who { color: var(--muted); font-size: 13px; }
+  #log .hash { color: var(--muted); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .busy { position: fixed; top: 10px; right: 14px; font: 12px "IBM Plex Mono"; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Writ</h1>
+  <span class="tag">GLEIF Agent Mandate Credentials, enforced on NEAR — verify once, enforce every time, revoke at block speed.</span>
+  <span class="sp"></span>
+  <button class="ghost" onclick="post('/api/reset')">Reset</button>
+</header>
+<div class="busy" id="busy"></div>
+<main>
+  <section>
+    <h2>Legal entity · HR</h2>
+    <h3>Who may act, for whom</h3>
+    <div class="chain" id="chain"></div>
+    <div class="row">
+      <button id="bReg" onclick="post('/api/register')">Verify chain &amp; open mandate</button>
+      <button id="bRev" class="danger" onclick="post('/api/revoke')">Officer leaves → revoke AMC</button>
+    </div>
+    <p class="muted">Revocation happens in KERI, off-chain. Anyone can hand the signed event to the contract; it checks the signature and deletes the agent's key.</p>
+  </section>
+
+  <section>
+    <h2>Agent · accounts payable</h2>
+    <h3>Inbox</h3>
+    <div class="invoice"><b>INV-0042</b> · Paper stock · 0.1 NEAR · to <span class="mono" id="mer"></span>
+      <div class="row" style="margin-top:8px"><button onclick="post('/api/pay')">Agent pays</button></div></div>
+    <div class="invoice"><b>INV-0043</b> · Office supplies · 0.2 NEAR
+      <div class="inj mono wrap" id="inj"></div>
+      <div class="row" style="margin-top:8px"><button class="ghost" onclick="post('/api/pay-injected')">Agent follows the invoice</button></div></div>
+    <p class="muted">The agent signs with one Ed25519 key: its KERI delegated identifier and a NEAR function-call key that can only call <span class="mono">spend</span>.</p>
+    <div class="mono muted wrap" id="akey"></div>
+  </section>
+
+  <section>
+    <h2>Merchant · anyone</h2>
+    <h3>What the chain can prove</h3>
+    <ul class="preds" id="preds"></ul>
+    <div><div class="muted" id="limtxt"></div><div class="bar"><i id="lim" style="width:0"></i></div></div>
+    <div class="stats" id="stats"></div>
+    <div class="money"><span>attacker balance</span><span id="att"></span></div>
+    <div class="money"><span>merchant balance</span><span id="merb"></span></div>
+  </section>
+
+  <section id="log">
+    <h2>Chain log</h2>
+    <ol id="entries"></ol>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const short = (s, n = 10) => s ? s.slice(0, n) + "…" : "";
+async function post(path) {
+  $("busy").textContent = "working…";
+  document.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  try { render(await (await fetch(path, { method: "POST" })).json()); }
+  finally { $("busy").textContent = ""; document.querySelectorAll("button").forEach((b) => (b.disabled = false)); }
+}
+function node(kind, label, id, status) {
+  return `<div class="node"><b>${kind}</b><span class="mono">${label} ${short(id, 14)}</span>${status ? `<span class="chip ${status === "rev" ? "rev" : ""}">${status}</span>` : "<span></span>"}</div>`;
+}
+function render(s) {
+  if (s.error) { alert(s.error); return; }
+  const k = s.keri;
+  $("chain").innerHTML = [
+    node("Legal entity", "LE", k.le, ""), `<div class="arrow">issues ECR (role credential, natural person) ↓</div>`,
+    node("Employee", "human", k.human, "iss"), `<div class="arrow">issues AMC (scope, limit, expiry) ↓</div>`,
+    node("Mandate", "AMC", k.amc, k.amcRevoked ? "rev" : "iss"), `<div class="arrow">held by delegated identifier ↓</div>`,
+    node("Agent", "agent", k.agent, ""),
+  ].join("");
+  $("mer").textContent = s.accounts.merchant;
+  $("inj").textContent = s.invoice.split("\n")[1];
+  $("akey").textContent = "agent key " + k.agent_near_pk;
+  const p = s.present;
+  const pred = (ok, text) => `<li><span class="tick ${ok ? "y" : "n"}">${ok ? "✓" : "✗"}</span><span>${text}</span></li>`;
+  $("preds").innerHTML = p ? [
+    pred(p.chain_valid, `GLEIF-rooted chain attested by <span class="mono">${p.verifier}</span>`),
+    pred(p.not_revoked, "mandate not revoked"),
+    pred(p.not_expired, "within validity window"),
+    pred(true, `counterparty scope: <span class="mono">${p.scope.join(", ")}</span>`),
+    pred(p.within_limit.used < p.within_limit.of, `within limit: ${p.within_limit.used} of ${p.within_limit.of} links`),
+    `<li><span class="tick sealed">◼</span><span>legal entity: <span class="sealed">sealed</span> <span class="mono muted">commit ${short(p.lei_commit, 12)}</span></span></li>`,
+  ].join("") : `<li class="muted">No mandate opened yet.</li>`;
+  const used = p ? p.within_limit.used : 0, of = p ? p.within_limit.of : 1;
+  $("lim").style.width = (100 * used / of) + "%";
+  $("limtxt").textContent = p ? `budget used ${used}/${of} links` : "";
+  const st = s.stats;
+  $("stats").innerHTML = [["paid", st.paid], ["rejected", st.rejected], ["tripped", st.tripped], ["revoked", st.revoked]]
+    .map(([a, b]) => `<div class="stat"><b>${b}</b><span>${a}</span></div>`).join("");
+  $("att").innerHTML = `<span class="${s.balances.attacker.startsWith("+0.000") ? "" : "bad"}">${s.balances.attacker}</span>`;
+  $("merb").textContent = s.balances.merchant;
+  $("entries").innerHTML = s.log.slice().reverse().map((e) =>
+    `<li class="${e.kind}"><span class="who">${e.who}</span><span>${e.text}${e.hash ? ` <span class="mono hash">tx ${short(e.hash, 12)}</span>` : ""}</span></li>`).join("");
+}
+fetch("/api/state").then((r) => r.json()).then(render);
+</script>
+</body>
+</html>

@@ -16,7 +16,8 @@ test:
 	@if [ "$$(ulimit -Hn)" != "unlimited" ] && [ "$$(ulimit -Hn)" -lt 65535 ]; then $(MAKE) -C contract test-lowfd; else $(MAKE) -C contract test; fi
 
 keri-check: keri/.venv/bin/python
-	cd keri && .venv/bin/python issuer.py init --scope merchant.test.near --rail acme.test.near >/dev/null 2>&1 || true
+	rm -rf keri/.keystore keri/bundle
+	cd keri && .venv/bin/python issuer.py init --scope merchant.test.near --rail acme.test.near >/dev/null
 	cd keri && .venv/bin/python verify.py check
 
 demo: setup

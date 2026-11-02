@@ -54,7 +54,7 @@ def verify_chain():
         def ok(name, cond, detail=""):
             checks.append(dict(check=name, ok=bool(cond), detail=detail))
             if not cond:
-                raise ChainError(f"{name}: {detail}")
+                raise ChainError(f"{name} — failed: {detail}")
 
         amc_said = trust["amc_said"]
         amc = rgy.reger.creds.get(keys=amc_said)
@@ -70,7 +70,8 @@ def verify_chain():
 
         for name, cred in (("ECR", ecr), ("AMC", amc)):
             st = rgy.tevers[cred.regi].vcState(cred.said)
-            ok(f"{name} TEL state is issued (not revoked)", st is not None and st.et == "iss", st.et if st else None)
+            ok(f"{name} TEL state is issued (not revoked)", st is not None and st.et == "iss",
+           ("revoked (TEL rev)" if st and st.et == "rev" else st.et) if st else "no TEL state")
 
         hk, ak = hby.kevers.get(human), hby.kevers.get(agent)
         ok("human KEL verified", hk is not None, f"sn={hk.sn if hk else None}")

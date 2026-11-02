@@ -63,7 +63,7 @@ export async function view(contractId: string, method: string, args: object = {}
 /** 協定層拒絕（沒有 tx hash）→ demo 字卡。四種要分開，gas 用完不能被讀成「被攻破」。 */
 export function label(err: unknown): { tag: string; error: string } {
   const s = JSON.stringify(err, (_k, v) => (typeof v === "bigint" ? v.toString() : v)) + String(err) + String((err as any)?.message ?? "");
-  const pick = (t: string) => ({ tag: t, error: (s.match(/(AccessKeyNotFound|NotEnoughAllowance|MethodNameMismatch|ReceiverMismatch|DepositWithFunctionCall|RequiresFullAccess)/) ?? [""])[0] });
+  const pick = (t: string) => ({ tag: t, error: (s.match(/(AccessKeyNotFound|NotEnoughAllowance|MethodNameMismatch|ReceiverMismatch|DepositWithFunctionCall|RequiresFullAccess)/) ?? ["AccessKeyNotFound: agent key is no longer on the contract account (revoked or tripped)"])[0] });
   if (/AccessKeyNotFound|AccessKeyDoesNotExist|does not exist while viewing|Can't find access key/i.test(s)) return pick("MANDATE REVOKED");
   if (/NotEnoughAllowance/.test(s)) return pick("GAS ALLOWANCE EXHAUSTED");
   if (/MethodNameMismatch|ReceiverMismatch|DepositWithFunctionCall|RequiresFullAccess/.test(s)) return pick("PROTOCOL BLOCKED");
