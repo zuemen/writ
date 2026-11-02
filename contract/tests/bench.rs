@@ -50,9 +50,24 @@ struct World {
     attacker: Account,
 }
 
+/// cargo-mutants 用：WRIT_REBUILD=1 時每次測試先從（被突變的）原始碼重建 wasm，否則用 make build 的產物。
+fn wasm_bytes() -> anyhow::Result<Vec<u8>> {
+    static BUILT: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    if std::env::var("WRIT_REBUILD").is_err() {
+        return Ok(std::fs::read(WASM)?);
+    }
+    Ok(BUILT.get_or_init(|| {
+        let st = std::process::Command::new("cargo")
+            .args(["build", "--target", "wasm32-unknown-unknown", "--release", "--target-dir", "target/mutants-wasm"])
+            .status().expect("cargo build");
+        assert!(st.success(), "wasm build failed");
+        std::fs::read("target/mutants-wasm/wasm32-unknown-unknown/release/writ.wasm").unwrap()
+    }).clone())
+}
+
 async fn world() -> anyhow::Result<World> {
     let worker = near_workspaces::sandbox().await?;
-    let writ = worker.dev_deploy(&std::fs::read(WASM)?).await?;
+    let writ = worker.dev_deploy(&wasm_bytes()?).await?;
     writ.call("new").args_json(json!({"unseal_delay_secs": 5})).transact().await?.into_result()?;
     let verifier = worker.dev_create_account().await?;
     let funder = worker.dev_create_account().await?;
