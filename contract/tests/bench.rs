@@ -2140,7 +2140,7 @@ async fn b30_the_guarantor_earns_a_fee_for_standing_behind_the_order() -> anyhow
     let v1: u128 = c1["vault"].as_str().unwrap().parse()?;
     assert!(v0 - v1 > fee, "storage and fee both left the vault");
     assert_eq!(cw.solvent().await["solvent"], true);
-    // 取消也不退，公司不能靠取消白拿保證
+    // 結清也不退：費用買的是已經承擔的曝險
     cw.seller("mark_delivered", json!({"credit": id, "delivery_hash": hex::encode([1u8; 32])})).await.unwrap();
     let v: Value = cw.agent.call(w.writ.id(), "settle").args_json(json!({"credit": id})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
     assert!(v.get("CreditSettled").is_some(), "{}", v);

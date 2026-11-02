@@ -8,14 +8,22 @@
  * 結尾印 CREDIT_RESULT 一行給機器檢查。
  */
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { teraToGas, type KeyPairString } from "near-api-js";
-import { DEMO, NEAR, as, call, fmt, readJson, view } from "./near.js";
+import { DEMO, NEAR, ROOT, as, call, fmt, readJson, view } from "./near.js";
 import { A, balance, register } from "./flow.js";
 import { keriPrivate, py, releaseLink } from "./keri.js";
 
 const a = A();
+// 對 testnet 跑：開一份新的憑證（別的流程留下的 ECR 已撤銷）。沒有專屬仲裁帳號，用 owner
+const LIVE = !!process.env.WRIT_CREDIT_REPORT;
+if (LIVE) {
+  for (const d of ["keri/.keystore", "keri/bundle", "keri/registrar"]) rmSync(join(ROOT, d), { recursive: true, force: true });
+  const init = py("issuer.py", "init", "--scope", a.merchant.id, "--rail", a.acme.id, "--n", "20", "--unit", "1e23", "--daily", "20", "--days", "30",
+    "--credit-limit", "1e24", "--bond-bps", "0", "--premium-bps", "200", "--min-tenor", "0", "--max-tenor", "86400", "--arbiter", a.owner.id, "--contract", a.writ.id);
+  py("verify.py", "pin", "--root", JSON.parse(init.slice(init.indexOf("{"), init.lastIndexOf("}") + 1)).root);
+}
 const say = (s: string) => console.log(s);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -41,7 +49,7 @@ async function order(j: number, invoice: string, dueInSecs: number) {
   for (const [m, args] of [["accept_credit", { credit: id }], ["mark_delivered", { credit: id, delivery_hash: sha(`delivery ${invoice}`) }]] as const) {
     const x = await call(seller, a.writ.id, m, args, { gas: teraToGas("50") });
     if (x.error) throw new Error(`${m}: ${x.error}`);
-    txs.push([`Seller ${m === "accept_credit" ? "accepts" : "marks delivered"} ${invoice}; the fee moves to the guarantor on accept`, x.hash]);
+    txs.push([m === "accept_credit" ? `Seller accepts ${invoice}; the fee moves to the guarantor` : `Seller marks ${invoice} delivered`, x.hash]);
   }
   return id;
 }
@@ -55,8 +63,11 @@ txs.push(["Agent settles the first order on time; the company stays sealed", s1.
 const card1: any = await view(a.writ.id, "risk_card", { cell });
 say(`2  order ${paid} delivered and paid on time → ${JSON.stringify(s1.value ?? s1.error)}; legal entity=${card1.legal_entity}; record: ${card1.settled} settled`);
 
-const unpaid = await order(8, "INV-CREDIT-2", 1);
-await sleep(5000);
+// testnet 上從算到期日到上鏈要好幾秒，到期日給寬一點；要等過到期日與 3 秒驗收期
+const dueSecs = LIVE ? 30 : 1;
+const placed = Date.now();
+const unpaid = await order(8, "INV-CREDIT-2", dueSecs);
+await sleep(Math.max(5000, placed + dueSecs * 1000 + 3000 - Date.now(), 5000));
 const s0 = await balance(a.merchant.id);
 const d = await call(seller, a.writ.id, "claim_default", { credit: unpaid }, { gas: teraToGas("100") });
 if (d.error) throw new Error("claim_default: " + d.error);

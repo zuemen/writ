@@ -68,7 +68,7 @@
   .stamp.d1 { animation-delay:.32s; } .stamp.d2 { animation-delay:.64s; } .stamp.d3 { animation-delay:.96s; }
   @keyframes slam { 0% { opacity:0; transform:rotate(-7deg) scale(2.6); } 100% { opacity:.9; transform:rotate(-7deg) scale(1); } }
   .mini .stamp.on { animation-name:slam2; }
-  @keyframes slam2 { 0% { opacity:0; transform:translateX(50%) rotate(-7deg) scale(2.6); } 100% { opacity:.9; transform:translateX(50%) rotate(-7deg) scale(1); } }
+  @keyframes slam2 { 0% { opacity:0; transform:rotate(-5deg) scale(2.2); } 100% { opacity:.9; transform:rotate(-5deg) scale(1); } }
   .caption { font-size:13.5px; color:var(--soft); margin:12px 0 0; }
   .card-row { display:grid; grid-template-columns:auto 1fr; gap:0 16px; font-size:14.5px; }
   .card-row dt { color:var(--soft); padding:6px 0; border-top:1px solid var(--rule); white-space:nowrap; }
@@ -167,7 +167,7 @@
   @media (prefers-reduced-motion:reduce) { .reveal, .stamp.on { animation-duration:.01s; animation-delay:0s; } html { scroll-behavior:auto; } }
   @media (max-width:880px) {
     .hero, .steal { grid-template-columns:1fr; gap:34px; }
-    .hero { padding:28px 0 44px; display:flex; flex-direction:column; gap:18px; }
+    .hero { padding:28px 0 44px; display:flex; flex-direction:column; align-items:stretch; gap:18px; }
     .hero > div:first-child { display:contents; }
     .hero h1 { order:1; margin:0; font-size:clamp(34px,10vw,46px); }
     .hero .eyebrow.reveal { order:0; margin:0; }

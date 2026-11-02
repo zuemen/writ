@@ -314,8 +314,8 @@ async function tally() {
   $("vault").textContent = near(c.vault);
   $("rejected").textContent = String(c.rejects);
   $("attemptsTop").textContent = String(c.rejects);
-  // 開格時已付一筆給供應商；之後多用掉任何一節都算被偷
-  $("stolenTop").textContent = String(Math.max(0, c.idx - Number(cfg.bounty.spent_link ?? 1)));
+  // 開格時已付一節給供應商；之後多用掉任何一節都算被偷
+  $("stolenTop").textContent = String(Math.max(0, c.idx - 1));
   $("links").textContent = `${c.idx}/${c.n}`;
 }
 const spend = (preimage: string, j: number, to: string) => call(thief, "spend", { preimage, j, to, invoice_hash: randomHex() }, "20");

@@ -8,7 +8,7 @@ An AI agent wants to buy from you on credit. Nobody can prove it won't be fooled
 
 1. **The company's name is sealed and a guarantor is named.** The seller reads a risk card: guarantor, locked stake, credit limit, bond, payment record, and only a commitment to the company's LEI.
 2. **The guarantor earns a fee.** When the seller accepts, the company's vault pays the guarantor a percentage of the order, signed into the mandate. That is why a guarantor would do this.
-3. **If the company doesn't pay, the seller is still paid.** After delivery, the due date and an inspection window, the seller claims default, with no approval needed. The money comes from the agent's vault, then the company's vault including its bond, then the guarantor's stake. The company can stop this only by escrowing the full amount and opening a dispute. Until it repays, its agents can't pay, hire or take new credit.
+3. **If the company doesn't pay, the seller is still paid.** After delivery, the due date and an inspection window, the seller claims default, with no approval needed. The money comes from the agent's vault, then the company's vault including its bond, then the guarantor's stake. The company can stop this only by escrowing the full amount and opening a dispute. If that leaves a debt to the guarantor, the company's agents can't pay, hire or take new credit until it repays.
 4. **If it repays the guarantor in time, it stays sealed.** If it doesn't, the guarantor closes that mandate's whole tree of agents in one transaction, money left in the tree repays the guarantor first, and if a debt remains the guarantor names the company. The contract checks the name against the commitment and the legal entity's signature.
 
 Under that, every agent is tied to the person who authorized it. Each hire can only narrow what it may do, and firing that person deletes every key in the tree. The chain follows GLEIF's vLEI: legal entity → named employee (role credential, official schema) → agent (Agent Mandate Credential, a proposal based on GLEIF's August 2026 discussion paper) → the agents it hires.
@@ -252,7 +252,7 @@ const r = await agent.pay({ invoice: "INV-0042", to: "supplier.near", links: 1, 
 |---|---|---|
 | `new(owner, unseal_delay_secs?)` | the contract account itself, in the deploy batch | sets the owner and the disclosure waiting period (default 120 s) |
 | `set_verifier(account, pk_hex?)` | owner | whitelist or remove a verifier's Ed25519 key |
-| `register(args)` payable | legal entity (funder) | verifies attestation (`ed25519_verify`), opens cell, adds agent function-call key (`spend` only), vault = deposit − fee (token cells: excess NEAR returned); each AMC can register once; attestation must be under 1 hour old |
+| `register(args)` payable | legal entity (funder) | verifies attestation (`ed25519_verify`), opens cell, adds agent function-call key (agent methods only), vault = deposit − fee (token cells: excess NEAR returned); each AMC can register once; attestation must be under 1 hour old |
 | `spend(preimage, j, to, invoice_hash)` | agent key only (`signer == contract`) | checks → `Paid` after the transfer succeeds, or `Rejected{reason}`; `maxStrikes` consecutive rejections delete the key |
 | `hire(preimage, j, child)` | agent key only | spends `j` links to open a narrower cell for a new agent key; policy failures return `Rejected{reason}` |
 | `dismiss(child)` | the hiring agent's key | closes that sub-agent and everything under it; funds go to the funder |
@@ -266,7 +266,7 @@ const r = await agent.pay({ invoice: "INV-0042", to: "supplier.near", links: 1, 
 | `ft_on_transfer(sender_id, amount, msg)` | NEP-141 token (via `ft_transfer_call`) | fund a token cell; `msg` = cell id; anything else is refunded |
 | `stake()` payable, `request_unstake`, `withdraw_stake` | guarantor | lock stake; only stake beyond open exposure can leave, after a delay |
 | `open_credit(preimage, j, to, invoice_hash, due_at)` | agent key only | spends links, takes no money yet; refused while the company owes its guarantor (`FROZEN`) |
-| `accept_credit(credit)`, `mark_delivered(credit, hash)` | seller | accepting locks the bond and the guarantor's exposure; delivery starts the inspection window |
+| `accept_credit(credit)`, `mark_delivered(credit, hash)` | seller | accepting pays the fee to the guarantor and locks the bond and its exposure; delivery starts the inspection window |
 | `settle(credit)` / `settle_by_funder(credit)` payable | agent key / funder | pay the seller; identity stays sealed |
 | `dispute(credit, reason)` payable, `resolve_dispute`, `resolve_timeout` | funder escrows the amount / arbiter / anyone after time runs out | no ruling: the seller wins with a delivery proof, otherwise the company gets its escrow back |
 | `claim_default(credit)` | seller (guarantor if the seller stays silent past a further recourse period) | pays the seller up to the full amount from vault, bond, then stake; starts recourse |

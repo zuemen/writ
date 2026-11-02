@@ -195,6 +195,11 @@ def cmd_attest(a):
         # 固定假名：同一家公司跨格累積紀錄；只有保證人算得出來，別人比對不出 LEI
         tag = hmac.new(bytes.fromhex(read_json(VKEY)["sk_hex"]), r["lei"].encode(), hashlib.sha256).hexdigest()[:24]
         terms = read_json(os.path.join(BUNDLE, "terms.json"))
+        signed = f"writ:terms:v1\ncontract={a.contract}\namc={r['amc_said']}\nterms={r['credit']['terms_hash']}\nlei={r['lei']}".encode()
+        try:
+            pysodium.crypto_sign_verify_detached(bytes.fromhex(terms["terms_sig"]), signed, bytes.fromhex(r["le_pk"]))
+        except Exception:
+            sys.exit("REFUSED: the legal entity did not sign these credit terms")
         credit = dict(r["credit"], terms_sig=terms["terms_sig"], entity_tag=tag)
     msg = attestation_message(r, lei_commit, ecr_commit, a.verifier, a.contract, attested_at, credit).encode()
     sig = pysodium.crypto_sign_detached(msg, bytes.fromhex(key["sk_hex"]))
