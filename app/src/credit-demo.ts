@@ -51,7 +51,7 @@ const card1: any = await view(a.writ.id, "risk_card", { cell });
 say(`2  order ${paid} delivered and paid on time → ${JSON.stringify(s1.value ?? s1.error)}; legal entity=${card1.legal_entity}; record: ${card1.settled} settled`);
 
 const unpaid = await order(8, "INV-CREDIT-2", 1);
-await sleep(2500);
+await sleep(5000);
 const s0 = await balance(a.merchant.id);
 const d = await call(seller, a.writ.id, "claim_default", { credit: unpaid }, { gas: teraToGas("100") });
 if (d.error) throw new Error("claim_default: " + d.error);

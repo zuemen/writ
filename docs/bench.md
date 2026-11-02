@@ -1,4 +1,4 @@
-**66 attacks, 66 blocked as expected, attacker gain 0 yoctoNEAR.**
+**75 attacks, 75 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -62,12 +62,21 @@
 | A58 | injected order to a seller outside the mandate | Rejected:SCOPE | Rejected:SCOPE | 0 |
 | A59 | seller accepts an order the guarantor has no stake to back | GUARANTOR_CAPACITY | GUARANTOR_CAPACITY | 0 |
 | A60 | guarantor pulls its stake while it has exposure | STAKE_EXPOSED | STAKE_EXPOSED | 0 |
-| A61 | guarantor commits to an innocent company's LEI and reveals it | LE_DID_NOT_SIGN | LE_DID_NOT_SIGN | 0 |
+| A61 | guarantor commits to another company's LEI, without that company's key, and reveals it | LE_DID_NOT_SIGN | LE_DID_NOT_SIGN | 0 |
 | A62 | hire with a huge duplicated scope, to make the tree too expensive to revoke | Rejected:HIRE_SCOPE | Rejected:HIRE_SCOPE | 0 |
 | A63 | parent and sub-agent each pay the same invoice | Rejected:DUPLICATE | Rejected:DUPLICATE | 0 |
 | A64 | a dismissed key is hired again | Rejected:HIRE_KEY | Rejected:HIRE_KEY | 0 |
 | A65 | parent is tripped; its sub-agent keeps spending | Rejected:SUSPENDED | Rejected:SUSPENDED | 0 |
 | A66 | agent spends the bond locked for a seller | Rejected:FUNDS | Rejected:FUNDS | 0 |
+| A67 | seller accepts an order after the company revoked the agent, on the guarantor's money | AGENT_NOT_ACTIVE | AGENT_NOT_ACTIVE | 0 |
+| A68 | seller marks delivery and claims default together, leaving no time to dispute | INSPECTION_OPEN | INSPECTION_OPEN | 0 |
+| A69 | company disputes first so the seller cannot record delivery | delivery recorded, seller paid | delivery recorded, seller paid | 0 |
+| A70 | company parks money in a sub-agent, defaults, and tries to get it back when the tree closes | money repays the guarantor first | money repays the guarantor first | 0 |
+| A71 | money retained in a closed tree gets stuck after the company repays | released to the company | released to the company | 0 |
+| A72 | company owes the guarantor and pays a friendly seller from the vault first | REPAY_GUARANTOR_FIRST | REPAY_GUARANTOR_FIRST | 0 |
+| A73 | seller files a delivery proof after the arbiter's time ran out | DISPUTE_CLOSED | DISPUTE_CLOSED | 0 |
+| A74 | seller files a proof at the last second and collects before the arbiter can look | ARBITER_STILL_HAS_TIME | ARBITER_STILL_HAS_TIME | 0 |
+| A75 | sub-agent keeps settling after its parent tripped | SUSPENDED | SUSPENDED | 0 |
 | B00 | legit payment 3+2 links to in-scope merchant | Paid | Paid | 0 |
 | B01 | AMC revoked in KERI TEL, ixn submitted by anyone | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
 | B02 | payment to a non-existent account | Rejected:TRANSFER_FAILED, vault refunded | Rejected:TRANSFER_FAILED, vault refunded | 0 |
@@ -95,3 +104,5 @@
 | B24 | employee fired with a debt open: the debt stands, the rest is returned afterwards | seller paid, refund after | seller paid, refund after | 0 |
 | B25 | dispute with full escrow, arbiter and timeout paths; unaccepted offers expire | resolved | resolved | 0 |
 | B26 | funder reinstates a tripped parent: its sub-agents work again | Paid | Paid | 0 |
+| B27 | undelivered orders release the guarantor; repaying after enforcement stops the reveal | released, stays sealed | released, stays sealed | 0 |
+| B28 | released bond repays the guarantor; a silent seller cannot hold exposure open | collected, unblocked | collected, unblocked | 0 |

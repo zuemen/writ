@@ -1361,10 +1361,14 @@ async fn credit_world(bond_bps: u32, stake: u128, grace: u64, recourse: u64) -> 
 
 /// vault：開格後的金庫（yocto）。committed_lei：驗證者承諾的 LEI（測栽贓時和 LE 簽的不同）。
 async fn credit_world_with(bond_bps: u32, stake: u128, grace: u64, recourse: u64, vault: u128, committed_lei: &str) -> anyhow::Result<CreditWorld> {
+    credit_world_full(bond_bps, stake, grace, recourse, vault, committed_lei, 0).await
+}
+
+async fn credit_world_full(bond_bps: u32, stake: u128, grace: u64, recourse: u64, vault: u128, committed_lei: &str, inspect: u64) -> anyhow::Result<CreditWorld> {
     let worker = near_workspaces::sandbox().await?;
     let writ = worker.dev_deploy(&wasm_bytes()?).await?;
     writ.call("new").args_json(json!({"owner": writ.id(), "unseal_delay_secs": 5,
-        "windows": {"accept_ttl": "2", "grace": grace.to_string(), "recourse": recourse.to_string(), "dispute_timeout": "2", "unstake_delay": "1"}}))
+        "windows": {"accept_ttl": "2", "inspect": inspect.to_string(), "grace": grace.to_string(), "recourse": recourse.to_string(), "dispute_timeout": "2", "unstake_delay": "1"}}))
         .transact().await?.into_result()?;
     let verifier = worker.dev_create_account().await?;
     let funder = worker.dev_create_account().await?;
@@ -1719,7 +1723,7 @@ async fn a61_guarantor_cannot_frame_another_company() -> anyhow::Result<()> {
     let e = cw.guarantor("credit_unseal", json!({"credit": id, "lei": victim, "salt": LEI_SALT, "ecr": cw.opening()})).await.unwrap_err();
     assert!(e.contains("LE_DID_NOT_SIGN"), "{}", e);
     assert_eq!(cw.card().await["legal_entity"], "sealed");
-    bench("A61", "guarantor commits to an innocent company's LEI and reveals it", "LE_DID_NOT_SIGN", "LE_DID_NOT_SIGN", gain(&cw.w).await);
+    bench("A61", "guarantor commits to another company's LEI, without that company's key, and reveals it", "LE_DID_NOT_SIGN", "LE_DID_NOT_SIGN", gain(&cw.w).await);
     Ok(())
 }
 
@@ -1789,5 +1793,253 @@ async fn a66_the_agent_cannot_spend_a_locked_bond() -> anyhow::Result<()> {
     let v = spend(&cw.agent, w.writ.id(), &cw.pw.link(5), 2, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "FUNDS");
     bench("A66", "agent spends the bond locked for a seller", "Rejected:FUNDS", "Rejected:FUNDS", gain(w).await);
+    Ok(())
+}
+
+// ---------------------------------------------------------------- 第九輪：信用合約審計
+
+#[tokio::test]
+async fn a67_offers_die_with_the_mandate() -> anyhow::Result<()> {
+    let cw = credit_world(0, 5, 0, 1).await?;
+    let id = cw.opened(1, 1, 3600, "INV-OFFER").await;
+    cw.funder("revoke", json!({"cell": cw.cell.to_string(), "evidence": "fired"}), 0).await.unwrap();
+    let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
+    assert!(e.contains("AGENT_NOT_ACTIVE"), "{}", e);
+    bench("A67", "seller accepts an order after the company revoked the agent, on the guarantor's money", "AGENT_NOT_ACTIVE", "AGENT_NOT_ACTIVE", gain(&cw.w).await);
+    cw.funder("cancel_open", json!({"credit": id}), 0).await.unwrap();
+    assert_eq!(cw.credit(&id).await["status"], "Cancelled");
+    assert_eq!(cw.card().await["outstanding"], "0");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a68_a_seller_cannot_deliver_and_default_at_once() -> anyhow::Result<()> {
+    let cw = credit_world_full(0, 5, 0, 1, 30 * UNIT, LEI, 60).await?;
+    let id = cw.opened(1, 1, 1, "INV-RUSH").await;
+    cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
+    wait_secs(2).await;
+    cw.seller("mark_delivered", json!({"credit": id, "delivery_hash": hex::encode([1u8; 32])})).await.unwrap();
+    let e = cw.seller("claim_default", json!({"credit": id})).await.unwrap_err();
+    assert!(e.contains("INSPECTION_OPEN"), "{}", e);
+    bench("A68", "seller marks delivery and claims default together, leaving no time to dispute", "INSPECTION_OPEN", "INSPECTION_OPEN", gain(&cw.w).await);
+    // 公司搶先爭議，賣方仍能留下交貨憑據；逾時歸賣方
+    let cw = credit_world(0, 5, 0, 1).await?;
+    let id2 = cw.opened(1, 1, 3600, "INV-RACE").await;
+    cw.seller("accept_credit", json!({"credit": id2})).await.unwrap();
+    cw.funder("dispute", json!({"credit": id2, "reason_hash": hex::encode([2u8; 32])}), UNIT).await.unwrap();
+    cw.seller("mark_delivered", json!({"credit": id2, "delivery_hash": hex::encode([1u8; 32])})).await.unwrap();
+    wait_secs(3).await;
+    cw.seller("resolve_timeout", json!({"credit": id2})).await.unwrap();
+    assert_eq!(cw.credit(&id2).await["status"], "Settled");
+    bench("A69", "company disputes first so the seller cannot record delivery", "delivery recorded, seller paid", "delivery recorded, seller paid", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a70_money_hidden_in_a_sub_agent_goes_to_the_debt_first() -> anyhow::Result<()> {
+    // 根格金庫大多搬給子 agent，賴帳後公司想靠斷電把子格的錢領回
+    let cw = credit_world_with(0, 5, 0, 1, 17 * UNIT, LEI).await?;
+    let w = &cw.w;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    let until = c["valid_until"].as_str().unwrap().to_string();
+    let sk = SecretKey::from_random(KeyType::ED25519);
+    let cpw = Payword::new(9);
+    // 3 節給子 agent，加上雇用費，根格只剩一點點
+    let v = hire(&cw.agent, w.writ.id(), &cw.pw.link(3), 3, hire_args(&sk.public_key(), &cpw, &[w.merchant.id()], &until, 3, 3)).await;
+    assert!(v.get("Hired").is_some(), "{}", v);
+    let id = cw.delivered(5, 2, 1, "INV-HIDE").await;
+    wait_secs(2).await;
+    cw.seller("claim_default", json!({"credit": id})).await.unwrap();
+    let debt: u128 = cw.credit(&id).await["debt"].as_str().unwrap().parse()?;
+    assert!(debt > 0, "the guarantor had to pay");
+    wait_secs(2).await;
+    let st0: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
+    let f0 = balance(&w.funder).await;
+    cw.guarantor("enforce_recourse", json!({"credit": id})).await.unwrap();
+    assert!(balance(&w.funder).await <= f0, "the company got nothing back while it owes");
+    let c = cw.credit(&id).await;
+    assert_eq!(c["debt"], "0", "the sub-agent's money repaid the guarantor: {}", c);
+    assert_eq!(c["status"], "Reimbursed", "repaid in full, so no reason to reveal the company");
+    let st1: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
+    assert_eq!(st1["amount"].as_str().unwrap().parse::<u128>()? - st0["amount"].as_str().unwrap().parse::<u128>()?, debt);
+    assert_eq!(cw.card().await["legal_entity"], "sealed");
+    assert_eq!(cw.solvent().await["solvent"], true);
+    bench("A70", "company parks money in a sub-agent, defaults, and tries to get it back when the tree closes", "money repays the guarantor first", "money repays the guarantor first", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b27_undelivered_orders_release_the_guarantor_and_late_repayment_works() -> anyhow::Result<()> {
+    let cw = credit_world_with(0, 5, 0, 1, 4 * UNIT, LEI).await?;
+    let far = cw.opened(1, 1, 3600, "INV-FAR").await;
+    cw.seller("accept_credit", json!({"credit": far})).await.unwrap();
+    let e = cw.w.attacker.call(cw.w.writ.id(), "cancel_open").args_json(json!({"credit": far})).transact().await?.into_result();
+    assert!(format!("{:?}", e).contains("NOT_DUE"));
+    cw.seller("mark_delivered", json!({"credit": far, "delivery_hash": hex::encode([1u8; 32])})).await.unwrap();
+    let v: Value = cw.agent.call(cw.w.writ.id(), "settle").args_json(json!({"credit": far})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
+    assert!(v.get("CreditSettled").is_some(), "{}", v);
+    let id = cw.opened(2, 1, 1, "INV-UNDELIVERED").await;
+    cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
+    wait_secs(2).await;
+    cw.w.attacker.call(cw.w.writ.id(), "cancel_open").args_json(json!({"credit": id})).transact().await?.into_result()?;
+    let st: Value = cw.w.writ.view("stake_of").args_json(json!({"account": cw.w.verifier.id()})).await?.json()?;
+    assert_eq!(st["exposure"], "0", "the guarantor is released");
+    // 斷電之後才還也可以
+    let id = cw.delivered(7, 5, 1, "INV-LATE").await;
+    wait_secs(2).await;
+    cw.seller("claim_default", json!({"credit": id})).await.unwrap();
+    wait_secs(2).await;
+    cw.guarantor("enforce_recourse", json!({"credit": id})).await.unwrap();
+    let c = cw.credit(&id).await;
+    assert_eq!(c["status"], "Enforced");
+    let debt: u128 = c["debt"].as_str().unwrap().parse()?;
+    cw.funder("reimburse", json!({"credit": id}), debt).await.unwrap();
+    assert_eq!(cw.credit(&id).await["status"], "Reimbursed");
+    let e = cw.guarantor("credit_unseal", json!({"credit": id, "lei": LEI, "salt": LEI_SALT, "ecr": cw.opening()})).await.unwrap_err();
+    assert!(e.contains("NOT_ENFORCED"), "{}", e);
+    assert_eq!(cw.solvent().await["solvent"], true);
+    bench("B27", "undelivered orders release the guarantor; repaying after enforcement stops the reveal", "released, stays sealed", "released, stays sealed", 0);
+    Ok(())
+}
+
+// ---------------------------------------------------------------- 第十輪：審計修正的複審
+
+#[tokio::test]
+async fn a71_repaying_releases_what_was_retained() -> anyhow::Result<()> {
+    let cw = credit_world_with(0, 5, 0, 60, 17 * UNIT, LEI).await?;
+    let w = &cw.w;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    let until = c["valid_until"].as_str().unwrap().to_string();
+    let sk = SecretKey::from_random(KeyType::ED25519);
+    let cpw = Payword::new(9);
+    let v = hire(&cw.agent, w.writ.id(), &cw.pw.link(3), 3, hire_args(&sk.public_key(), &cpw, &[w.merchant.id()], &until, 3, 3)).await;
+    assert!(v.get("Hired").is_some(), "{}", v);
+    let id = cw.delivered(5, 2, 1, "INV-STUCK").await;
+    wait_secs(2).await;
+    cw.seller("claim_default", json!({"credit": id})).await.unwrap();
+    assert!(cw.credit(&id).await["debt"].as_str().unwrap().parse::<u128>()? > 0);
+    cw.funder("revoke", json!({"cell": cw.cell.to_string(), "evidence": "closing"}), 0).await.unwrap();
+    let st0: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
+    // 金庫留下的錢就夠還：不必另外帶錢，剩下的放給公司領回
+    cw.funder("reimburse", json!({"credit": id}), 0).await.unwrap();
+    assert_eq!(cw.credit(&id).await["status"], "Reimbursed");
+    let st1: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
+    assert!(st1["amount"].as_str().unwrap().parse::<u128>()? > st0["amount"].as_str().unwrap().parse::<u128>()?);
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    assert_eq!(c["vault"], "0", "nothing left stuck in a closed root: {}", c);
+    assert!(c["unclaimed"].as_str().unwrap().parse::<u128>()? > 0, "{}", c);
+    let f0 = balance(&w.funder).await;
+    cw.funder("claim_refund", json!({"cell": cw.cell.to_string()}), 0).await.unwrap();
+    assert!(balance(&w.funder).await > f0);
+    assert_eq!(cw.solvent().await["solvent"], true);
+    bench("A71", "money retained in a closed tree gets stuck after the company repays", "released to the company", "released to the company", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a72_while_owing_the_guarantor_nothing_else_gets_paid_first() -> anyhow::Result<()> {
+    let cw = credit_world_with(0, 5, 0, 60, 5 * UNIT, LEI).await?;
+    let w = &cw.w;
+    let friend = cw.delivered(1, 1, 3600, "INV-FRIEND").await;
+    let id = cw.delivered(9, 8, 1, "INV-DEBT").await;
+    wait_secs(2).await;
+    cw.seller("claim_default", json!({"credit": id})).await.unwrap();
+    assert!(cw.credit(&id).await["debt"].as_str().unwrap().parse::<u128>()? > 0);
+    let e = cw.funder("settle_by_funder", json!({"credit": friend}), 0).await.unwrap_err();
+    assert!(e.contains("REPAY_GUARANTOR_FIRST"), "{}", e);
+    let v = spend_invoice(&cw.agent, w.writ.id(), &cw.pw.link(10), 1, w.merchant.id(), b"INV-CASHOUT").await;
+    assert_eq!(v["Rejected"]["reason"], "FROZEN", "{}", v);
+    let sk = SecretKey::from_random(KeyType::ED25519);
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    let v = hire(&cw.agent, w.writ.id(), &cw.pw.link(10), 1, hire_args(&sk.public_key(), &Payword::new(3), &[w.merchant.id()], c["valid_until"].as_str().unwrap(), 1, 1)).await;
+    assert_eq!(v["Rejected"]["reason"], "FROZEN", "{}", v);
+    // 自己帶錢來付別筆可以
+    cw.funder("settle_by_funder", json!({"credit": friend}), UNIT).await.unwrap();
+    assert_eq!(cw.credit(&friend).await["status"], "Settled");
+    assert_eq!(cw.solvent().await["solvent"], true);
+    bench("A72", "company owes the guarantor and pays a friendly seller from the vault first", "REPAY_GUARANTOR_FIRST", "REPAY_GUARANTOR_FIRST", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a73_late_delivery_cannot_win_a_dispute() -> anyhow::Result<()> {
+    let cw = credit_world(0, 5, 0, 1).await?;
+    let id = cw.opened(1, 1, 3600, "INV-LATE-PROOF").await;
+    cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
+    cw.funder("dispute", json!({"credit": id, "reason_hash": hex::encode([2u8; 32])}), UNIT).await.unwrap();
+    wait_secs(3).await;
+    let e = cw.seller("mark_delivered", json!({"credit": id, "delivery_hash": hex::encode([1u8; 32])})).await.unwrap_err();
+    assert!(e.contains("DISPUTE_CLOSED"), "{}", e);
+    bench("A73", "seller files a delivery proof after the arbiter's time ran out", "DISPUTE_CLOSED", "DISPUTE_CLOSED", gain(&cw.w).await);
+    cw.seller("resolve_timeout", json!({"credit": id})).await.unwrap();
+    assert_eq!(cw.credit(&id).await["status"], "Cancelled");
+    // 爭議中補交：仲裁人多一段驗收期，不能立刻逾時領走
+    let cw = credit_world_full(0, 5, 0, 1, 30 * UNIT, LEI, 60).await?;
+    let id = cw.opened(1, 1, 3600, "INV-LAST-MINUTE").await;
+    cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
+    cw.funder("dispute", json!({"credit": id, "reason_hash": hex::encode([2u8; 32])}), UNIT).await.unwrap();
+    cw.seller("mark_delivered", json!({"credit": id, "delivery_hash": hex::encode([1u8; 32])})).await.unwrap();
+    wait_secs(3).await;
+    let e = cw.seller("resolve_timeout", json!({"credit": id})).await.unwrap_err();
+    assert!(e.contains("ARBITER_STILL_HAS_TIME"), "{}", e);
+    bench("A74", "seller files a proof at the last second and collects before the arbiter can look", "ARBITER_STILL_HAS_TIME", "ARBITER_STILL_HAS_TIME", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a75_a_suspended_agent_cannot_settle() -> anyhow::Result<()> {
+    let cw = credit_world_with(0, 5, 0, 1, 30 * UNIT, LEI).await?;
+    let w = &cw.w;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    let sk = SecretKey::from_random(KeyType::ED25519);
+    let cpw = Payword::new(5);
+    let v = hire(&cw.agent, w.writ.id(), &cw.pw.link(3), 3, hire_args(&sk.public_key(), &cpw, &[w.merchant.id()], c["valid_until"].as_str().unwrap(), 3, 3)).await;
+    assert!(v.get("Hired").is_some(), "{}", v);
+    let child = Account::from_secret_key(w.writ.id().clone(), sk, &w.worker);
+    let due = now_ns(w).await? + 3_600 * SEC;
+    let v: Value = child.call(w.writ.id(), "open_credit").args_json(json!({"preimage": cpw.link(1), "j": 1, "to": w.merchant.id(), "invoice_hash": hex::encode(Sha256::digest("INV-CHILD")), "due_at": due.to_string()}))
+        .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
+    let id = v["CreditOpened"]["credit"].as_str().unwrap_or_else(|| panic!("{}", v)).to_string();
+    cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
+    for i in 0..3 {
+        spend_invoice(&cw.agent, w.writ.id(), &cw.pw.link(4), 1, w.attacker.id(), format!("X{}", i).as_bytes()).await;
+    }
+    let e = child.call(w.writ.id(), "settle").args_json(json!({"credit": id})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result();
+    assert!(format!("{:?}", e).contains("SUSPENDED"), "{:?}", e);
+    bench("A75", "sub-agent keeps settling after its parent tripped", "SUSPENDED", "SUSPENDED", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b28_guarantor_can_collect_again_and_unblock_a_silent_seller() -> anyhow::Result<()> {
+    // 保證金釋放後再收一次
+    let cw = credit_world(5000, 5, 0, 1).await?;
+    let w = &cw.w;
+    let cw2 = credit_world_with(5000, 5, 0, 1, 5 * UNIT, LEI).await?;
+    let other = cw2.opened(2, 2, 1, "INV-OTHER").await;
+    cw2.seller("accept_credit", json!({"credit": other})).await.unwrap();
+    let id = cw2.delivered(7, 5, 1, "INV-MAIN").await;
+    wait_secs(2).await;
+    cw2.seller("claim_default", json!({"credit": id})).await.unwrap();
+    wait_secs(2).await;
+    cw2.guarantor("enforce_recourse", json!({"credit": id})).await.unwrap();
+    assert_eq!(cw2.credit(&id).await["status"], "Enforced");
+    let d0: u128 = cw2.credit(&id).await["debt"].as_str().unwrap().parse()?;
+    cw2.seller("cancel_open", json!({"credit": other})).await.unwrap();
+    cw2.guarantor("enforce_recourse", json!({"credit": id})).await.unwrap();
+    let d1: u128 = cw2.credit(&id).await["debt"].as_str().unwrap().parse()?;
+    assert!(d1 < d0, "the released bond repaid the guarantor: {} -> {}", d0, d1);
+    cw2.funder("reimburse", json!({"credit": id}), d1).await.unwrap();
+    assert_eq!(cw2.credit(&id).await["status"], "Reimbursed");
+    assert_eq!(cw2.solvent().await["solvent"], true);
+    // 賣方不請求：保證人要等多一段追償期才可代為觸發，錢仍給賣方
+    let id = cw.delivered(1, 1, 1, "INV-SILENT").await;
+    let e = cw.guarantor("claim_default", json!({"credit": id})).await.unwrap_err();
+    assert!(e.contains("ONLY_SELLER"), "{}", e);
+    wait_secs(3).await;
+    cw.guarantor("claim_default", json!({"credit": id})).await.unwrap();
+    let got: Value = w.writ.view("claimable_of").args_json(json!({"account": w.merchant.id()})).await?.json()?;
+    assert_eq!(got.as_str().unwrap().parse::<u128>()?, UNIT, "the seller is still the one paid");
+    bench("B28", "released bond repays the guarantor; a silent seller cannot hold exposure open", "collected, unblocked", "collected, unblocked", 0);
     Ok(())
 }

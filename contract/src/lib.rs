@@ -224,6 +224,7 @@ pub struct Credit {
     pub bond_locked: U128,
     pub exposure: U128,         // 保證人為這筆承擔的金額
     pub delivery_hash: Option<String>,
+    pub delivered_at: U64,
     pub dispute_escrow: U128,
     pub debt: U128,             // 保證人實際賠付、公司還沒還的金額
     pub recourse_until: U64,
@@ -253,6 +254,7 @@ pub struct EntityRecord {
 #[derive(Clone)]
 pub struct Windows {
     pub accept_ttl: U64,
+    pub inspect: U64,       // 交貨後至少這麼久才能請求違約，公司有時間提出爭議
     pub grace: U64,
     pub recourse: U64,
     pub dispute_timeout: U64,
@@ -400,6 +402,7 @@ impl Contract {
             next_credit: 1,
             windows: windows.unwrap_or(Windows {
                 accept_ttl: U64(86_400),
+                inspect: U64(3 * 86_400),
                 grace: U64(3 * 86_400),
                 recourse: U64(14 * 86_400),
                 dispute_timeout: U64(14 * 86_400),
@@ -497,9 +500,10 @@ impl Contract {
         self.used_amcs.insert(args.amc_said.clone(), id);
         if let Some(cr) = &args.credit {
             require!(args.asset.is_none(), "CREDIT_NEAR_ONLY");
-            require!(cr.arbiter != args.verifier, "ARBITER_IS_GUARANTOR");
+            require!(cr.arbiter != args.verifier && cr.arbiter != funder, "ARBITER_NOT_INDEPENDENT");
             require!(cr.bond_bps <= 10_000 && cr.min_tenor.0 <= cr.max_tenor.0, "BAD_CREDIT_TERMS");
             hex32(&cr.terms_hash, "terms_hash");
+            require!(hex::decode(&cr.terms_sig).map(|v| v.len() == 64).unwrap_or(false), "BAD_TERMS_SIG");
             self.terms.insert(id, CreditTerms {
                 args: cr.clone(),
                 guarantor: args.verifier.clone(),
@@ -507,8 +511,9 @@ impl Contract {
                 bond_locked: U128(0),
                 open_debts: 0,
             });
-            if !self.entities.contains_key(&cr.entity_tag) {
-                self.entities.insert(cr.entity_tag.clone(), EntityRecord { first_seen: U64(env::block_timestamp()), ..Default::default() });
+            let key = Self::entity_key(&args.verifier, &cr.entity_tag);
+            if !self.entities.contains_key(&key) {
+                self.entities.insert(key, EntityRecord { first_seen: U64(env::block_timestamp()), ..Default::default() });
             }
         }
         self.vault_total += vault;
@@ -574,6 +579,8 @@ impl Contract {
             Some("EXPIRED")
         } else if self.suspended(&c) {
             Some("SUSPENDED")
+        } else if self.owes_guarantor(c.root) {
+            Some("FROZEN")
         } else if !c.scope.iter().any(|s| *s == to) {
             Some("SCOPE")
         } else if invoice_key.is_none() {
@@ -662,6 +669,8 @@ impl Contract {
             Some("EXPIRED")
         } else if self.suspended(&c) {
             Some("SUSPENDED")
+        } else if self.owes_guarantor(c.root) {
+            Some("FROZEN")
         } else if c.asset.is_some() {
             Some("HIRE_TOKEN")
         } else if child.scope.is_empty() || child.scope.len() > MAX_SCOPE || !child.scope.iter().all(|s| c.scope.contains(s)) {
@@ -790,6 +799,10 @@ impl Contract {
         false
     }
 
+    fn owes_guarantor(&self, root: u64) -> bool {
+        self.terms.get(&root).map(|t| t.open_debts > 0).unwrap_or(false)
+    }
+
     /// 這格能動用的錢：根格要扣掉已鎖給賣方的保證金。
     fn free_vault(&self, id: u64, c: &Cell) -> u128 {
         if c.root == id {
@@ -837,9 +850,18 @@ impl Contract {
         let strikes = c.strikes;
         if matches!(c.status, Status::Revoked { .. }) {
             // 轉帳途中格已被撤銷：關閉的格不能再領錢，直接退給法人
-            let (asset, funder) = (c.asset.clone(), c.funder.clone());
+            let (asset, funder, root_id) = (c.asset.clone(), c.funder.clone(), c.root);
             self.cells.insert(cell.0, c);
-            self.pay_out(cell.0, &asset, funder, amount.0, format!("writ cell {} closed", cell.0));
+            let retain = asset.is_none() && self.terms.get(&root_id).map(|t| t.outstanding.0 > 0 || t.open_debts > 0).unwrap_or(false);
+            if retain {
+                // 公司還欠錢：這筆錢和其他金庫一樣留在根格，先付欠款
+                let mut r = self.cells.get(&root_id).cloned().unwrap();
+                r.vault = U128(r.vault.0 + amount.0);
+                self.cells.insert(root_id, r);
+                self.vault_total += amount.0;
+            } else {
+                self.pay_out(cell.0, &asset, funder, amount.0, format!("writ cell {} closed", cell.0));
+            }
         } else {
             c.vault = U128(c.vault.0 + amount.0);
             if c.asset.is_none() {
@@ -948,7 +970,7 @@ impl Contract {
         }
         // 整棵樹還有未結清的信用：金庫留在根格付欠款，靠撤銷賴不了帳；結清後才可領回
         let root_id = self.cells.get(&id).map(|c| c.root).unwrap_or(id);
-        let keep = refund > 0 && self.terms.get(&root_id).map(|t| t.outstanding.0 > 0).unwrap_or(false);
+        let keep = refund > 0 && self.terms.get(&root_id).map(|t| t.outstanding.0 > 0 || t.open_debts > 0).unwrap_or(false);
         if keep {
             if let Some(mut r) = self.cells.get(&root_id).cloned() {
                 r.vault = U128(r.vault.0 + refund);
@@ -1177,7 +1199,7 @@ impl Contract {
             "within_limit": { "used": c.idx, "of": c.n, "unit": c.unit.0.to_string(), "max_links_per_payment": c.max_links },
             "scope": c.scope,
             "amc_said": c.amc_said,
-            "lei": self.unseals.get(&cell.0).and_then(|u| u.lei.clone()).unwrap_or_else(|| "sealed".to_string()),
+            "lei": self.unseals.get(&cell.0).or_else(|| self.unseals.get(&c.root)).and_then(|u| u.lei.clone()).unwrap_or_else(|| "sealed".to_string()),
             "lei_commit": c.lei_commit,
             "status": c.status,
             "parent": c.parent.map(|p| p.to_string()),
@@ -1204,7 +1226,7 @@ impl Contract {
         let t = self.terms.get(&c.root)?;
         let root = self.cells.get(&c.root)?;
         let stake = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
-        let rec = self.entities.get(&t.args.entity_tag).cloned().unwrap_or_default();
+        let rec = self.entities.get(&Self::entity_key(&t.guarantor, &t.args.entity_tag)).cloned().unwrap_or_default();
         Some(serde_json::json!({
             "legal_entity": self.unseals.get(&c.root).and_then(|u| u.lei.clone()).unwrap_or_else(|| "sealed".to_string()),
             "lei_commit": c.lei_commit,
@@ -1212,6 +1234,7 @@ impl Contract {
             "guarantor_listed": self.verifiers.contains_key(&t.guarantor),
             "guarantor_stake": stake.amount,
             "guarantor_exposure": stake.exposure,
+            "guarantor_unstake_at": stake.unstake_at,
             "credit_limit": t.args.limit,
             "outstanding": t.outstanding,
             "bond_bps": t.args.bond_bps,
@@ -1285,9 +1308,12 @@ impl Contract {
         require!(st.unstake_at.0 > 0 && env::block_timestamp() >= st.unstake_at.0, "UNSTAKE_TOO_EARLY");
         require!(st.amount.0.saturating_sub(st.exposure.0) >= amount.0, "STAKE_EXPOSED");
         st.amount = U128(st.amount.0 - amount.0);
+        st.unstake_at = U64(0); // 每次提領都要重新申請並等待
         self.stakes.insert(who.clone(), st);
         self.vault_total -= amount.0;
-        Promise::new(who).transfer(NearToken::from_yoctonear(amount.0))
+        Promise::new(who.clone())
+            .transfer(NearToken::from_yoctonear(amount.0))
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_REFUND_CB).on_withdraw(who, amount))
     }
 
     /// agent 下單賒帳：花鏈節（人授權的額度），不動錢。賣方接受前沒有任何人受拘束。
@@ -1378,6 +1404,7 @@ impl Contract {
             bond_locked: U128(0),
             exposure: U128(0),
             delivery_hash: None,
+            delivered_at: U64(0),
             dispute_escrow: U128(0),
             debt: U128(0),
             recourse_until: U64(0),
@@ -1394,6 +1421,12 @@ impl Contract {
         require!(env::block_timestamp() <= cr.opened_at.0 + self.windows.accept_ttl.0 * 1_000_000_000, "OFFER_EXPIRED");
         let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
         let root = self.cells.get(&cr.root.0).cloned().unwrap();
+        let cell = self.cells.get(&cr.cell.0).cloned().unwrap();
+        // 公司已撤銷或停權、已凍結、期限已過：這張報價不能再成立，否則是拿保證人的錢墊
+        require!(cell.status == Status::Active && !self.suspended(&cell), "AGENT_NOT_ACTIVE");
+        require!(t.open_debts == 0, "COMPANY_FROZEN");
+        require!(env::block_timestamp() <= cell.valid_until.0, "MANDATE_EXPIRED");
+        require!(cr.seller != t.args.arbiter, "ARBITER_NOT_INDEPENDENT");
         let want = cr.amount.0 * (t.args.bond_bps as u128) / 10_000;
         let free = root.vault.0.saturating_sub(t.bond_locked.0);
         let bond = want.min(free);
@@ -1411,11 +1444,22 @@ impl Contract {
         event("credit_accepted", serde_json::json!({"credit": credit.0.to_string(), "bond": bond.to_string(), "guarantor_exposure": exposure.to_string()}));
     }
 
-    /// 逾時沒人接受：任何人可取消，額度放回（鏈節不退）。
+    /// 取消：沒人接受的報價逾時後任何人可取消，公司或保證人隨時可取消；
+    /// 賣方接受了卻過期沒交貨，也可取消，免得一直卡住保證人的曝險。額度放回，鏈節不退。
     pub fn cancel_open(&mut self, credit: U64) {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
-        require!(cr.status == CreditStatus::Open, "NOT_OPEN");
-        require!(env::block_timestamp() > cr.opened_at.0 + self.windows.accept_ttl.0 * 1_000_000_000, "OFFER_LIVE");
+        let now = env::block_timestamp();
+        let t = self.terms.get(&cr.root.0).cloned().unwrap();
+        let root = self.cells.get(&cr.root.0).cloned().unwrap();
+        let who = env::predecessor_account_id();
+        match cr.status {
+            CreditStatus::Open => require!(
+                who == root.funder || who == t.guarantor || now > cr.opened_at.0 + self.windows.accept_ttl.0 * 1_000_000_000,
+                "OFFER_LIVE"
+            ),
+            CreditStatus::Accepted => require!(now > cr.due_at.0 + self.windows.grace.0 * 1_000_000_000, "NOT_DUE"),
+            _ => env::panic_str("NOT_CANCELLABLE"),
+        }
         self.release(&mut cr, CreditStatus::Cancelled, 0);
         self.credits.insert(credit.0, cr);
     }
@@ -1424,10 +1468,19 @@ impl Contract {
     pub fn mark_delivered(&mut self, credit: U64, delivery_hash: String) {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
         require!(env::predecessor_account_id() == cr.seller, "ONLY_SELLER");
-        require!(cr.status == CreditStatus::Accepted, "NOT_ACCEPTED");
+        // 公司搶先提出爭議時，賣方仍然可以留下交貨憑據，仲裁逾時才不會一律退給公司
+        require!(matches!(cr.status, CreditStatus::Accepted | CreditStatus::Disputed) && cr.delivery_hash.is_none(), "NOT_ACCEPTED");
         hex32(&delivery_hash, "delivery_hash");
+        let now = env::block_timestamp();
         cr.delivery_hash = Some(delivery_hash);
-        cr.status = CreditStatus::Delivered;
+        cr.delivered_at = U64(now);
+        if cr.status == CreditStatus::Accepted {
+            cr.status = CreditStatus::Delivered;
+        } else {
+            // 爭議逾時後不能補；爭議中補交，仲裁人至少還有一段驗收期可以看
+            require!(now <= cr.recourse_until.0, "DISPUTE_CLOSED");
+            cr.recourse_until = U64(cr.recourse_until.0.max(now + self.windows.inspect.0 * 1_000_000_000));
+        }
         self.credits.insert(credit.0, cr);
         event("credit_delivered", serde_json::json!({"credit": credit.0.to_string()}));
     }
@@ -1441,6 +1494,7 @@ impl Contract {
         require!(cr.cell.0 == id, "NOT_YOUR_CREDIT");
         require!(matches!(cr.status, CreditStatus::Accepted | CreditStatus::Delivered), "NOT_SETTLEABLE");
         let mut c = self.cells.get(&id).cloned().unwrap();
+        require!(!self.suspended(&c), "SUSPENDED");
         // 付這一筆時，這筆自己鎖的保證金可以用
         let usable = if id == cr.root.0 { self.free_vault(id, &c) + cr.bond_locked.0 } else { c.vault.0 };
         require!(usable >= cr.amount.0, "VAULT_SHORT");
@@ -1464,10 +1518,13 @@ impl Contract {
         if attached >= cr.amount.0 {
             self.vault_total += cr.amount.0;
             if attached > cr.amount.0 {
-                Promise::new(root.funder.clone()).transfer(NearToken::from_yoctonear(attached - cr.amount.0)).detach();
+                self.vault_total += attached - cr.amount.0;
+                self.credit_seller(&root.funder, attached - cr.amount.0);
             }
         } else {
             require!(attached == 0, "PARTIAL_DEPOSIT");
+            // 欠保證人時金庫要先還保證人，別筆單要另外帶錢來付
+            require!(!self.owes_guarantor(cr.root.0), "REPAY_GUARANTOR_FIRST");
             // 被鎖的這筆保證金可以用來付這一筆
             let t = self.terms.get(&cr.root.0).unwrap();
             let usable = root.vault.0.saturating_sub(t.bond_locked.0 - cr.bond_locked.0);
@@ -1489,7 +1546,18 @@ impl Contract {
         require!(amount > 0, "NOTHING_TO_WITHDRAW");
         self.claimable.remove(&who);
         self.vault_total -= amount;
-        Promise::new(who).transfer(NearToken::from_yoctonear(amount))
+        Promise::new(who.clone())
+            .transfer(NearToken::from_yoctonear(amount))
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_REFUND_CB).on_withdraw(who, U128(amount)))
+    }
+
+    /// 轉帳失敗（帳號不見了）：把錢記回 claimable，帳號回來還能領。
+    #[private]
+    pub fn on_withdraw(&mut self, who: AccountId, amount: U128, #[callback_result] r: Result<(), PromiseError>) {
+        if r.is_err() {
+            self.vault_total += amount.0;
+            self.credit_seller(&who, amount.0);
+        }
     }
 
     /// 公司對貨有意見：附全額押金提出爭議，這時不算違約，也不揭露。賴帳者靠這招省不了錢。
@@ -1530,11 +1598,16 @@ impl Contract {
     /// 賠付順序：該格金庫 → 根格可用金庫 → 這筆鎖定的保證金 → 保證人質押。只凍結新賒帳，不斷電。
     pub fn claim_default(&mut self, credit: U64) {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
-        require!(env::predecessor_account_id() == cr.seller, "ONLY_SELLER");
-        require!(cr.status == CreditStatus::Delivered, "NOT_DELIVERED");
+        let who = env::predecessor_account_id();
         let now = env::block_timestamp();
-        require!(now > cr.due_at.0 + self.windows.grace.0 * 1_000_000_000, "NOT_DUE");
         let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
+        // 賣方一直不請求時曝險會卡住：再過一段追償期，保證人可以代為觸發，錢仍然給賣方
+        let stale = now > cr.due_at.0 + (self.windows.grace.0 + self.windows.recourse.0) * 1_000_000_000
+            && now > cr.delivered_at.0 + (self.windows.inspect.0 + self.windows.recourse.0) * 1_000_000_000;
+        require!(who == cr.seller || (who == t.guarantor && stale), "ONLY_SELLER");
+        require!(cr.status == CreditStatus::Delivered, "NOT_DELIVERED");
+        require!(now > cr.due_at.0 + self.windows.grace.0 * 1_000_000_000, "NOT_DUE");
+        require!(now > cr.delivered_at.0 + self.windows.inspect.0 * 1_000_000_000, "INSPECTION_OPEN");
         let mut left = cr.amount.0;
         if cr.cell.0 != cr.root.0 {
             let mut c = self.cells.get(&cr.cell.0).cloned().unwrap();
@@ -1564,9 +1637,10 @@ impl Contract {
         if left > 0 {
             t.open_debts += 1;
         }
-        let mut rec = self.entities.get(&t.args.entity_tag).cloned().unwrap_or_default();
+        let key = Self::entity_key(&t.guarantor, &t.args.entity_tag);
+        let mut rec = self.entities.get(&key).cloned().unwrap_or_default();
         rec.defaults += 1;
-        self.entities.insert(t.args.entity_tag.clone(), rec);
+        self.entities.insert(key, rec);
         self.terms.insert(cr.root.0, t);
         self.credits.insert(credit.0, cr.clone());
         event("credit_defaulted", serde_json::json!({"credit": credit.0.to_string(), "guarantor_paid": left.to_string(), "recourse_until": cr.recourse_until.0.to_string()}));
@@ -1579,22 +1653,31 @@ impl Contract {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
         let root = self.cells.get(&cr.root.0).cloned().unwrap();
         require!(env::predecessor_account_id() == root.funder, "ONLY_FUNDER");
-        require!(cr.status == CreditStatus::Defaulted && cr.debt.0 > 0, "NO_DEBT");
+        require!(matches!(cr.status, CreditStatus::Defaulted | CreditStatus::Enforced) && cr.debt.0 > 0, "NO_DEBT");
         let d = env::attached_deposit().as_yoctonear();
-        require!(d >= cr.debt.0, "PAY_FULL_DEBT");
         let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
+        // 金庫裡沒被鎖的錢先抵，不足的才要帶錢來
+        let mut r = root.clone();
+        let from_vault = r.vault.0.saturating_sub(t.bond_locked.0).min(cr.debt.0);
+        let due = cr.debt.0 - from_vault;
+        require!(d >= due, "PAY_FULL_DEBT");
+        r.vault = U128(r.vault.0 - from_vault);
+        self.cells.insert(cr.root.0, r);
         let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
         st.amount = U128(st.amount.0 + cr.debt.0);
         self.stakes.insert(t.guarantor.clone(), st);
-        self.vault_total += cr.debt.0;
-        if d > cr.debt.0 {
-            Promise::new(root.funder.clone()).transfer(NearToken::from_yoctonear(d - cr.debt.0)).detach();
+        self.vault_total += due;
+        if d > due {
+            self.vault_total += d - due;
+            self.credit_seller(&root.funder, d - due);
         }
         t.open_debts -= 1;
         self.terms.insert(cr.root.0, t);
         cr.debt = U128(0);
         cr.status = CreditStatus::Reimbursed;
+        let root_id = cr.root.0;
         self.credits.insert(credit.0, cr);
+        self.release_retained(root_id);
         event("credit_reimbursed", serde_json::json!({"credit": credit.0.to_string()}));
     }
 
@@ -1603,18 +1686,41 @@ impl Contract {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
         let t = self.terms.get(&cr.root.0).cloned().unwrap();
         require!(env::predecessor_account_id() == t.guarantor, "ONLY_GUARANTOR");
-        require!(cr.status == CreditStatus::Defaulted && cr.debt.0 > 0, "NO_DEBT");
+        // 已斷電的也可以再收一次：別筆單結束後釋放的保證金要先還保證人
+        require!(matches!(cr.status, CreditStatus::Defaulted | CreditStatus::Enforced) && cr.debt.0 > 0, "NO_DEBT");
         require!(env::block_timestamp() > cr.recourse_until.0, "RECOURSE_OPEN");
-        cr.status = CreditStatus::Enforced;
-        self.credits.insert(credit.0, cr.clone());
         let root = self.cells.get(&cr.root.0).cloned().unwrap();
         if root.status == Status::Active || matches!(root.status, Status::Tripped) {
             self.close(cr.root.0, root, Status::Revoked { by: env::predecessor_account_id(), evidence: format!("recourse on credit {}", credit.0) });
         }
-        event("credit_enforced", serde_json::json!({"credit": credit.0.to_string()}));
+        // 樹裡還有錢（子格金庫都已收回根格）：先還保證人，這筆還清就不必揭露
+        let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
+        let mut root = self.cells.get(&cr.root.0).cloned().unwrap();
+        let usable = root.vault.0.saturating_sub(t.bond_locked.0);
+        let pay = usable.min(cr.debt.0);
+        if pay > 0 {
+            root.vault = U128(root.vault.0 - pay);
+            self.cells.insert(cr.root.0, root);
+            let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+            st.amount = U128(st.amount.0 + pay);
+            self.stakes.insert(t.guarantor.clone(), st);
+            cr.debt = U128(cr.debt.0 - pay);
+        }
+        if cr.debt.0 == 0 {
+            t.open_debts -= 1;
+            cr.status = CreditStatus::Reimbursed;
+        } else {
+            cr.status = CreditStatus::Enforced;
+        }
+        self.terms.insert(cr.root.0, t);
+        self.credits.insert(credit.0, cr.clone());
+        self.release_retained(cr.root.0);
+        let name = if cr.debt.0 == 0 { "credit_reimbursed" } else { "credit_enforced" };
+        event(name, serde_json::json!({"credit": credit.0.to_string()}));
     }
 
-    /// 最後一步：公開公司身分。驗 LEI 承諾、ECR 承諾，以及 LE 對這份條款與 LEI 的簽章，保證人栽贓不了別家公司。
+    /// 最後一步：公開公司身分。驗 LEI 承諾、ECR 承諾，以及打開的 LE 鑰匙對這份條款與 LEI 的簽章。
+    /// 這擋得住「套用別家 LEI 但沒有對方鑰匙」的栽贓；LE 鑰匙和那個 LEI 的關係要靠鏈下驗憑證鏈，合約驗不到。
     /// 不看現行白名單，owner 擋不掉。
     pub fn credit_unseal(&mut self, credit: U64, lei: String, salt: String, ecr: EcrOpening) {
         let cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
@@ -1652,6 +1758,11 @@ impl Contract {
         }))
     }
 
+    /// 假名只在同一個保證人底下有意義；別的保證人不能冒用這份紀錄。
+    fn entity_key(guarantor: &AccountId, tag: &str) -> String {
+        format!("{}:{}", guarantor, tag)
+    }
+
     fn credit_seller(&mut self, seller: &AccountId, amount: u128) {
         let cur = self.claimable.get(seller).copied().unwrap_or(0);
         self.claimable.insert(seller.clone(), cur + amount);
@@ -1673,7 +1784,8 @@ impl Contract {
     }
 
     fn finish_settled(&mut self, cr: &mut Credit) {
-        let tag = self.terms.get(&cr.root.0).unwrap().args.entity_tag.clone();
+        let t = self.terms.get(&cr.root.0).unwrap();
+        let tag = Self::entity_key(&t.guarantor, &t.args.entity_tag);
         let mut rec = self.entities.get(&tag).cloned().unwrap_or_default();
         rec.settled += 1;
         rec.settled_amount = U128(rec.settled_amount.0 + cr.amount.0);
@@ -1691,13 +1803,11 @@ impl Contract {
         if to_seller {
             self.credit_seller(&cr.seller.clone(), amount);
             if escrow > amount {
-                self.vault_total -= escrow - amount;
-                Promise::new(root.funder.clone()).transfer(NearToken::from_yoctonear(escrow - amount)).detach();
+                self.credit_seller(&root.funder, escrow - amount);
             }
             self.finish_settled(&mut cr);
         } else {
-            self.vault_total -= escrow;
-            Promise::new(root.funder.clone()).transfer(NearToken::from_yoctonear(escrow)).detach();
+            self.credit_seller(&root.funder, escrow);
             self.release(&mut cr, CreditStatus::Cancelled, 0);
         }
         event("credit_resolved", serde_json::json!({"credit": cr.id.0.to_string(), "to_seller": to_seller}));
@@ -1707,7 +1817,7 @@ impl Contract {
     /// 樹已關閉且沒有未結清：留在根格的金庫轉成法人可領（claim_refund）。
     fn release_retained(&mut self, root_id: u64) {
         let Some(t) = self.terms.get(&root_id) else { return };
-        if t.outstanding.0 > 0 {
+        if t.outstanding.0 > 0 || t.open_debts > 0 {
             return;
         }
         let Some(mut r) = self.cells.get(&root_id).cloned() else { return };
@@ -1760,5 +1870,14 @@ mod tests {
         assert!(matches!(w.on_transfer(U64(2), U128(5), "00".repeat(32), funder.clone(), 1, 0, Err(PromiseError::Failed)), Verdict::Rejected { .. }));
         assert_eq!(w.cells.get(&2).unwrap().vault.0, 5, "active cell gets the money back");
         assert_eq!(w.vault_total, 5);
+
+        // 公司還欠錢：撤銷中轉帳失敗的錢留在根格，不退給公司
+        let args = CreditArgs { limit: U128(1), bond_bps: 0, min_tenor: U64(0), max_tenor: U64(1), terms_hash: String::new(), terms_sig: String::new(), entity_tag: String::new(), arbiter: writ.clone() };
+        w.terms.insert(1, CreditTerms { args, guarantor: writ.clone(), outstanding: U128(0), bond_locked: U128(0), open_debts: 1 });
+        ctx(vec![PromiseResult::Failed]);
+        assert!(matches!(w.on_transfer(U64(1), U128(5), "00".repeat(32), funder.clone(), 1, 0, Err(PromiseError::Failed)), Verdict::Rejected { .. }));
+        assert_eq!(w.cells.get(&1).unwrap().vault.0, 5, "the money stays for the guarantor");
+        assert_eq!(w.vault_total, 10);
+        assert!(!get_created_receipts().iter().any(|r| r.receiver_id == funder), "nothing goes back to a company that owes");
     }
 }

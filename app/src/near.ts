@@ -57,7 +57,7 @@ export async function call(
 }
 
 /** 部署 + 初始化 + 刪 full-access key 放同一個 batch：之後沒有任何鑰匙能動合約帳號的錢。 */
-export const DEMO_WINDOWS = (recourse: number) => ({ accept_ttl: "600", grace: "0", recourse: String(recourse), dispute_timeout: "60", unstake_delay: "60" });
+export const DEMO_WINDOWS = (recourse: number) => ({ accept_ttl: "600", inspect: "3", grace: "0", recourse: String(recourse), dispute_timeout: "60", unstake_delay: "60" });
 
 export async function deployLocked(id: string, sk: KeyPairString, wasm: Uint8Array, owner: string, unsealDelaySecs: number, recourseSecs = 6) {
   const signer = KeyPair.fromString(sk);
