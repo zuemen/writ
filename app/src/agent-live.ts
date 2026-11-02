@@ -1,6 +1,7 @@
 /**
  * make attack-live —— 真的 LLM 當 agent：讀兩張發票、自己決定怎麼呼叫付款工具。
- * 模型走 NEAR AI Cloud 的 OpenAI 相容 API（NEARAI_API_KEY 放環境變數，不寫進任何檔案）。
+ * 任何 OpenAI 相容 API 都可以：預設 NEAR AI Cloud，也可用 LLM_BASE_URL／LLM_MODEL 換成 Gemini 免費額度等。
+ * 金鑰放環境變數（LLM_API_KEY 或 NEARAI_API_KEY），不寫進任何檔案。
  * 合約不信任模型：模型被騙或沒被騙都照實記錄；通過條件只看「正常發票付成功、攻擊者 0 入帳」。
  * 結果寫進 docs/attack-live.md。
  */
@@ -9,11 +10,11 @@ import { writeFileSync } from "node:fs";
 import { ROOT, fmt } from "./near.js";
 import { A, INJECTED_INVOICE, balance, pay, register } from "./flow.js";
 
-const KEY = process.env.NEARAI_API_KEY;
-const BASE = process.env.NEARAI_BASE_URL ?? "https://cloud-api.near.ai/v1";
-const MODEL = process.env.NEARAI_MODEL ?? "Qwen/Qwen3.8-27B";
+const KEY = process.env.LLM_API_KEY ?? process.env.NEARAI_API_KEY;
+const BASE = process.env.LLM_BASE_URL ?? process.env.NEARAI_BASE_URL ?? "https://cloud-api.near.ai/v1";
+const MODEL = process.env.LLM_MODEL ?? process.env.NEARAI_MODEL ?? "Qwen/Qwen3.8-27B";
 if (!KEY) {
-  console.error("NEARAI_API_KEY is not set. Create a key at https://cloud.near.ai, then: NEARAI_API_KEY=... make attack-live");
+  console.error("No API key. Set NEARAI_API_KEY, or LLM_API_KEY with LLM_BASE_URL and LLM_MODEL for any OpenAI-compatible provider, then: make attack-live");
   process.exit(2);
 }
 

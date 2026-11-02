@@ -29,7 +29,7 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with
 | 3 | `make demo` | a fresh local sandbox starts (port 3030 must be free); the 8-step story prints (about 1 min, includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
 | 4 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
 | 5 | `make keri-check` | the verifier prints 23 ✓ lines (mock root → QVI → legal entity → ECR → AMC: KEL, TEL, ACDC, registry control, schemas, I2I edges, delegation), then refuses 13 forged or stale chains; last line `KERI_FORGERIES\|PASS\|13` |
-| 6 | optional: `NEARAI_API_KEY=... make attack-live` | a real LLM on NEAR AI Cloud reads both invoices and chooses the tool calls; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in `docs/attack-live.md` |
+| 6 | optional: `NEARAI_API_KEY=... make attack-live` (or `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` for any OpenAI-compatible provider) | a real LLM reads both invoices and chooses the tool calls; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in `docs/attack-live.md` |
 
 `make test` runs the bench in a fresh sandbox per test. `make demo` / `make ui` run `scripts/sandbox.sh` (a local `neard` sandbox on :3030; data in `.sandbox/`).
 
