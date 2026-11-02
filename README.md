@@ -10,6 +10,8 @@ The authorization is an Agent Mandate Credential, the credential GLEIF proposes 
 2. **Is this payment inside the mandate?** Counterparty in scope, invoice not already paid, within the per-payment cap, the hash-chain budget and the daily rate, not expired.
 3. **Is the mandate still alive?** HR revokes in the credential layer without the employee's help. Once the signed event reaches the contract, it deletes the agent's NEAR key; the next payment cannot even be signed.
 
+**Live on NEAR testnet:** contract [`writ.writmvyy7yqe-owner.testnet`](https://testnet.nearblocks.io/address/writ.writmvyy7yqe-owner.testnet), every step with its transaction in [`docs/testnet.md`](docs/testnet.md). It has no full-access key.
+
 This README is written for a machine reviewer: every claim below has a command. The trust assumptions are listed in [Trust model](#trust-model).
 
 ---
@@ -225,7 +227,7 @@ Independent reviews by reading the code, after the first bench, found problems t
 - **Malformed `spend` calls cost gas without a strike.** They fail before the policy checks, so the tripwire does not count them. The loss is bounded by the key's allowance, which the fee has already paid for.
 - **Privacy is selective disclosure, not anonymity.** Until a disclosure, only `sha256(LEI‖salt)` is on-chain (salt held by the verifier). Funding accounts, the agent key, the employee's public key (`issuer_pk`) and payments are public and linkable on-chain, so anyone who already knows the employee's KERI identifier can link the cell to them. A revocation event submitted on-chain exposes the signer's AID. Only tier 1 (the LEI) is disclosable; the employee's identity is out of scope.
 - **Single verifier per cell**; no sub-delegation between agents. The NEP-141 path is tested with a mock token (`contract/ft-mock`), not a live stablecoin.
-- **Not deployed to testnet yet.**
+- **Testnet only.** `make testnet` deployed this story; not on mainnet. It needs the faucet, which rate-limits per IP; on a 429 it falls back to sub-accounts of an already funded account.
 
 ## Repository layout
 

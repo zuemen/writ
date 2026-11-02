@@ -2,10 +2,10 @@
  * make testnet —— 把同一個故事搬到 NEAR testnet（需要本人同意才執行：會簽 testnet 交易）。
  * 帳號由 testnet faucet（helper.testnet.near.org）建立，每個約 10 NEAR 測試幣，私鑰寫在 .demo-testnet/（.gitignore）。
  */
-import { KeyPair, type KeyPairString } from "near-api-js";
+import { KeyPair, actions, type KeyPairString } from "near-api-js";
 import { readFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { DEMO, ROOT, as, call, deployLocked, writeJson, readJson, provider } from "./near.js";
+import { DEMO, NEAR, ROOT, as, call, deployLocked, writeJson, readJson, provider } from "./near.js";
 import { py } from "./keri.js";
 
 const tag = process.env.WRIT_TESTNET_TAG ?? `writ${Date.now().toString(36)}`;
@@ -21,15 +21,27 @@ for (const n of names) {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ newAccountId: id, newAccountPublicKey: kp.getPublicKey().toString() }),
   });
-  if (!res.ok) throw new Error(`faucet refused ${id}: ${res.status} ${await res.text()}`);
-  accts[n] = { id, sk: kp.toString() as KeyPairString };
+  if (res.ok) {
+    accts[n] = { id, sk: kp.toString() as KeyPairString };
+  } else if (res.status === 429 && accts.owner) {
+    // faucet 限流：由已領到測試幣的 owner 建子帳號
+    const sub = `${n}.${accts.owner.id}`;
+    await as(accts.owner.id, accts.owner.sk).signAndSendTransaction({
+      receiverId: sub,
+      actions: [actions.createAccount(), actions.transfer(NEAR(n === "acme" ? "6.5" : n === "writ" ? "4" : "0.5")), actions.addFullAccessKey(kp.getPublicKey())],
+      waitUntil: "FINAL",
+    });
+    accts[n] = { id: sub, sk: kp.toString() as KeyPairString };
+  } else {
+    throw new Error(`faucet refused ${id}: ${res.status} ${await res.text()}`);
+  }
   writeJson(path, accts);
-  console.log(`  created ${id}`);
+  console.log(`  created ${accts[n].id}`);
   await new Promise((r) => setTimeout(r, 1500));
 }
 
 const wasm = readFileSync(join(ROOT, "contract/res/writ.wasm"));
-const hash = await deployLocked(accts.writ.id, accts.writ.sk, wasm, accts.owner.id, 10);
+const hash = await deployLocked(accts.writ.id, accts.writ.sk, wasm, accts.owner.id, Number(process.env.WRIT_UNSEAL_SECS ?? 60));
 console.log(`  deployed ${accts.writ.id}, full-access key deleted, tx ${hash}`);
 const owner = as(accts.owner.id, accts.owner.sk);
 for (const [m, args] of [

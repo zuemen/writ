@@ -52,7 +52,7 @@ const u1 = await requestUnseal(cell);
 say("6", `${a.regulator.id} requests disclosure (reason hash of "${u1.reason}") → public, waiting period starts`, { hash: u1.hash });
 const tooEarly = await releaseUnseal(cell);
 say("6", `verifier tries to disclose immediately → ${tooEarly.error}`);
-await new Promise((r) => setTimeout(r, 11_000));
+await new Promise((r) => setTimeout(r, (Number(process.env.WRIT_UNSEAL_SECS ?? 10) + 1) * 1000));
 const u2 = await releaseUnseal(cell);
 say("6", `after the waiting period, verifier discloses; contract checks sha256(LEI|salt) == commitment → ${u2.error ?? "LEI " + u2.lei}`, { hash: u2.hash });
 const p2: any = await present(cell);

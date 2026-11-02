@@ -25,7 +25,7 @@ jobs:
       - run: cd app && npm ci
       - run: make -C contract build
       - name: mutants
-        run: cd contract && WRIT_REBUILD=1 cargo mutants --no-shuffle --shard ${{ matrix.shard }}/8 -- --test bench --lib -- --test-threads=2
+        run: cd contract && WRIT_REBUILD=1 cargo mutants --no-shuffle --shard ${{ matrix.shard }}/8
         continue-on-error: true
       - uses: actions/upload-artifact@v4
         if: always()
