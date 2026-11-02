@@ -71,6 +71,6 @@ const s: any = await view(a.writ.id, "stats");
 say("=", `stats ${JSON.stringify(s)}`);
 
 const ok = dup.value?.Rejected?.reason === "DUPLICATE" && !!r1.value?.Paid && r2.value?.Rejected?.reason === "SCOPE" && tooEarly.error === "TOO_EARLY" && p2.lei === u2.lei && attackerGain === 0n && !r3.error && r4.tag === "MANDATE REVOKED" && !vc.ok;
-console.log(`\nDEMO_RESULT|${ok ? "PASS" : "FAIL"}|paid=${!!r1.value?.Paid}|injection=${r2.value?.Rejected?.reason}|attacker_gain=${attackerGain}|disclosed=${p2.lei === u2.lei}|revoked=${r4.tag}`);
 console.log("The chain held only commitments to the company until a public, time-delayed disclosure. The agent lost its key once the signed revocation reached the contract.");
+console.log(`\nDEMO_RESULT|${ok ? "PASS" : "FAIL"}|paid=${!!r1.value?.Paid}|injection=${r2.value?.Rejected?.reason}|attacker_gain=${attackerGain}|disclosed=${p2.lei === u2.lei}|revoked=${r4.tag}`);
 process.exit(ok ? 0 : 1);

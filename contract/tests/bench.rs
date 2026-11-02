@@ -51,6 +51,12 @@ struct World {
     funder: Account,
     merchant: Account,
     attacker: Account,
+    attacker_start: u128,
+}
+
+/// 攻擊者 NEAR 餘額相對開始時的淨增加（攻擊者自己付 gas，所以沒賺錢時是 0）。
+async fn gain(w: &World) -> i128 {
+    balance(&w.attacker).await.saturating_sub(w.attacker_start) as i128
 }
 
 /// cargo-mutants 用：WRIT_REBUILD=1 時每次測試先從（被突變的）原始碼重建 wasm，否則用 make build 的產物。
@@ -80,7 +86,8 @@ async fn world() -> anyhow::Result<World> {
     writ.call("set_verifier")
         .args_json(json!({"account": verifier.id(), "pk_hex": hex::encode(verifier_sk.verifying_key().to_bytes())}))
         .transact().await?.into_result()?;
-    Ok(World { worker, writ, verifier, verifier_sk, funder, merchant, attacker })
+    let attacker_start = balance(&attacker).await;
+    Ok(World { worker, writ, verifier, verifier_sk, funder, merchant, attacker, attacker_start })
 }
 
 struct Opts {
@@ -238,17 +245,17 @@ async fn a02_over_limit_and_forged_and_replayed_links() -> anyhow::Result<()> {
     // 超過鏈長
     let v = spend(&agent, w.writ.id(), &pw.link(5), 6, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "LIMIT");
-    bench("A02", "spend more links than the mandate holds", "Rejected:LIMIT", "Rejected:LIMIT", 0);
+    bench("A02", "spend more links than the mandate holds", "Rejected:LIMIT", "Rejected:LIMIT", gain(&w).await);
     // 偽造鏈節（agent 自己編一個 preimage）
     let v = spend(&agent, w.writ.id(), &"ab".repeat(32), 1, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "CHAIN");
-    bench("A03", "forged hash-chain link (agent invents budget)", "Rejected:CHAIN", "Rejected:CHAIN", 0);
+    bench("A03", "forged hash-chain link (agent invents budget)", "Rejected:CHAIN", "Rejected:CHAIN", gain(&w).await);
     // 合法一筆後重放同一個鏈節
     let v = spend(&agent, w.writ.id(), &pw.link(1), 1, w.merchant.id()).await.unwrap();
     assert!(v.get("Paid").is_some());
     let v = spend(&agent, w.writ.id(), &pw.link(1), 1, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "CHAIN");
-    bench("A04", "replay an already-spent link", "Rejected:CHAIN", "Rejected:CHAIN", 0);
+    bench("A04", "replay an already-spent link", "Rejected:CHAIN", "Rejected:CHAIN", gain(&w).await);
     Ok(())
 }
 
@@ -262,7 +269,7 @@ async fn a05_daily_rate_limit() -> anyhow::Result<()> {
     // 人已撥出更多鏈節，但今日速率用完
     let v = spend(&agent, w.writ.id(), &pw.link(5), 1, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "RATE");
-    bench("A05", "drain faster than the daily rate (valid links)", "Rejected:RATE", "Rejected:RATE", 0);
+    bench("A05", "drain faster than the daily rate (valid links)", "Rejected:RATE", "Rejected:RATE", gain(&w).await);
     Ok(())
 }
 
@@ -275,7 +282,7 @@ async fn a06_expired_mandate() -> anyhow::Result<()> {
     w.worker.fast_forward(200).await?;
     let v = spend(&agent, w.writ.id(), &pw.link(1), 1, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "EXPIRED");
-    bench("A06", "spend after the AMC validity window", "Rejected:EXPIRED", "Rejected:EXPIRED", 0);
+    bench("A06", "spend after the AMC validity window", "Rejected:EXPIRED", "Rejected:EXPIRED", gain(&w).await);
     Ok(())
 }
 
@@ -295,7 +302,7 @@ async fn a07_tripwire_deletes_key_after_three_strikes() -> anyhow::Result<()> {
     let st: Value = w.writ.view("stats").await?.json()?;
     assert_eq!(st["tripped"], 1);
     assert_eq!(st["rejected"], 3);
-    bench("A07", "injected agent keeps trying (3 strikes)", "key deleted, next call AccessKeyNotFound", proto_tag(&e), 0);
+    bench("A07", "injected agent keeps trying (3 strikes)", "key deleted, next call AccessKeyNotFound", proto_tag(&e), gain(&w).await);
     Ok(())
 }
 
@@ -310,25 +317,25 @@ async fn a08_agent_key_cannot_escape_its_method() -> anyhow::Result<()> {
     // 呼叫 revoke／refresh_key／top_up 以外的寫入方法
     let e = agent.call(w.writ.id(), "set_verifier").args_json(json!({"account": agent.id(), "pk_hex": "00"})).transact().await.unwrap_err();
     assert_eq!(proto_tag(&format!("{:?}", e)), "MethodNameMismatch");
-    bench("A08", "agent key calls admin method set_verifier", "MethodNameMismatch", "MethodNameMismatch", 0);
+    bench("A08", "agent key calls admin method set_verifier", "MethodNameMismatch", "MethodNameMismatch", gain(&w).await);
 
     // 附帶存款（標準 ft_transfer 需要 1 yocto）
     let e = agent.call(w.writ.id(), "spend").args_json(json!({"preimage": "00", "j": 1, "to": w.attacker.id()}))
         .deposit(NearToken::from_yoctonear(1)).transact().await.unwrap_err();
     assert_eq!(proto_tag(&format!("{:?}", e)), "DepositWithFunctionCall");
-    bench("A09", "agent attaches deposit (e.g. ft_transfer 1 yocto)", "DepositWithFunctionCall", "DepositWithFunctionCall", 0);
+    bench("A09", "agent attaches deposit (e.g. ft_transfer 1 yocto)", "DepositWithFunctionCall", "DepositWithFunctionCall", gain(&w).await);
 
     // 直接把合約帳號的 NEAR 轉走
     let e = agent.transfer_near(w.attacker.id(), NearToken::from_millinear(1)).await;
     let s = format!("{:?}", e);
     assert!(s.contains("RequiresFullAccess"), "plain transfer must be impossible: {}", s);
-    bench("A10", "agent sends a plain Transfer from the contract account", "RequiresFullAccess", proto_tag(&s), 0);
+    bench("A10", "agent sends a plain Transfer from the contract account", "RequiresFullAccess", proto_tag(&s), gain(&w).await);
 
     // 用 agent 的鑰匙呼叫別的合約
     let e = agent.call(w.attacker.id(), "anything").transact().await.unwrap_err();
     let s = format!("{:?}", e);
     assert!(s.contains("ReceiverMismatch") || s.contains("MethodNameMismatch") || s.contains("CodeDoesNotExist"), "{}", s);
-    bench("A11", "agent key used against another contract", "ReceiverMismatch", if s.contains("ReceiverMismatch") { "ReceiverMismatch" } else { "OTHER" }, 0);
+    bench("A11", "agent key used against another contract", "ReceiverMismatch", if s.contains("ReceiverMismatch") { "ReceiverMismatch" } else { "OTHER" }, gain(&w).await);
 
     let gain = balance(&w.attacker).await as i128 - before as i128;
     assert_eq!(gain, 0);
@@ -355,18 +362,18 @@ async fn a12_forged_or_tampered_attestation_is_refused() -> anyhow::Result<()> {
     args["signature"] = json!(hex::encode(rogue.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
     let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args.clone()})).deposit(NearToken::from_near(1)).max_gas().transact().await?;
     let s = format!("{:?}", r.into_result()); assert!(s.contains("BAD_ATTESTATION"), "{}", { std::fs::write("/tmp/a12.txt", &s).ok(); "see /tmp/a12.txt" });
-    bench("A12", "self-signed attestation (not a whitelisted verifier)", "BAD_ATTESTATION", "BAD_ATTESTATION", 0);
+    bench("A12", "self-signed attestation (not a whitelisted verifier)", "BAD_ATTESTATION", "BAD_ATTESTATION", gain(&w).await);
     // (b) 驗證者簽了，但出資者把 scope 改成攻擊者
     args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
     args["scope"] = json!([w.attacker.id()]);
     let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args.clone()})).deposit(NearToken::from_near(1)).max_gas().transact().await?;
     let s = format!("{:?}", r.into_result()); assert!(s.contains("BAD_ATTESTATION"), "{}", { std::fs::write("/tmp/a12.txt", &s).ok(); "see /tmp/a12.txt" });
-    bench("A13", "funder widens the scope after the verifier signed", "BAD_ATTESTATION", "BAD_ATTESTATION", 0);
+    bench("A13", "funder widens the scope after the verifier signed", "BAD_ATTESTATION", "BAD_ATTESTATION", gain(&w).await);
     // (c) 另一個帳號拿走別人的 attestation 來開格（funder 綁在簽章裡）
     args["scope"] = json!([w.merchant.id()]);
     let r = w.attacker.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_near(1)).max_gas().transact().await?;
     let s = format!("{:?}", r.into_result()); assert!(s.contains("BAD_ATTESTATION"), "{}", { std::fs::write("/tmp/a12.txt", &s).ok(); "see /tmp/a12.txt" });
-    bench("A14", "attacker replays someone else's attestation", "BAD_ATTESTATION", "BAD_ATTESTATION", 0);
+    bench("A14", "attacker replays someone else's attestation", "BAD_ATTESTATION", "BAD_ATTESTATION", gain(&w).await);
     Ok(())
 }
 
@@ -392,7 +399,7 @@ async fn a15_revoke_by_kel_real_keri_event_is_permissionless() -> anyhow::Result
     let r = w.attacker.call(w.writ.id(), "revoke_by_kel")
         .args_json(json!({"cell": cell.to_string(), "ixn": b64(&hex::encode(bad)), "signature": b64(sig), "ecr": null})).max_gas().transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("BAD_KEL_SIGNATURE"));
-    bench("A15", "forged KERI revocation event", "BAD_KEL_SIGNATURE", "BAD_KEL_SIGNATURE", 0);
+    bench("A15", "forged KERI revocation event", "BAD_KEL_SIGNATURE", "BAD_KEL_SIGNATURE", gain(&w).await);
 
     // 真簽章、真 ixn，但它錨定的是 AMC 的「發行」（seal s="0"），不是撤銷
     let iss = &v["iss_ixn"];
@@ -400,7 +407,7 @@ async fn a15_revoke_by_kel_real_keri_event_is_permissionless() -> anyhow::Result
         .args_json(json!({"cell": cell.to_string(), "ixn": b64(iss["raw_hex"].as_str().unwrap()), "signature": b64(iss["sig_hex"].as_str().unwrap()), "ecr": null}))
         .max_gas().transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("NO_REVOCATION_SEAL"));
-    bench("A24", "genuine signed KERI event that anchors the AMC issuance, not a revocation", "NO_REVOCATION_SEAL", "NO_REVOCATION_SEAL", 0);
+    bench("A24", "genuine signed KERI event that anchors the AMC issuance, not a revocation", "NO_REVOCATION_SEAL", "NO_REVOCATION_SEAL", gain(&w).await);
 
     // 真的 ixn：任何人（這裡用 attacker 帳號）都能提交，不需要信任 watcher
     let funder_before = balance(&w.funder).await;
@@ -425,15 +432,17 @@ async fn a16_failed_transfer_refunds_vault_and_others_cannot_revoke() -> anyhow:
     o.scope = vec![w.merchant.id().clone(), ghost.clone()];
     let (cell, agent, pw) = open_cell(&w, o).await?;
     let v = spend(&agent, w.writ.id(), &pw.link(1), 1, &ghost).await.unwrap();
-    assert!(v.get("Paid").is_some());
+    assert_eq!(v["Rejected"]["reason"], "TRANSFER_FAILED", "Paid only appears when the money arrived: {}", v);
+    let st: Value = w.writ.view("stats").await?.json()?;
+    assert_eq!(st["paid"], 0);
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
     let vault: u128 = c["vault"].as_str().unwrap().parse()?;
     assert_eq!(vault, 1_000_000_000_000_000_000_000_000 - fee(20), "transfer to non-existent account refunded");
-    bench("B02", "payment to a non-existent account", "vault refunded by callback", "refunded", 0);
+    bench("B02", "payment to a non-existent account", "Rejected:TRANSFER_FAILED, vault refunded", "Rejected:TRANSFER_FAILED, vault refunded", 0);
 
     let r = w.attacker.call(w.writ.id(), "revoke").args_json(json!({"cell": cell.to_string(), "evidence": "x"})).transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("NOT_AUTHORIZED"));
-    bench("A16", "stranger tries to revoke (griefing)", "NOT_AUTHORIZED", "NOT_AUTHORIZED", 0);
+    bench("A16", "stranger tries to revoke (griefing)", "NOT_AUTHORIZED", "NOT_AUTHORIZED", gain(&w).await);
 
     // 法人自己撤銷
     w.funder.call(w.writ.id(), "revoke").args_json(json!({"cell": cell.to_string(), "evidence": "manual"})).transact().await?.into_result()?;
@@ -458,7 +467,7 @@ async fn a17_unseal_needs_supervisor_waiting_period_and_matching_commitment() ->
     // 非監理方不能提出調閱
     let r = w.attacker.call(w.writ.id(), "request_unseal").args_json(json!({"cell": cell.to_string(), "reason_hash": reason})).transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("NOT_SUPERVISOR"));
-    bench("A17", "non-supervisor requests disclosure of the legal entity", "NOT_SUPERVISOR", "NOT_SUPERVISOR", 0);
+    bench("A17", "non-supervisor requests disclosure of the legal entity", "NOT_SUPERVISOR", "NOT_SUPERVISOR", gain(&w).await);
 
     w.writ.call("set_supervisor").args_json(json!({"account": supervisor.id(), "enabled": true})).transact().await?.into_result()?;
     supervisor.call(w.writ.id(), "request_unseal").args_json(json!({"cell": cell.to_string(), "reason_hash": reason})).transact().await?.into_result()?;
@@ -471,7 +480,7 @@ async fn a17_unseal_needs_supervisor_waiting_period_and_matching_commitment() ->
     };
     let e = format!("{:?}", release("WRITDEMO000000000017", "salt-demo").await);
     assert!(e.contains("TOO_EARLY"), "{}", e);
-    bench("A18", "verifier discloses before the public waiting period ends", "TOO_EARLY", "TOO_EARLY", 0);
+    bench("A18", "verifier discloses before the public waiting period ends", "TOO_EARLY", "TOO_EARLY", gain(&w).await);
 
     // 法人提出異議（公開留痕，不阻擋）
     w.funder.call(w.writ.id(), "object_unseal").args_json(json!({"cell": cell.to_string()})).transact().await?.into_result()?;
@@ -480,7 +489,7 @@ async fn a17_unseal_needs_supervisor_waiting_period_and_matching_commitment() ->
     // 驗證者想揭露一個不同的 LEI（栽贓給別家公司）
     let e = format!("{:?}", release("529900T8BM49AURSDO55", "salt-demo").await);
     assert!(e.contains("COMMIT_MISMATCH"), "{}", e);
-    bench("A19", "verifier discloses a different LEI than it committed to", "COMMIT_MISMATCH", "COMMIT_MISMATCH", 0);
+    bench("A19", "verifier discloses a different LEI than it committed to", "COMMIT_MISMATCH", "COMMIT_MISMATCH", gain(&w).await);
 
     let out = release("WRITDEMO000000000017", "salt-demo").await?;
     println!("unsealed logs: {:?}", out.logs());
@@ -531,7 +540,7 @@ async fn b04_stablecoin_cell_pays_in_nep141_and_refunds_on_revoke() -> anyhow::R
     let v = spend(&agent, w.writ.id(), &pw.link(4), 1, w.attacker.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "SCOPE");
     assert_eq!(ft_balance(&w, &token, w.attacker.id()).await, 0);
-    bench("A20", "prompt-injected payment from a stablecoin cell", "Rejected:SCOPE", "Rejected:SCOPE", 0);
+    bench("A20", "prompt-injected payment from a stablecoin cell", "Rejected:SCOPE", "Rejected:SCOPE", gain(&w).await);
 
     // 攻擊者持有同一種代幣，硬塞進這格（想污染帳）→ 退回
     w.funder.call(token.id(), "ft_transfer").args_json(json!({"receiver_id": w.attacker.id(), "amount": T.to_string()}))
@@ -542,7 +551,7 @@ async fn b04_stablecoin_cell_pays_in_nep141_and_refunds_on_revoke() -> anyhow::R
     assert_eq!(ft_balance(&w, &token, w.attacker.id()).await, T, "same token from a non-funder is refunded");
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
     assert_eq!(c["vault"], (5 * T - 3 * T / 10).to_string());
-    bench("A25", "non-funder pushes the cell's own stablecoin into it", "refunded, vault unchanged", "refunded", 0);
+    bench("A25", "non-funder pushes the cell's own stablecoin into it", "refunded, vault unchanged", "refunded", gain(&w).await);
 
     // 法人撤銷 → 剩餘代幣退回法人
     let before = ft_balance(&w, &token, w.funder.id()).await;
@@ -571,7 +580,7 @@ async fn a21_token_cell_refuses_foreign_deposits_and_asset_swap() -> anyhow::Res
     assert_eq!(ft_balance(&w, &token, w.attacker.id()).await, 1_000 * T, "foreign token refunded in full");
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
     assert_eq!(c["vault"], (1_000_000_000_000_000_000_000_000 - fee(20)).to_string());
-    bench("A21", "foreign token pushed into a cell via ft_transfer_call", "refunded, vault unchanged", "refunded", 0);
+    bench("A21", "foreign token pushed into a cell via ft_transfer_call", "refunded, vault unchanged", "refunded", gain(&w).await);
 
     // 驗證者簽的是 NEAR 格，法人想改成代幣格
     let agent_sk = SecretKey::from_random(KeyType::ED25519);
@@ -585,7 +594,7 @@ async fn a21_token_cell_refuses_foreign_deposits_and_asset_swap() -> anyhow::Res
     let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_near(1)).max_gas().transact().await?;
     let s = format!("{:?}", r.into_result());
     assert!(s.contains("BAD_ATTESTATION"));
-    bench("A22", "funder swaps the settlement asset after the verifier signed", "BAD_ATTESTATION", "BAD_ATTESTATION", 0);
+    bench("A22", "funder swaps the settlement asset after the verifier signed", "BAD_ATTESTATION", "BAD_ATTESTATION", gain(&w).await);
     Ok(())
 }
 
@@ -621,7 +630,7 @@ async fn b05_boundaries_accounting_and_events() -> anyhow::Result<()> {
     assert!(v.get("Paid").is_some(), "vault exactly equal to amount must pay: {}", v);
     let v = spend(&agent, w.writ.id(), &pw.link(4), 1, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "FUNDS");
-    bench("A23", "spend more than the vault holds (valid links, within rate)", "Rejected:FUNDS", "Rejected:FUNDS", 0);
+    bench("A23", "spend more than the vault holds (valid links, within rate)", "Rejected:FUNDS", "Rejected:FUNDS", gain(&w).await);
 
     // 追加入金後，用完整條鏈（idx + j == n）必須成功
     w.funder.call(w.writ.id(), "top_up").args_json(json!({"cell": cell})).deposit(NearToken::from_yoctonear(2 * UNIT)).transact().await?.into_result()?;
@@ -711,7 +720,7 @@ async fn a26_revoked_mandate_cannot_be_revived_by_replaying_its_attestation() ->
     assert!(format!("{:?}", r.into_result()).contains("AMC_ALREADY_USED"));
     let keys = w.worker.view_access_keys(w.writ.id()).await?;
     assert!(keys.iter().all(|k| k.public_key != agent_sk.public_key()), "the revoked agent key stays deleted");
-    bench("A26", "revoked mandate revived by replaying its own attestation (resets the budget)", "AMC_ALREADY_USED", "AMC_ALREADY_USED", 0);
+    bench("A26", "revoked mandate revived by replaying its own attestation (resets the budget)", "AMC_ALREADY_USED", "AMC_ALREADY_USED", gain(&w).await);
     Ok(())
 }
 
@@ -726,7 +735,7 @@ async fn a27_attestation_is_bound_to_one_contract_deployment() -> anyhow::Result
     let args = signed_args(&w, &o, &agent_sk.public_key(), &pw, until, &other);
     let r = send_register(&w, &args).await?;
     assert!(format!("{:?}", r.into_result()).contains("BAD_ATTESTATION"));
-    bench("A27", "attestation signed for another deployment replayed on this contract", "BAD_ATTESTATION", "BAD_ATTESTATION", 0);
+    bench("A27", "attestation signed for another deployment replayed on this contract", "BAD_ATTESTATION", "BAD_ATTESTATION", gain(&w).await);
     Ok(())
 }
 
@@ -762,7 +771,7 @@ async fn a28_gas_burn_cannot_reach_another_cells_vault() -> anyhow::Result<()> {
     let r = w.funder.call(w.writ.id(), "refresh_key").args_json(json!({"cell": cell.to_string()})).transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("REFRESH_UNPAID"));
     assert!(surplus(&w).await >= before, "this cell's fee covers everything its key burned");
-    bench("A28", "colluding funder + agent burn gas and refresh for free to drain other cells' vaults", "REFRESH_UNPAID", "REFRESH_UNPAID", 0);
+    bench("A28", "colluding funder + agent burn gas and refresh for free to drain other cells' vaults", "REFRESH_UNPAID", "REFRESH_UNPAID", gain(&w).await);
     Ok(())
 }
 
@@ -787,7 +796,7 @@ async fn b07_hr_revokes_the_ecr_without_the_departing_employee() -> anyhow::Resu
     let r = w.attacker.call(w.writ.id(), "revoke_by_kel")
         .args_json(json!({"cell": cell.to_string(), "ixn": ixn, "signature": sig, "ecr": {"le_aid": le_aid, "le_pk": le_pk, "ecr_said": ecr_said, "salt": "wrong"}})).max_gas().transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("BAD_ECR_OPENING"));
-    bench("A29", "attacker presents its own key as the legal entity to revoke the mandate", "BAD_ECR_OPENING", "BAD_ECR_OPENING", 0);
+    bench("A29", "attacker presents its own key as the legal entity to revoke the mandate", "BAD_ECR_OPENING", "BAD_ECR_OPENING", gain(&w).await);
 
     // 承諾打得開，但事件被竄改 → 簽章不過
     let mut tampered = hex::decode(e["raw_hex"].as_str().unwrap())?;
@@ -796,7 +805,7 @@ async fn b07_hr_revokes_the_ecr_without_the_departing_employee() -> anyhow::Resu
     let r = w.attacker.call(w.writ.id(), "revoke_by_kel")
         .args_json(json!({"cell": cell.to_string(), "ixn": b64(&hex::encode(tampered)), "signature": sig, "ecr": {"le_aid": le_aid, "le_pk": le_pk, "ecr_said": ecr_said, "salt": ECR_COMMIT_SALT}})).max_gas().transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("BAD_KEL_SIGNATURE"));
-    bench("A30", "forged ECR revocation event with a valid commitment opening", "BAD_KEL_SIGNATURE", "BAD_KEL_SIGNATURE", 0);
+    bench("A30", "forged ECR revocation event with a valid commitment opening", "BAD_KEL_SIGNATURE", "BAD_KEL_SIGNATURE", gain(&w).await);
 
     // 真事件：任何人交都可以
     w.merchant.call(w.writ.id(), "revoke_by_kel")
@@ -830,11 +839,11 @@ async fn a31_injection_inside_scope_duplicate_and_inflated_invoices() -> anyhow:
 
     let v = spend_invoice(&agent, w.writ.id(), &pw.link(2), 1, w.merchant.id(), b"INV-1").await;
     assert_eq!(v["Rejected"]["reason"], "DUPLICATE");
-    bench("A31", "injection makes the agent pay an in-scope merchant for the same invoice twice", "Rejected:DUPLICATE", "Rejected:DUPLICATE", 0);
+    bench("A31", "injection makes the agent pay an in-scope merchant for the same invoice twice", "Rejected:DUPLICATE", "Rejected:DUPLICATE", gain(&w).await);
 
     let v = spend_invoice(&agent, w.writ.id(), &pw.link(5), 4, w.merchant.id(), b"INV-2").await;
     assert_eq!(v["Rejected"]["reason"], "PER_TX");
-    bench("A32", "injection inflates the amount paid to an in-scope merchant past the per-payment cap", "Rejected:PER_TX", "Rejected:PER_TX", 0);
+    bench("A32", "injection inflates the amount paid to an in-scope merchant past the per-payment cap", "Rejected:PER_TX", "Rejected:PER_TX", gain(&w).await);
 
     let r = agent.call(w.writ.id(), "spend").args_json(json!({"preimage": pw.link(2), "j": 1, "to": w.merchant.id(), "invoice_hash": "not-hex"}))
         .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json::<Value>()?;
@@ -856,7 +865,7 @@ async fn a33_stale_attestation_and_wrong_aid() -> anyhow::Result<()> {
     args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
     let r = send_register(&w, &args).await?;
     assert!(format!("{:?}", r.into_result()).contains("STALE_ATTESTATION"));
-    bench("A33", "attestation signed before a revocation is used long afterwards", "STALE_ATTESTATION", "STALE_ATTESTATION", 0);
+    bench("A33", "attestation signed before a revocation is used long afterwards", "STALE_ATTESTATION", "STALE_ATTESTATION", gain(&w).await);
 
     // 同一把鑰匙替別的 AID 簽的錨定事件，不能拿來撤銷這一格
     let sk = SigningKey::generate(&mut rand::thread_rng());
@@ -869,7 +878,7 @@ async fn a33_stale_attestation_and_wrong_aid() -> anyhow::Result<()> {
     let r = w.attacker.call(w.writ.id(), "revoke_by_kel")
         .args_json(json!({"cell": cell.to_string(), "ixn": b64(ixn.as_bytes()), "signature": b64(&sk.sign(ixn.as_bytes()).to_bytes())})).max_gas().transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("WRONG_AID"));
-    bench("A34", "signed anchoring event from a different KERI identifier", "WRONG_AID", "WRONG_AID", 0);
+    bench("A34", "signed anchoring event from a different KERI identifier", "WRONG_AID", "WRONG_AID", gain(&w).await);
     Ok(())
 }
 
@@ -885,7 +894,7 @@ async fn b08_funder_reinstates_after_the_tripwire() -> anyhow::Result<()> {
 
     let r = w.attacker.call(w.writ.id(), "reinstate").args_json(json!({"cell": cell.to_string()})).deposit(NearToken::from_millinear(250)).transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("ONLY_FUNDER"));
-    bench("A35", "stranger re-arms a tripped agent key", "ONLY_FUNDER", "ONLY_FUNDER", 0);
+    bench("A35", "stranger re-arms a tripped agent key", "ONLY_FUNDER", "ONLY_FUNDER", gain(&w).await);
     let r = w.funder.call(w.writ.id(), "reinstate").args_json(json!({"cell": cell.to_string()})).transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("REINSTATE_UNPAID"));
 
@@ -918,7 +927,7 @@ async fn b09_verifier_updates_signers_after_key_rotation() -> anyhow::Result<()>
     let update = json!({"cell": cell.to_string(), "issuer_aid": AMC_ISSUER, "issuer_pk": hex::encode(new.verifying_key().to_bytes()), "ecr_commit": hex::encode([4u8; 32])});
     let r = w.attacker.call(w.writ.id(), "update_signers").args_json(update.clone()).transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("ONLY_CELL_VERIFIER"));
-    bench("A36", "stranger swaps the keys that may revoke a mandate", "ONLY_CELL_VERIFIER", "ONLY_CELL_VERIFIER", 0);
+    bench("A36", "stranger swaps the keys that may revoke a mandate", "ONLY_CELL_VERIFIER", "ONLY_CELL_VERIFIER", gain(&w).await);
     w.verifier.call(w.writ.id(), "update_signers").args_json(update).transact().await?.into_result()?;
 
     let r = w.merchant.call(w.writ.id(), "revoke_by_kel").args_json(submit(&old)).max_gas().transact().await?;
@@ -949,5 +958,93 @@ async fn b10_locked_deployment_has_no_full_access_key() -> anyhow::Result<()> {
     let got: String = worker.view(acc.id(), "owner").await?.json::<Value>()?.as_str().unwrap().to_string();
     assert_eq!(got, owner.id().as_str());
     bench("B10", "deploy + init + delete full-access key in one batch; owner still manages the whitelist", "0 keys on the contract account", "0 keys on the contract account", 0);
+    Ok(())
+}
+
+// ---------------------------------------------------------------- 第四輪：獨立審計找到的問題
+
+#[tokio::test]
+async fn b11_refund_failure_is_claimable_and_excess_near_returned() -> anyhow::Result<()> {
+    let w = world().await?;
+    const T: u128 = 1_000_000;
+    let token = w.worker.dev_deploy(&std::fs::read("res/ft_mock.wasm")?).await?;
+    token.call("new").args_json(json!({"owner_id": w.funder.id(), "total_supply": (10_000 * T).to_string()})).transact().await?.into_result()?;
+    token.call("storage_deposit").args_json(json!({"account_id": w.writ.id()})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
+    let mut o = default_opts(&w);
+    o.asset = Some(token.id().clone());
+    o.deposit_near = 5;
+    o.unit = T / 10;
+    let before = balance(&w.funder).await;
+    let (cell, _agent, _pw) = open_cell(&w, o).await?;
+    let spent = before - balance(&w.funder).await;
+    assert!(spent < 500_000_000_000_000_000_000_000, "only the fee stays; the rest of the 5 NEAR came back: {}", spent);
+    bench("B11", "token cell: NEAR above the fee is returned", "excess returned", "excess returned", 0);
+
+    w.funder.call(token.id(), "ft_transfer_call").args_json(json!({"receiver_id": w.writ.id(), "amount": (5 * T).to_string(), "msg": cell.to_string()}))
+        .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+    // 法人把代幣餘額清掉並退出代幣，之後撤銷：退款一定失敗
+    w.funder.call(token.id(), "ft_transfer").args_json(json!({"receiver_id": w.writ.id(), "amount": (9_995 * T).to_string()}))
+        .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+    w.funder.call(token.id(), "storage_unregister").args_json(json!({})).deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+    w.funder.call(w.writ.id(), "revoke").args_json(json!({"cell": cell.to_string(), "evidence": "manual"})).max_gas().transact().await?.into_result()?;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(c["unclaimed"], (5 * T).to_string(), "the failed refund is kept, not lost");
+
+    let r = w.attacker.call(w.writ.id(), "claim_refund").args_json(json!({"cell": cell.to_string()})).max_gas().transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("ONLY_FUNDER"));
+    bench("A37", "stranger claims a failed refund", "ONLY_FUNDER", "ONLY_FUNDER", gain(&w).await);
+
+    token.call("storage_deposit").args_json(json!({"account_id": w.funder.id()})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
+    w.funder.call(w.writ.id(), "claim_refund").args_json(json!({"cell": cell.to_string()})).max_gas().transact().await?.into_result()?;
+    assert_eq!(ft_balance(&w, &token, w.funder.id()).await, 5 * T);
+    bench("B12", "refund fails because the funder left the token; funder re-registers and claims", "tokens recovered", "tokens recovered", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a38_removed_verifier_and_supervisor_lose_their_powers() -> anyhow::Result<()> {
+    let w = world().await?;
+    let (cell, _a, _p) = open_cell(&w, default_opts(&w)).await?;
+    let reg = w.worker.dev_create_account().await?;
+    w.writ.call("set_supervisor").args_json(json!({"account": reg.id(), "enabled": true})).transact().await?.into_result()?;
+    reg.call(w.writ.id(), "request_unseal").args_json(json!({"cell": cell.to_string(), "reason_hash": hex::encode([5u8; 32])})).transact().await?.into_result()?;
+    w.writ.call("set_supervisor").args_json(json!({"account": reg.id(), "enabled": false})).transact().await?.into_result()?;
+    let r = w.verifier.call(w.writ.id(), "release_unseal").args_json(json!({"cell": cell.to_string(), "lei": "WRITDEMO000000000017", "salt": "salt-demo"})).transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("REQUESTER_REMOVED"));
+
+    w.writ.call("set_verifier").args_json(json!({"account": w.verifier.id()})).transact().await?.into_result()?;
+    let r = w.verifier.call(w.writ.id(), "revoke").args_json(json!({"cell": cell.to_string(), "evidence": "x"})).transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("NOT_AUTHORIZED"));
+    let p: Value = w.writ.view("present").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(p["chain_valid"], false);
+    bench("A38", "verifier or supervisor removed from the whitelist keeps acting", "REQUESTER_REMOVED, NOT_AUTHORIZED", "REQUESTER_REMOVED, NOT_AUTHORIZED", gain(&w).await);
+
+    let r = w.funder.call(w.writ.id(), "revoke").args_json(json!({"cell": cell.to_string(), "evidence": "x".repeat(200)})).transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("EVIDENCE_TOO_LONG"));
+    bench("A39", "oversized evidence string used to consume shared storage", "EVIDENCE_TOO_LONG", "EVIDENCE_TOO_LONG", gain(&w).await);
+    Ok(())
+}
+
+/// 每筆付款的實際 gas（README 引用這個數字）。
+#[tokio::test]
+async fn b13_gas_cost_of_a_payment() -> anyhow::Result<()> {
+    let w = world().await?;
+    let mut o = default_opts(&w);
+    o.n = 200; o.daily = 200; o.deposit_near = 5; o.unit = UNIT / 10;
+    let (_c, agent, pw) = open_cell(&w, o).await?;
+    let run = |j: u32, k: u32, inv: &'static [u8]| {
+        let (agent, writ, to, pre) = (agent.clone(), w.writ.id().clone(), w.merchant.id().clone(), pw.link(k));
+        async move {
+            let out = agent.call(&writ, "spend").args_json(json!({"preimage": pre, "j": j, "to": to, "invoice_hash": hex::encode(Sha256::digest(inv))}))
+                .gas(near_workspaces::types::Gas::from_tgas(80)).transact().await.unwrap();
+            assert!(out.clone().into_result().unwrap().json::<Value>().unwrap().get("Paid").is_some());
+            out.total_gas_burnt.as_tgas()
+        }
+    };
+    let one = run(1, 1, b"G1").await;
+    let hundred = run(100, 101, b"G2").await;
+    println!("WRIT_GAS|one_link={}|hundred_links={}", one, hundred);
+    assert!(hundred < 30, "a 100-link payment stays cheap: {} Tgas", hundred);
+    bench("B13", "gas burnt by a payment, whole transaction", "under 30 Tgas", &format!("1 link {} Tgas, 100 links {} Tgas", one, hundred), 0);
     Ok(())
 }

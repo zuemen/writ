@@ -1,0 +1,39 @@
+# 手動觸發：cargo-mutants 分片跑合約突變測試。結果在各 job 的 artifact。
+name: mutants
+on: workflow_dispatch
+jobs:
+  mutants:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.0"
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "contract -> target"
+      - run: cargo install cargo-mutants --locked
+      - run: cd app && npm ci
+      - run: make -C contract build
+      - name: mutants
+        run: cd contract && WRIT_REBUILD=1 cargo mutants --no-shuffle --shard ${{ matrix.shard }}/8 -- --test bench --lib -- --test-threads=2
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-${{ matrix.shard }}
+          path: |
+            contract/mutants.out/outcomes.json
+            contract/mutants.out/caught.txt
+            contract/mutants.out/missed.txt
+            contract/mutants.out/timeout.txt
+            contract/mutants.out/unviable.txt

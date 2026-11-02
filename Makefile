@@ -23,16 +23,16 @@ keri-check: keri/.venv/bin/python
 	cd keri && .venv/bin/python test_forgeries.py
 
 demo: setup
-	scripts/sandbox.sh start
+	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && npx tsx src/setup.ts && npx tsx src/demo.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
 ui: setup
-	scripts/sandbox.sh start
+	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && npx tsx src/setup.ts && npx tsx src/server.ts
 
 # 選用：真 LLM 當 agent（需要 NEARAI_API_KEY）。只碰本機 sandbox。結果寫進 docs/attack-live.md
 attack-live: setup
-	scripts/sandbox.sh start
+	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && npx tsx src/setup.ts && npx tsx src/agent-live.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
 clean:

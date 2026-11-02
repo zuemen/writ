@@ -23,7 +23,7 @@ use near_sdk::serde_json::{self, Value};
 use near_sdk::store::{IterableMap, LookupMap, LookupSet};
 use near_sdk::{
     env, near, require, AccountId, Allowance, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise,
-    PromiseError, PublicKey,
+    PromiseError, PromiseOrValue, PublicKey,
 };
 
 /// 給 agent 鑰匙的預設 gas allowance（agent 交易的 gas 從合約帳號扣，這是單把鑰匙能燒掉的上限）。
@@ -43,7 +43,9 @@ pub const AGENT_METHODS: &str = "spend";
 /// scope 最多幾個收款人。
 pub const MAX_SCOPE: usize = 16;
 const NS_PER_DAY: u64 = 86_400_000_000_000;
-const GAS_FOR_CALLBACK: Gas = Gas::from_tgas(5);
+const GAS_FOR_CALLBACK: Gas = Gas::from_tgas(25); // 要付得起撤銷後的 ft_transfer（10）＋ on_refund（5）
+const GAS_FOR_REFUND_CB: Gas = Gas::from_tgas(5);
+const MAX_EVIDENCE: usize = 128;
 const GAS_FOR_FT: Gas = Gas::from_tgas(10);
 
 #[derive(BorshStorageKey)]
@@ -93,6 +95,7 @@ pub struct Cell {
     pub day: u64,                  // 速率計數所屬的日
     pub day_used: u32,             // 當日已消耗幾節
     pub vault: U128,               // 這格可動用的金庫餘額
+    pub unclaimed: U128,           // 關格退款失敗的金額，法人可用 claim_refund 重領
     pub spends: u32,
     pub rejects: u32,              // 累計拒絕
     pub strikes: u32,              // 連續拒絕（成功一筆就歸零）
@@ -322,6 +325,7 @@ impl Contract {
             day: env::block_timestamp() / NS_PER_DAY,
             day_used: 0,
             vault: U128(vault),
+            unclaimed: U128(0),
             spends: 0,
             rejects: 0,
             strikes: 0,
@@ -338,6 +342,10 @@ impl Contract {
             serde_json::json!({"cell": id.to_string(), "amc_said": args.amc_said, "agent_pk": String::from(&args.agent_pk),
                                "verifier": args.verifier, "vault": vault.to_string(), "n": args.n, "unit": args.unit.0.to_string()}),
         );
+        if args.asset.is_some() && deposit.as_yoctonear() > fee {
+            // 代幣格的金庫是代幣，超過開格費的 NEAR 退回
+            Promise::new(funder.clone()).transfer(NearToken::from_yoctonear(deposit.as_yoctonear() - fee)).detach();
+        }
         Promise::new(env::current_account_id())
             .add_access_key_allowance(
                 args.agent_pk,
@@ -367,7 +375,7 @@ impl Contract {
     /// 只有 agent 的 function-call key 能呼叫（signer 必須是合約帳號本身）。
     /// preimage：人鏈下撥給 agent 的鏈節（hex）；j：這筆要消耗幾節；金額 = j × unit。
     /// invoice_hash：這筆付款對應的發票 sha256（hex）。同一格不能付同一張發票兩次，也是對帳的依據。
-    pub fn spend(&mut self, preimage: String, j: u32, to: AccountId, invoice_hash: String) -> Verdict {
+    pub fn spend(&mut self, preimage: String, j: u32, to: AccountId, invoice_hash: String) -> PromiseOrValue<Verdict> {
         require!(env::signer_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
         let pk = env::signer_account_pk();
         let id = *self.key_to_cell.get(&pk).unwrap_or_else(|| env::panic_str("NO_CELL"));
@@ -421,7 +429,7 @@ impl Contract {
             }
             let strikes = c.strikes;
             self.cells.insert(id, c);
-            return Verdict::Rejected { cell: U64(id), reason: r.to_string(), strikes, tripped };
+            return PromiseOrValue::Value(Verdict::Rejected { cell: U64(id), reason: r.to_string(), strikes, tripped });
         }
 
         // 通過：推進鏈頭、扣額度、扣金庫，然後轉帳
@@ -436,15 +444,10 @@ impl Contract {
         if c.asset.is_none() {
             self.vault_total -= amount; // vault_total 只追蹤 NEAR 金庫
         }
-        self.stats.paid += 1;
-        if c.asset.is_none() {
-            self.stats.paid_yocto = U128(self.stats.paid_yocto.0 + amount);
-        }
         let idx = c.idx;
         let remaining = c.n - c.idx;
         let asset = c.asset.clone();
         self.cells.insert(id, c);
-        event("paid", serde_json::json!({"cell": id.to_string(), "to": to, "amount": amount.to_string(), "idx": idx, "invoice": invoice_hash}));
 
         // 跨 receipt 沒有原子回滾：先扣（預留），callback 失敗再退回金庫
         // 代幣格：合約自己發 receipt 附 1 yocto 呼叫 ft_transfer（agent 的 FC key 不能附存款，合約可以）
@@ -457,36 +460,43 @@ impl Contract {
                 GAS_FOR_FT,
             ),
         };
+        // 交易的最終結果就是轉帳的真正結果：Paid 只在錢真的到了才出現
         payout
-            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_CALLBACK).on_transfer(U64(id), U128(amount), invoice_hash))
-            .detach();
-        Verdict::Paid { cell: U64(id), amount: U128(amount), idx, remaining_links: remaining }
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_CALLBACK).on_transfer(U64(id), U128(amount), invoice_hash, to, idx, remaining))
+            .into()
     }
 
     #[private]
-    pub fn on_transfer(&mut self, cell: U64, amount: U128, invoice_hash: String, #[callback_result] r: Result<(), PromiseError>) -> bool {
+    pub fn on_transfer(&mut self, cell: U64, amount: U128, invoice_hash: String, to: AccountId, idx: u32, remaining: u32, #[callback_result] r: Result<(), PromiseError>) -> Verdict {
+        let Some(mut c) = self.cells.get(&cell.0).cloned() else { env::panic_str("NO_CELL") };
         if r.is_ok() {
-            return true;
+            self.stats.paid += 1;
+            if c.asset.is_none() {
+                self.stats.paid_yocto = U128(self.stats.paid_yocto.0 + amount.0);
+            }
+            event("paid", serde_json::json!({"cell": cell.0.to_string(), "to": to, "amount": amount.0.to_string(), "idx": idx, "invoice": invoice_hash}));
+            return Verdict::Paid { cell, amount, idx, remaining_links: remaining };
         }
-        // 沒付成，這張發票還能再付
+        // 沒付成：這張發票還能再付；鏈節已消耗不退（防重放）；錢退回金庫
         if let Some(k) = Self::invoice_key(cell.0, &invoice_hash) {
             self.paid_invoices.remove(&k);
         }
-        // 轉帳失敗（例如收款帳號不存在）：錢退回金庫；鏈節已消耗不退（防重放）
-        if let Some(mut c) = self.cells.get(&cell.0).cloned() {
-            if matches!(c.status, Status::Revoked { .. }) {
-                // 轉帳途中格已被撤銷：關閉的格不能再領錢，直接退給法人
-                self.pay_out(&c.asset, c.funder.clone(), amount.0, format!("writ cell {} closed", cell.0));
-            } else {
-                c.vault = U128(c.vault.0 + amount.0);
-                if c.asset.is_none() {
-                    self.vault_total += amount.0;
-                }
-                self.cells.insert(cell.0, c);
+        c.spends = c.spends.saturating_sub(1);
+        let strikes = c.strikes;
+        if matches!(c.status, Status::Revoked { .. }) {
+            // 轉帳途中格已被撤銷：關閉的格不能再領錢，直接退給法人
+            let (asset, funder) = (c.asset.clone(), c.funder.clone());
+            self.cells.insert(cell.0, c);
+            self.pay_out(cell.0, &asset, funder, amount.0, format!("writ cell {} closed", cell.0));
+        } else {
+            c.vault = U128(c.vault.0 + amount.0);
+            if c.asset.is_none() {
+                self.vault_total += amount.0;
             }
+            self.cells.insert(cell.0, c);
         }
         event("refunded", serde_json::json!({"cell": cell.0.to_string(), "amount": amount.0.to_string()}));
-        false
+        Verdict::Rejected { cell, reason: "TRANSFER_FAILED".to_string(), strikes, tripped: false }
     }
 
     fn invoice_key(cell: u64, invoice_hash: &str) -> Option<Vec<u8>> {
@@ -517,7 +527,8 @@ impl Contract {
     pub fn revoke(&mut self, cell: U64, evidence: String) {
         let c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
         let who = env::predecessor_account_id();
-        require!(who == c.funder || who == c.verifier || who == self.owner, "NOT_AUTHORIZED");
+        require!(evidence.len() <= MAX_EVIDENCE, "EVIDENCE_TOO_LONG");
+        require!(who == c.funder || (who == c.verifier && self.verifiers.contains_key(&who)) || who == self.owner, "NOT_AUTHORIZED");
         self.close(cell.0, c, Status::Revoked { by: who, evidence });
     }
 
@@ -576,23 +587,52 @@ impl Contract {
             Promise::new(env::current_account_id()).delete_key(pk).detach();
         }
         if refund > 0 {
-            self.pay_out(&asset, funder, refund, format!("writ cell {} closed", id));
+            self.pay_out(id, &asset, funder, refund, format!("writ cell {} closed", id));
         }
     }
 
-    /// 把 NEAR 或 NEP-141 轉給法人（不等結果）。
-    fn pay_out(&self, asset: &Option<AccountId>, to: AccountId, amount: u128, memo: String) {
-        match asset {
-            None => Promise::new(to).transfer(NearToken::from_yoctonear(amount)).detach(),
-            Some(token) => Promise::new(token.clone())
-                .function_call(
-                    "ft_transfer".to_string(),
-                    serde_json::to_vec(&serde_json::json!({"receiver_id": to, "amount": amount.to_string(), "memo": memo})).unwrap(),
-                    NearToken::from_yoctonear(1),
-                    GAS_FOR_FT,
-                )
-                .detach(),
+    /// 把 NEAR 或 NEP-141 退給法人；失敗就記在 unclaimed，不會憑空消失。
+    fn pay_out(&self, cell: u64, asset: &Option<AccountId>, to: AccountId, amount: u128, memo: String) {
+        let p = match asset {
+            None => Promise::new(to).transfer(NearToken::from_yoctonear(amount)),
+            Some(token) => Promise::new(token.clone()).function_call(
+                "ft_transfer".to_string(),
+                serde_json::to_vec(&serde_json::json!({"receiver_id": to, "amount": amount.to_string(), "memo": memo})).unwrap(),
+                NearToken::from_yoctonear(1),
+                GAS_FOR_FT,
+            ),
+        };
+        p.then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_REFUND_CB).on_refund(U64(cell), U128(amount))).detach();
+    }
+
+    #[private]
+    pub fn on_refund(&mut self, cell: U64, amount: U128, #[callback_result] r: Result<(), PromiseError>) {
+        if r.is_ok() {
+            return;
         }
+        if let Some(mut c) = self.cells.get(&cell.0).cloned() {
+            c.unclaimed = U128(c.unclaimed.0 + amount.0);
+            if c.asset.is_none() {
+                self.vault_total += amount.0;
+            }
+            self.cells.insert(cell.0, c);
+            event("refund_failed", serde_json::json!({"cell": cell.0.to_string(), "amount": amount.0.to_string()}));
+        }
+    }
+
+    /// 關格退款失敗時（例如法人當時沒在代幣註冊），法人補好條件後重領。
+    pub fn claim_refund(&mut self, cell: U64) {
+        let mut c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
+        require!(env::predecessor_account_id() == c.funder, "ONLY_FUNDER");
+        let amount = c.unclaimed.0;
+        require!(amount > 0, "NOTHING_TO_CLAIM");
+        c.unclaimed = U128(0);
+        if c.asset.is_none() {
+            self.vault_total -= amount;
+        }
+        let (asset, funder) = (c.asset.clone(), c.funder.clone());
+        self.cells.insert(cell.0, c);
+        self.pay_out(cell.0, &asset, funder, amount, format!("writ cell {} refund", cell.0));
     }
 
     /// 續命：gas allowance 用完時由法人或驗證者重掛同一把鑰匙（同 batch 先刪後加）。
@@ -602,7 +642,7 @@ impl Contract {
         require!(env::attached_deposit() >= DEFAULT_ALLOWANCE, "REFRESH_UNPAID");
         let c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
         let who = env::predecessor_account_id();
-        require!(who == c.funder || who == c.verifier, "NOT_AUTHORIZED");
+        require!(who == c.funder || (who == c.verifier && self.verifiers.contains_key(&who)), "NOT_AUTHORIZED");
         require!(c.status == Status::Active, "NOT_ACTIVE");
         Promise::new(env::current_account_id())
             .delete_key(c.agent_pk.clone())
@@ -642,7 +682,7 @@ impl Contract {
     /// 簽發人輪替金鑰後，該格的驗證者重新驗過 KEL 再更新撤銷用的鑰匙（否則新鑰簽的撤銷事件會被拒）。
     pub fn update_signers(&mut self, cell: U64, issuer_aid: String, issuer_pk: String, ecr_commit: String) {
         let mut c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
-        require!(env::predecessor_account_id() == c.verifier, "ONLY_CELL_VERIFIER");
+        require!(env::predecessor_account_id() == c.verifier && self.verifiers.contains_key(&c.verifier), "ONLY_CELL_VERIFIER");
         require!(c.status == Status::Active, "NOT_ACTIVE");
         hex32(&issuer_pk, "issuer_pk");
         hex32(&ecr_commit, "ecr_commit");
@@ -685,7 +725,10 @@ impl Contract {
         let who = env::predecessor_account_id();
         require!(self.supervisors.get(&who).copied().unwrap_or(false), "NOT_SUPERVISOR");
         require!(self.cells.contains_key(&cell.0), "NO_CELL");
-        require!(!self.unseals.contains_key(&cell.0), "ALREADY_REQUESTED");
+        if let Some(u) = self.unseals.get(&cell.0) {
+            // 提出者若已被移出白名單，它的請求不再占住這格
+            require!(u.lei.is_none() && !self.supervisors.contains_key(&u.requester), "ALREADY_REQUESTED");
+        }
         hex32(&reason_hash, "reason_hash");
         let at = env::block_timestamp();
         self.unseals.insert(cell.0, Unseal { requester: who.clone(), reason_hash: reason_hash.clone(), requested_at: U64(at), objected: false, lei: None });
@@ -708,9 +751,10 @@ impl Contract {
     /// 驗證者無法揭露一個跟當初承諾不同的 LEI——這就是 GLEIF 討論稿 p.42 說的 reliance record。
     pub fn release_unseal(&mut self, cell: U64, lei: String, salt: String) {
         let c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
-        require!(env::predecessor_account_id() == c.verifier, "ONLY_CELL_VERIFIER");
+        require!(env::predecessor_account_id() == c.verifier && self.verifiers.contains_key(&c.verifier), "ONLY_CELL_VERIFIER");
         let mut u = self.unseals.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_REQUEST"));
         require!(u.lei.is_none(), "ALREADY_RELEASED");
+        require!(self.supervisors.contains_key(&u.requester), "REQUESTER_REMOVED");
         require!(env::block_timestamp() >= u.requested_at.0 + self.unseal_delay_ns, "TOO_EARLY");
         let digest = hex::encode(env::sha256(format!("{}|{}", lei, salt).as_bytes()));
         require!(digest == c.lei_commit, "COMMIT_MISMATCH");
@@ -768,8 +812,9 @@ impl Contract {
     /// 償付能力：合約餘額必須涵蓋所有 NEAR 格的金庫總和（任何人都能檢查）。
     pub fn solvency(&self) -> Value {
         let balance = env::account_balance().as_yoctonear();
-        serde_json::json!({"vault_total": self.vault_total.to_string(), "balance": balance.to_string(),
-                           "solvent": balance >= self.vault_total})
+        let storage = (env::storage_usage() as u128) * env::storage_byte_cost().as_yoctonear();
+        serde_json::json!({"vault_total": self.vault_total.to_string(), "balance": balance.to_string(), "storage": storage.to_string(),
+                           "solvent": balance >= storage.saturating_add(self.vault_total)})
     }
 
     /// 讓驗證者確認自己要簽的 bytes 跟合約重建的一致。
@@ -806,21 +851,21 @@ mod tests {
         let pk: PublicKey = "ed25519:6E8sCci9badyRkXb3JoRpBj5p8C6Tw41ELDZoiihKEtp".parse().unwrap();
         let cell = |status: Status| Cell {
             amc_said: "E".into(), issuer_aid: String::new(), issuer_pk: String::new(), agent_pk: pk.clone(), verifier: writ.clone(), funder: funder.clone(),
-            lei_commit: String::new(), ecr_commit: String::new(), scope: vec![], valid_until: U64(0), unit: U128(1), n: 1, idx: 1,
+            lei_commit: String::new(), ecr_commit: String::new(), scope: vec![], valid_until: U64(0), unit: U128(1), n: 1, idx: 1, unclaimed: U128(0),
             w_cur: String::new(), daily_links: 1, max_links: 1, max_strikes: 3, day: 0, day_used: 1, vault: U128(0), spends: 1, rejects: 0, strikes: 0, status, asset: None,
         };
         w.cells.insert(1, cell(Status::Revoked { by: funder.clone(), evidence: "x".into() }));
         w.cells.insert(2, cell(Status::Active));
 
         ctx(vec![PromiseResult::Failed]);
-        assert!(!w.on_transfer(U64(1), U128(5), "00".repeat(32), Err(PromiseError::Failed)));
+        assert!(matches!(w.on_transfer(U64(1), U128(5), "00".repeat(32), funder.clone(), 1, 0, Err(PromiseError::Failed)), Verdict::Rejected { .. }));
         assert_eq!(w.cells.get(&1).unwrap().vault.0, 0, "closed cell must not hold money");
         assert_eq!(w.vault_total, 0);
         let receipts = get_created_receipts();
         assert!(receipts.iter().any(|r| r.receiver_id == funder), "refund goes to the funder");
 
         ctx(vec![PromiseResult::Failed]);
-        assert!(!w.on_transfer(U64(2), U128(5), "00".repeat(32), Err(PromiseError::Failed)));
+        assert!(matches!(w.on_transfer(U64(2), U128(5), "00".repeat(32), funder.clone(), 1, 0, Err(PromiseError::Failed)), Verdict::Rejected { .. }));
         assert_eq!(w.cells.get(&2).unwrap().vault.0, 5, "active cell gets the money back");
         assert_eq!(w.vault_total, 5);
     }

@@ -30,3 +30,11 @@ jobs:
         with:
           name: bench
           path: docs/bench.md
+  # 同一個流程在 Dockerfile 裡再跑一次，證明沒有 Rust／Python 的環境也重現得出來
+  docker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t writ .
+      - run: docker run --rm writ

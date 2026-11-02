@@ -1,4 +1,4 @@
-**36 attacks, 36 blocked as expected, attacker gain 0 yoctoNEAR.**
+**39 attacks, 39 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -38,9 +38,12 @@
 | A34 | signed anchoring event from a different KERI identifier | WRONG_AID | WRONG_AID | 0 |
 | A35 | stranger re-arms a tripped agent key | ONLY_FUNDER | ONLY_FUNDER | 0 |
 | A36 | stranger swaps the keys that may revoke a mandate | ONLY_CELL_VERIFIER | ONLY_CELL_VERIFIER | 0 |
+| A37 | stranger claims a failed refund | ONLY_FUNDER | ONLY_FUNDER | 0 |
+| A38 | verifier or supervisor removed from the whitelist keeps acting | REQUESTER_REMOVED, NOT_AUTHORIZED | REQUESTER_REMOVED, NOT_AUTHORIZED | 0 |
+| A39 | oversized evidence string used to consume shared storage | EVIDENCE_TOO_LONG | EVIDENCE_TOO_LONG | 0 |
 | B00 | legit payment 3+2 links to in-scope merchant | Paid | Paid | 0 |
 | B01 | AMC revoked in KERI TEL, ixn submitted by anyone | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
-| B02 | payment to a non-existent account | vault refunded by callback | refunded | 0 |
+| B02 | payment to a non-existent account | Rejected:TRANSFER_FAILED, vault refunded | Rejected:TRANSFER_FAILED, vault refunded | 0 |
 | B03 | supervisor request → wait → verifier discloses committed LEI (public tx) | LEI disclosed, objection on record | disclosed | 0 |
 | B04 | stablecoin cell: agent pays 3 links in NEP-141 (contract attaches the 1 yocto) | merchant +0.3 tUSDC | merchant +0.3 tUSDC | 0 |
 | B05 | boundaries: vault == amount pays, last link spendable, top_up, counters, solvency | all exact | all exact | 0 |
@@ -49,3 +52,6 @@
 | B08 | three bad invoices trip the key; funder pays to reinstate; agent pays again | Paid after reinstate | Paid after reinstate | 0 |
 | B09 | employee rotates keys; verifier updates the signer; new key revokes, old key cannot | key deleted by the new key | key deleted by the new key | 0 |
 | B10 | deploy + init + delete full-access key in one batch; owner still manages the whitelist | 0 keys on the contract account | 0 keys on the contract account | 0 |
+| B11 | token cell: NEAR above the fee is returned | excess returned | excess returned | 0 |
+| B12 | refund fails because the funder left the token; funder re-registers and claims | tokens recovered | tokens recovered | 0 |
+| B13 | gas burnt by a payment, whole transaction | under 30 Tgas | 1 link 5 Tgas, 100 links 7 Tgas | 0 |

@@ -19,6 +19,7 @@ test: build
 	cargo test --lib
 	cargo test --test bench -- --nocapture --test-threads=2 2>&1 | tee /tmp/writ_bench.log | python3 ../scripts/bench_table.py > ../docs/bench.md
 	cat ../docs/bench.md
+	grep "test result" /tmp/writ_bench.log
 	grep -q "test result: ok" /tmp/writ_bench.log
 
 # 容器裡 fd 硬上限 < 65535 時 neard 拒絕啟動；用 shim 繞過（一般電腦不需要）
@@ -28,6 +29,7 @@ test-inner:
 	cargo test --lib
 	cargo test --test bench -- --nocapture --test-threads=2 2>&1 | tee /tmp/writ_bench.log | python3 ../scripts/bench_table.py > ../docs/bench.md
 	cat ../docs/bench.md
+	grep "test result" /tmp/writ_bench.log
 	grep -q "test result: ok" /tmp/writ_bench.log
 ../tools/fakerlimit.so: ../tools/fakerlimit.c
 	gcc -shared -fPIC -o $@ $< -ldl
