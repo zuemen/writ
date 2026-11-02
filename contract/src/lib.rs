@@ -35,11 +35,22 @@ const STORAGE_PER_INVOICE: u128 = 1_000_000_000_000_000_000_000;
 /// attestation 簽出後多久內要拿去開格：驗證者看到的「未撤銷」不能無限期沿用。
 pub const MAX_ATTESTATION_AGE_NS: u64 = 3_600_000_000_000;
 
+/// 子 agent 的 gas 上限。雇用費從上層金庫扣，所以子 agent 燒的 gas 也是這棵樹自己付的。
+pub const CHILD_ALLOWANCE: NearToken = NearToken::from_millinear(100);
+const CHILD_STORAGE: u128 = 15_000_000_000_000_000_000_000;
+/// 一棵樹最多幾層、幾格：撤銷要在一筆交易內刪掉整棵樹，所以大小要有上限。
+pub const MAX_DEPTH: u32 = 3;
+pub const MAX_TREE: u32 = 16;
+
+fn hire_fee(n: u32) -> u128 {
+    CHILD_ALLOWANCE.as_yoctonear() + CHILD_STORAGE + (n as u128) * STORAGE_PER_INVOICE
+}
+
 fn register_fee(n: u32) -> u128 {
     REGISTER_FEE.as_yoctonear() + (n as u128) * STORAGE_PER_INVOICE
 }
 /// agent 鑰匙能呼叫的方法——只有這一個寫入方法。
-pub const AGENT_METHODS: &str = "spend";
+pub const AGENT_METHODS: &str = "spend,hire,dismiss";
 /// scope 最多幾個收款人。
 pub const MAX_SCOPE: usize = 16;
 const NS_PER_DAY: u64 = 86_400_000_000_000;
@@ -102,6 +113,11 @@ pub struct Cell {
     pub status: Status,
     /// None = NEAR 原生代幣；Some(token) = NEP-141（例如穩定幣），金庫以該代幣最小單位計
     pub asset: Option<AccountId>,
+    pub root: u64,                 // 這棵樹的根格（根格指向自己）
+    pub parent: Option<u64>,       // 雇用它的格
+    pub depth: u32,                // 根格 = 0
+    pub children: Vec<u64>,        // 它雇用的格
+    pub tree_size: u32,            // 整棵樹幾格（只在根格維護）
 }
 
 /// spend 的判決。被擋不是錯誤，是正常結果。
@@ -109,6 +125,7 @@ pub struct Cell {
 #[derive(Debug, PartialEq)]
 pub enum Verdict {
     Paid { cell: U64, amount: U128, idx: u32, remaining_links: u32 },
+    Hired { cell: U64, child: U64, links: u32, remaining_links: u32 },
     Rejected { cell: U64, reason: String, strikes: u32, tripped: bool },
 }
 
@@ -138,6 +155,18 @@ pub struct RegisterArgs {
     /// 結算資產：省略 = NEAR；NEP-141 合約帳號 = 以該代幣支付（綁在 attestation 裡）
     #[serde(default)]
     pub asset: Option<AccountId>,
+}
+
+/// agent 雇用子 agent 的條件。全部只能比上層更窄，合約逐項檢查。
+#[near(serializers = [json])]
+#[derive(Clone)]
+pub struct HireArgs {
+    pub agent_pk: PublicKey,
+    pub w0: String,
+    pub scope: Vec<AccountId>,
+    pub valid_until: U64,
+    pub daily_links: u32,
+    pub max_links: u32,
 }
 
 /// 打開 ecr_commit：HR（法人）撤銷 ECR 時用。LE 公鑰與 ECR SAID 平常不上鏈。
@@ -331,6 +360,11 @@ impl Contract {
             strikes: 0,
             status: Status::Active,
             asset: args.asset.clone(),
+            root: id,
+            parent: None,
+            depth: 0,
+            children: vec![],
+            tree_size: 1,
         };
         self.cells.insert(id, cell);
         self.key_to_cell.insert(args.agent_pk.clone(), id);
@@ -415,21 +449,8 @@ impl Contract {
         };
 
         if let Some(r) = reason {
-            c.rejects += 1;
-            c.strikes += 1;
-            self.stats.rejected += 1;
-            let tripped = c.max_strikes > 0 && c.strikes >= c.max_strikes;
-            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "to": to, "j": j, "strikes": c.strikes}));
-            if tripped {
-                c.status = Status::Tripped;
-                self.stats.tripped += 1;
-                self.key_to_cell.remove(&pk);
-                event("tripped", serde_json::json!({"cell": id.to_string(), "agent_pk": String::from(&pk)}));
-                Promise::new(env::current_account_id()).delete_key(pk).detach();
-            }
-            let strikes = c.strikes;
-            self.cells.insert(id, c);
-            return PromiseOrValue::Value(Verdict::Rejected { cell: U64(id), reason: r.to_string(), strikes, tripped });
+            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "to": to, "j": j, "strikes": c.strikes + 1}));
+            return PromiseOrValue::Value(self.reject(id, c, pk, r));
         }
 
         // 通過：推進鏈頭、扣額度、扣金庫，然後轉帳
@@ -464,6 +485,166 @@ impl Contract {
         payout
             .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_CALLBACK).on_transfer(U64(id), U128(amount), invoice_hash, to, idx, remaining))
             .into()
+    }
+
+    /// agent 雇用子 agent：用自己的鏈節換出一段預算給它。
+    /// 子 agent 能動用的錢，一定是員工已經撥給上層的鏈節；對手、期限、速率、單筆上限只能更窄。
+    /// 政策拒絕跟 spend 一樣：回傳 Rejected、留痕、算 strike。
+    pub fn hire(&mut self, preimage: String, j: u32, child: HireArgs) -> Verdict {
+        require!(env::signer_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
+        let pk = env::signer_account_pk();
+        let id = *self.key_to_cell.get(&pk).unwrap_or_else(|| env::panic_str("NO_CELL"));
+        let mut c = self.cells.get(&id).cloned().unwrap();
+        require!(c.status == Status::Active, "NOT_ACTIVE");
+        let now = env::block_timestamp();
+        let today = now / NS_PER_DAY;
+        if today != c.day {
+            c.day = today;
+            c.day_used = 0;
+        }
+        let amount = (j as u128).saturating_mul(c.unit.0);
+        // 雇用費由根格（公司）付：子 agent 的金庫只有撥給它的預算，付不起也不該付
+        let root_cell = if c.root == id { None } else { self.cells.get(&c.root).cloned() };
+        let tree_size = root_cell.as_ref().map(|r| r.tree_size).unwrap_or(c.tree_size);
+        let fee = hire_fee(j);
+        let funded = match &root_cell {
+            None => c.vault.0 >= amount.saturating_add(fee),
+            Some(r) => c.vault.0 >= amount && r.vault.0 >= fee,
+        };
+        let w0_ok = hex::decode(&child.w0).map(|v| v.len() == 32).unwrap_or(false);
+        let reason: Option<&str> = if now > c.valid_until.0 {
+            Some("EXPIRED")
+        } else if c.asset.is_some() {
+            Some("HIRE_TOKEN")
+        } else if child.scope.is_empty() || !child.scope.iter().all(|s| c.scope.contains(s)) {
+            Some("HIRE_SCOPE")
+        } else if child.valid_until.0 > c.valid_until.0
+            || child.valid_until.0 <= now
+            || child.daily_links == 0
+            || child.daily_links > c.daily_links
+            || child.max_links == 0
+            || child.max_links > c.max_links
+            || !w0_ok
+        {
+            Some("HIRE_TERMS")
+        } else if c.depth + 1 > MAX_DEPTH {
+            Some("HIRE_DEPTH")
+        } else if tree_size >= MAX_TREE {
+            Some("HIRE_TREE")
+        } else if self.key_to_cell.contains_key(&child.agent_pk) {
+            Some("HIRE_KEY")
+        } else if j == 0 || c.idx.saturating_add(j) > c.n {
+            Some("LIMIT")
+        } else if !Self::chain_ok(&preimage, j, &c.w_cur) {
+            Some("CHAIN")
+        } else if c.day_used.saturating_add(j) > c.daily_links {
+            Some("RATE")
+        } else if !funded {
+            Some("FUNDS")
+        } else {
+            None
+        };
+        if let Some(r) = reason {
+            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "j": j, "strikes": c.strikes + 1}));
+            return self.reject(id, c, pk, r);
+        }
+
+        c.w_cur = preimage.to_lowercase();
+        c.idx += j;
+        c.day_used += j;
+        c.strikes = 0;
+        c.vault = U128(c.vault.0 - amount - if root_cell.is_none() { fee } else { 0 });
+        self.vault_total -= fee; // 費用留在合約付儲存與 gas；amount 只是換格，總額不變
+        let child_id = self.next_id;
+        self.next_id += 1;
+        c.children.push(child_id);
+        let cell = Cell {
+            amc_said: format!("{}/sub-{}", c.amc_said, child_id),
+            issuer_aid: String::new(),
+            issuer_pk: String::new(),
+            agent_pk: child.agent_pk.clone(),
+            verifier: c.verifier.clone(),
+            funder: c.funder.clone(),
+            lei_commit: c.lei_commit.clone(),
+            ecr_commit: String::new(),
+            scope: child.scope,
+            valid_until: child.valid_until,
+            unit: c.unit,
+            n: j,
+            idx: 0,
+            w_cur: child.w0.to_lowercase(),
+            daily_links: child.daily_links,
+            max_links: child.max_links,
+            max_strikes: if c.max_strikes == 0 { 3 } else { c.max_strikes },
+            day: today,
+            day_used: 0,
+            vault: U128(amount),
+            unclaimed: U128(0),
+            spends: 0,
+            rejects: 0,
+            strikes: 0,
+            status: Status::Active,
+            asset: None,
+            root: c.root,
+            parent: Some(id),
+            depth: c.depth + 1,
+            children: vec![],
+            tree_size: 0,
+        };
+        self.cells.insert(child_id, cell);
+        self.key_to_cell.insert(child.agent_pk.clone(), child_id);
+        self.stats.cells += 1;
+        let remaining = c.n - c.idx;
+        match root_cell {
+            None => {
+                c.tree_size += 1;
+                self.cells.insert(id, c);
+            }
+            Some(mut r) => {
+                r.tree_size += 1;
+                r.vault = U128(r.vault.0 - fee);
+                self.cells.insert(c.root, r);
+                self.cells.insert(id, c);
+            }
+        }
+        event("hired", serde_json::json!({"cell": id.to_string(), "child": child_id.to_string(), "links": j, "agent_pk": String::from(&child.agent_pk)}));
+        Promise::new(env::current_account_id())
+            .add_access_key_allowance(
+                child.agent_pk,
+                Allowance::limited(CHILD_ALLOWANCE).unwrap(),
+                env::current_account_id(),
+                AGENT_METHODS.to_string(),
+            )
+            .detach();
+        Verdict::Hired { cell: U64(id), child: U64(child_id), links: j, remaining_links: remaining }
+    }
+
+    /// agent 解僱自己雇用的子 agent（連同它底下的樹）。剩餘的錢退回法人。
+    pub fn dismiss(&mut self, child: U64) {
+        require!(env::signer_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
+        let pk = env::signer_account_pk();
+        let id = *self.key_to_cell.get(&pk).unwrap_or_else(|| env::panic_str("NO_CELL"));
+        let c = self.cells.get(&child.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
+        require!(c.parent == Some(id), "NOT_PARENT");
+        self.close(child.0, c, Status::Revoked { by: env::current_account_id(), evidence: format!("dismissed by cell {}", id) });
+    }
+
+    /// 政策拒絕：計 strike，連續太多次刪鑰匙。回傳 Rejected，交易本身成功。
+    fn reject(&mut self, id: u64, mut c: Cell, pk: PublicKey, r: &str) -> Verdict {
+        c.rejects += 1;
+        c.strikes += 1;
+        self.stats.rejected += 1;
+        let tripped = c.max_strikes > 0 && c.strikes >= c.max_strikes;
+        if tripped {
+            c.status = Status::Tripped;
+            self.stats.tripped += 1;
+            self.key_to_cell.remove(&pk);
+            event("tripped", serde_json::json!({"cell": id.to_string(), "agent_pk": String::from(&pk)}));
+            Promise::new(env::current_account_id()).delete_key(pk).detach();
+        }
+        let strikes = c.strikes;
+        self.cells.insert(id, c);
+        Verdict::Rejected { cell: U64(id), reason: r.to_string(), strikes, tripped }
     }
 
     #[private]
@@ -566,25 +747,43 @@ impl Contract {
     }
 
     /// 關格：刪鑰匙、剩餘金庫退回法人。
-    fn close(&mut self, id: u64, mut c: Cell, status: Status) {
+    /// 也關閉它雇用的整棵子樹：一筆交易刪掉所有鑰匙，錢全部退回法人。
+    fn close(&mut self, id: u64, c: Cell, status: Status) {
         require!(c.status == Status::Active || matches!(c.status, Status::Tripped), "ALREADY_CLOSED");
-        let refund = c.vault.0;
-        let was_active = c.status == Status::Active;
-        c.vault = U128(0);
-        c.status = status.clone();
-        let asset = c.asset.clone();
+        let (asset, funder) = (c.asset.clone(), c.funder.clone());
+        let mut refund = 0u128;
+        let mut keys: Vec<PublicKey> = vec![];
+        let mut stack: Vec<(u64, Cell, Status)> = vec![(id, c, status)];
+        while let Some((cid, mut cell, st)) = stack.pop() {
+            if cell.status == Status::Active {
+                keys.push(cell.agent_pk.clone()); // tripped 的格鑰匙已刪過；再刪會失敗
+            }
+            let part = cell.vault.0;
+            refund += part;
+            cell.vault = U128(0);
+            cell.status = st.clone();
+            self.key_to_cell.remove(&cell.agent_pk);
+            self.stats.revoked += 1;
+            event("revoked", serde_json::json!({"cell": cid.to_string(), "status": st, "refund": part.to_string()}));
+            for k in cell.children.iter() {
+                if let Some(ch) = self.cells.get(k).cloned() {
+                    if ch.status == Status::Active || matches!(ch.status, Status::Tripped) {
+                        let by = match &st { Status::Revoked { by, .. } => by.clone(), _ => env::current_account_id() };
+                        stack.push((*k, ch, Status::Revoked { by, evidence: format!("parent cell {} closed", cid) }));
+                    }
+                }
+            }
+            self.cells.insert(cid, cell);
+        }
         if asset.is_none() {
             self.vault_total -= refund;
         }
-        self.stats.revoked += 1;
-        self.key_to_cell.remove(&c.agent_pk);
-        let pk = c.agent_pk.clone();
-        let funder = c.funder.clone();
-        self.cells.insert(id, c);
-        event("revoked", serde_json::json!({"cell": id.to_string(), "status": status, "refund": refund.to_string()}));
-        if was_active {
-            // tripped 的格鑰匙已刪過；再刪會失敗
-            Promise::new(env::current_account_id()).delete_key(pk).detach();
+        if let Some((first, rest)) = keys.split_first() {
+            let mut batch = Promise::new(env::current_account_id()).delete_key(first.clone());
+            for k in rest {
+                batch = batch.delete_key(k.clone());
+            }
+            batch.detach();
         }
         if refund > 0 {
             self.pay_out(id, &asset, funder, refund, format!("writ cell {} closed", id));
@@ -684,6 +883,7 @@ impl Contract {
         let mut c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
         require!(env::predecessor_account_id() == c.verifier && self.verifiers.contains_key(&c.verifier), "ONLY_CELL_VERIFIER");
         require!(c.status == Status::Active, "NOT_ACTIVE");
+        require!(c.parent.is_none(), "NOT_ROOT");
         hex32(&issuer_pk, "issuer_pk");
         hex32(&ecr_commit, "ecr_commit");
         c.issuer_aid = issuer_aid;
@@ -798,6 +998,9 @@ impl Contract {
             "lei": self.unseals.get(&cell.0).and_then(|u| u.lei.clone()).unwrap_or_else(|| "sealed".to_string()),
             "lei_commit": c.lei_commit,
             "status": c.status,
+            "parent": c.parent.map(|p| p.to_string()),
+            "children": c.children.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+            "depth": c.depth,
         }))
     }
 
@@ -852,7 +1055,7 @@ mod tests {
         let cell = |status: Status| Cell {
             amc_said: "E".into(), issuer_aid: String::new(), issuer_pk: String::new(), agent_pk: pk.clone(), verifier: writ.clone(), funder: funder.clone(),
             lei_commit: String::new(), ecr_commit: String::new(), scope: vec![], valid_until: U64(0), unit: U128(1), n: 1, idx: 1, unclaimed: U128(0),
-            w_cur: String::new(), daily_links: 1, max_links: 1, max_strikes: 3, day: 0, day_used: 1, vault: U128(0), spends: 1, rejects: 0, strikes: 0, status, asset: None,
+            root: 1, parent: None, depth: 0, children: vec![], tree_size: 1, w_cur: String::new(), daily_links: 1, max_links: 1, max_strikes: 3, day: 0, day_used: 1, vault: U128(0), spends: 1, rejects: 0, strikes: 0, status, asset: None,
         };
         w.cells.insert(1, cell(Status::Revoked { by: funder.clone(), evidence: "x".into() }));
         w.cells.insert(2, cell(Status::Active));

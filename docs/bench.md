@@ -1,4 +1,4 @@
-**39 attacks, 39 blocked as expected, attacker gain 0 yoctoNEAR.**
+**45 attacks, 45 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -41,6 +41,12 @@
 | A37 | stranger claims a failed refund | ONLY_FUNDER | ONLY_FUNDER | 0 |
 | A38 | verifier or supervisor removed from the whitelist keeps acting | REQUESTER_REMOVED, NOT_AUTHORIZED | REQUESTER_REMOVED, NOT_AUTHORIZED | 0 |
 | A39 | oversized evidence string used to consume shared storage | EVIDENCE_TOO_LONG | EVIDENCE_TOO_LONG | 0 |
+| A40 | sub-agent grants a counterparty it does not have itself | Rejected:HIRE_SCOPE | Rejected:HIRE_SCOPE | 0 |
+| A41 | hire with a later expiry or a higher rate than the parent | Rejected:HIRE_TERMS | Rejected:HIRE_TERMS | 0 |
+| A42 | agent hires with budget the employee never released | Rejected:CHAIN | Rejected:CHAIN | 0 |
+| A43 | an agent dismisses someone else's sub-agent | NOT_PARENT | NOT_PARENT | 0 |
+| A44 | chain of hires past the depth limit | Rejected:HIRE_DEPTH | Rejected:HIRE_DEPTH | 0 |
+| A45 | hires past the tree size limit | Rejected:HIRE_TREE | Rejected:HIRE_TREE | 0 |
 | B00 | legit payment 3+2 links to in-scope merchant | Paid | Paid | 0 |
 | B01 | AMC revoked in KERI TEL, ixn submitted by anyone | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
 | B02 | payment to a non-existent account | Rejected:TRANSFER_FAILED, vault refunded | Rejected:TRANSFER_FAILED, vault refunded | 0 |
@@ -57,3 +63,6 @@
 | B13 | gas burnt by a payment, whole transaction | under 30 Tgas | 1 link 5 Tgas, 100 links 7 Tgas | 0 |
 | B14 | boundaries: j == cap pays, unpaid invoice not on record, maxStrikes 0 never trips, solvency counts storage | all exact | all exact | 0 |
 | B15 | NEAR refund fails because the funder account is gone; it is kept, and claimable after the account returns | refund recovered | refund recovered | 0 |
+| B16 | agent hires a sub-agent with a narrower mandate; it pays inside it | Paid, parent's links spent | Paid, parent's links spent | 0 |
+| B17 | one revocation closes a full tree of 16 agents in one transaction | 16 keys deleted | 16 keys deleted, 17 Tgas | 0 |
+| B18 | HR revokes one employee's ECR; the agent, its sub-agent and sub-sub-agent all lose their keys | 3 keys deleted by one signed event | 3 keys deleted by one signed event | 0 |

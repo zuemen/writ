@@ -1130,3 +1130,206 @@ async fn b15_near_refund_failure_is_kept_and_claimable() -> anyhow::Result<()> {
     bench("B15", "NEAR refund fails because the funder account is gone; it is kept, and claimable after the account returns", "refund recovered", "refund recovered", 0);
     Ok(())
 }
+
+// ---------------------------------------------------------------- 第六輪：agent 雇 agent，開除一人整棵樹斷電
+
+fn hire_args(agent_pk: &near_workspaces::types::PublicKey, pw: &Payword, scope: &[&AccountId], valid_until: &str, daily: u32, max_links: u32) -> Value {
+    json!({"agent_pk": agent_pk, "w0": pw.w0(), "scope": scope, "valid_until": valid_until, "daily_links": daily, "max_links": max_links})
+}
+
+async fn hire(agent: &Account, writ: &AccountId, preimage: &str, j: u32, child: Value) -> Value {
+    agent.call(writ, "hire").args_json(json!({"preimage": preimage, "j": j, "child": child}))
+        .gas(near_workspaces::types::Gas::from_tgas(60)).transact().await.unwrap().into_result().unwrap().json().unwrap()
+}
+
+/// 開根格，再雇一個子 agent。回傳 (根 cell, 根 agent, 根鏈, 子 cell, 子 agent, 子鏈, valid_until)
+async fn tree(w: &World, links: u32) -> anyhow::Result<(u64, Account, Payword, u64, Account, Payword, String)> {
+    let mut o = default_opts(w);
+    o.scope = vec![w.merchant.id().clone(), w.verifier.id().clone()];
+    o.deposit_near = 5;
+    o.n = 40; o.daily = 40;
+    o.max_strikes = 0;
+    let (cell, agent, pw) = open_cell(w, o).await?;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    let until = c["valid_until"].as_str().unwrap().to_string();
+    let sk = SecretKey::from_random(KeyType::ED25519);
+    let cpw = Payword::new(links);
+    let v = hire(&agent, w.writ.id(), &pw.link(links), links, hire_args(&sk.public_key(), &cpw, &[w.merchant.id()], &until, 10, 5)).await;
+    let child: u64 = v["Hired"]["child"].as_str().unwrap_or_else(|| panic!("{}", v)).parse()?;
+    let cagent = Account::from_secret_key(w.writ.id().clone(), sk, &w.worker);
+    Ok((cell, agent, pw, child, cagent, cpw, until))
+}
+
+#[tokio::test]
+async fn b16_agent_hires_a_narrower_agent_that_pays() -> anyhow::Result<()> {
+    let w = world().await?;
+    let (cell, agent, pw, child, cagent, cpw, _until) = tree(&w, 5).await?;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": child.to_string()})).await?.json()?;
+    assert_eq!(c["n"], 5);
+    assert_eq!(c["vault"], (5 * UNIT).to_string(), "the child holds exactly the links it was given");
+    assert_eq!(c["parent"], cell);
+    assert_eq!(c["depth"], 1);
+    let root: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(root["idx"], 5, "hiring spends the parent's links");
+    assert_eq!(root["tree_size"], 2);
+    let p: Value = w.writ.view("present").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(p["children"][0], child.to_string());
+
+    let before = balance(&w.merchant).await;
+    let v = spend(&cagent, w.writ.id(), &cpw.link(2), 2, w.merchant.id()).await.unwrap();
+    assert!(v.get("Paid").is_some(), "{}", v);
+    assert_eq!(balance(&w.merchant).await - before, 2 * UNIT);
+
+    // 子 agent 付不到上層才有的對手；上層的鏈節對它也沒用
+    let v = spend(&cagent, w.writ.id(), &cpw.link(3), 1, w.verifier.id()).await.unwrap();
+    assert_eq!(v["Rejected"]["reason"], "SCOPE");
+    let v = spend(&cagent, w.writ.id(), &pw.link(6), 1, w.merchant.id()).await.unwrap();
+    assert_eq!(v["Rejected"]["reason"], "CHAIN");
+    let sol: Value = w.writ.view("solvency").await?.json()?;
+    assert_eq!(sol["solvent"], true);
+    let _ = agent;
+    bench("B16", "agent hires a sub-agent with a narrower mandate; it pays inside it", "Paid, parent's links spent", "Paid, parent's links spent", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a40_a_hire_can_only_narrow() -> anyhow::Result<()> {
+    let w = world().await?;
+    let (_cell, agent, pw, child, cagent, cpw, until) = tree(&w, 5).await?;
+    let fresh = || SecretKey::from_random(KeyType::ED25519).public_key();
+    let np = Payword::new(3);
+
+    // 子 agent 想給孫 agent 自己都沒有的對手
+    let v = hire(&cagent, w.writ.id(), &cpw.link(1), 1, hire_args(&fresh(), &Payword::new(1), &[w.verifier.id()], &until, 5, 1)).await;
+    assert_eq!(v["Rejected"]["reason"], "HIRE_SCOPE");
+    bench("A40", "sub-agent grants a counterparty it does not have itself", "Rejected:HIRE_SCOPE", "Rejected:HIRE_SCOPE", gain(&w).await);
+
+    // 期限、速率、單筆上限放寬
+    let later = (until.parse::<u64>()? + 1).to_string();
+    let v = hire(&agent, w.writ.id(), &pw.link(6), 1, hire_args(&fresh(), &np, &[w.merchant.id()], &later, 5, 1)).await;
+    assert_eq!(v["Rejected"]["reason"], "HIRE_TERMS");
+    let v = hire(&agent, w.writ.id(), &pw.link(6), 1, hire_args(&fresh(), &np, &[w.merchant.id()], &until, 41, 1)).await;
+    assert_eq!(v["Rejected"]["reason"], "HIRE_TERMS");
+    bench("A41", "hire with a later expiry or a higher rate than the parent", "Rejected:HIRE_TERMS", "Rejected:HIRE_TERMS", gain(&w).await);
+
+    // 沒有員工撥的鏈節，雇不到預算
+    let forged = hex::encode([9u8; 32]);
+    let v = hire(&agent, w.writ.id(), &forged, 3, hire_args(&fresh(), &np, &[w.merchant.id()], &until, 5, 1)).await;
+    assert_eq!(v["Rejected"]["reason"], "CHAIN");
+    bench("A42", "agent hires with budget the employee never released", "Rejected:CHAIN", "Rejected:CHAIN", gain(&w).await);
+
+    // 陌生格解僱別人的子 agent
+    let other = SecretKey::from_random(KeyType::ED25519);
+    let mut o = default_opts(&w);
+    o.amc_said = "EOTHER".into();
+    let _ = (&other, &child);
+    let (_c2, stranger, _p2) = open_cell(&w, o).await?;
+    let r = stranger.call(w.writ.id(), "dismiss").args_json(json!({"child": child.to_string()})).gas(near_workspaces::types::Gas::from_tgas(60)).transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("NOT_PARENT"));
+    bench("A43", "an agent dismisses someone else's sub-agent", "NOT_PARENT", "NOT_PARENT", gain(&w).await);
+
+    // 上層可以解僱自己雇的
+    agent.call(w.writ.id(), "dismiss").args_json(json!({"child": child.to_string()})).gas(near_workspaces::types::Gas::from_tgas(60)).transact().await?.into_result()?;
+    let keys = w.worker.view_access_keys(w.writ.id()).await?;
+    assert!(keys.iter().all(|k| k.public_key != cagent.secret_key().public_key()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a44_the_tree_has_a_depth_and_size_limit() -> anyhow::Result<()> {
+    let w = world().await?;
+    let (cell, agent, pw, _child, c1, cpw1, until) = tree(&w, 8).await?;
+    // 第 2、3 層
+    let sk2 = SecretKey::from_random(KeyType::ED25519);
+    let pw2 = Payword::new(3);
+    let v = hire(&c1, w.writ.id(), &cpw1.link(3), 3, hire_args(&sk2.public_key(), &pw2, &[w.merchant.id()], &until, 5, 2)).await;
+    assert!(v.get("Hired").is_some(), "{}", v);
+    let a2 = Account::from_secret_key(w.writ.id().clone(), sk2, &w.worker);
+    let sk3 = SecretKey::from_random(KeyType::ED25519);
+    let pw3 = Payword::new(2);
+    let v = hire(&a2, w.writ.id(), &pw2.link(2), 2, hire_args(&sk3.public_key(), &pw3, &[w.merchant.id()], &until, 5, 1)).await;
+    assert!(v.get("Hired").is_some(), "{}", v);
+    let a3 = Account::from_secret_key(w.writ.id().clone(), sk3, &w.worker);
+    let v = hire(&a3, w.writ.id(), &pw3.link(1), 1, hire_args(&SecretKey::from_random(KeyType::ED25519).public_key(), &Payword::new(1), &[w.merchant.id()], &until, 1, 1)).await;
+    assert_eq!(v["Rejected"]["reason"], "HIRE_DEPTH");
+    bench("A44", "chain of hires past the depth limit", "Rejected:HIRE_DEPTH", "Rejected:HIRE_DEPTH", gain(&w).await);
+
+    // 根格一直雇到上限（目前 4 格）
+    let mut k = 9;
+    let mut last = Value::Null;
+    for _ in 0..13 {
+        let cp = Payword::new(1);
+        last = hire(&agent, w.writ.id(), &pw.link(k), 1, hire_args(&SecretKey::from_random(KeyType::ED25519).public_key(), &cp, &[w.merchant.id()], &until, 1, 1)).await;
+        if last.get("Hired").is_some() { k += 1; }
+    }
+    assert_eq!(last["Rejected"]["reason"], "HIRE_TREE", "{}", last);
+    let root: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(root["tree_size"], 16);
+    bench("A45", "hires past the tree size limit", "Rejected:HIRE_TREE", "Rejected:HIRE_TREE", gain(&w).await);
+
+    // 滿編的樹一筆交易全部關掉
+    let keys_before = w.worker.view_access_keys(w.writ.id()).await?.len();
+    let funder_before = balance(&w.funder).await;
+    let out = w.funder.call(w.writ.id(), "revoke").args_json(json!({"cell": cell.to_string(), "evidence": "employee left"}))
+        .gas(near_workspaces::types::Gas::from_tgas(300)).transact().await?;
+    let burnt = out.total_gas_burnt.as_tgas();
+    out.into_result()?;
+    let keys = w.worker.view_access_keys(w.writ.id()).await?;
+    assert_eq!(keys_before - keys.len(), 16, "all 16 keys gone in one transaction");
+    assert!(balance(&w.funder).await > funder_before, "the money went back to the legal entity");
+    let sol: Value = w.writ.view("solvency").await?.json()?;
+    assert_eq!(sol["vault_total"], "0");
+    let st: Value = w.writ.view("stats").await?.json()?;
+    assert_eq!(st["revoked"], 16);
+    println!("WRIT_GAS|revoke_tree_16={}", burnt);
+    bench("B17", "one revocation closes a full tree of 16 agents in one transaction", "16 keys deleted", &format!("16 keys deleted, {} Tgas", burnt), 0);
+    Ok(())
+}
+
+/// 主秀：HR 撤銷員工的 ECR，整棵樹斷電。fixtures 是真 keripy 事件。
+#[tokio::test]
+async fn b18_hr_fires_one_employee_and_the_whole_tree_goes_dark() -> anyhow::Result<()> {
+    let w = world().await?;
+    let v: Value = serde_json::from_str(&std::fs::read_to_string("tests/fixtures/vectors.json")?)?;
+    let e = &v["ecr_revocation"];
+    let (le_aid, le_pk, ecr_said) = (e["le_aid"].as_str().unwrap(), e["le_pk_hex"].as_str().unwrap(), e["ecr_said"].as_str().unwrap());
+    let mut o = default_opts(&w);
+    o.amc_said = v["amc"]["said"].as_str().unwrap().into();
+    o.issuer_pk = v["issuer"]["pk_hex"].as_str().unwrap().into();
+    o.issuer_aid = v["issuer"]["aid"].as_str().unwrap().into();
+    o.ecr_commit = hex::encode(Sha256::digest(format!("{}|{}|{}|{}", le_aid, le_pk, ecr_said, ECR_COMMIT_SALT)));
+    o.deposit_near = 5;
+    let (cell, agent, pw) = open_cell(&w, o).await?;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    let until = c["valid_until"].as_str().unwrap().to_string();
+    let sk1 = SecretKey::from_random(KeyType::ED25519);
+    let pw1 = Payword::new(4);
+    let v1 = hire(&agent, w.writ.id(), &pw.link(4), 4, hire_args(&sk1.public_key(), &pw1, &[w.merchant.id()], &until, 5, 4)).await;
+    let c1: String = v1["Hired"]["child"].as_str().unwrap().to_string();
+    let a1 = Account::from_secret_key(w.writ.id().clone(), sk1, &w.worker);
+    let sk2 = SecretKey::from_random(KeyType::ED25519);
+    let pw2 = Payword::new(2);
+    let v2 = hire(&a1, w.writ.id(), &pw1.link(2), 2, hire_args(&sk2.public_key(), &pw2, &[w.merchant.id()], &until, 5, 2)).await;
+    let c2: String = v2["Hired"]["child"].as_str().unwrap().to_string();
+    let a2 = Account::from_secret_key(w.writ.id().clone(), sk2, &w.worker);
+    assert!(spend(&a2, w.writ.id(), &pw2.link(1), 1, w.merchant.id()).await.unwrap().get("Paid").is_some());
+
+    let b64 = |h: &str| near_sdk::base64::Engine::encode(&near_sdk::base64::prelude::BASE64_STANDARD, hex::decode(h).unwrap());
+    w.merchant.call(w.writ.id(), "revoke_by_kel").args_json(json!({"cell": cell.to_string(), "ixn": b64(e["raw_hex"].as_str().unwrap()), "signature": b64(e["sig_hex"].as_str().unwrap()), "ecr": {"le_aid": le_aid, "le_pk": le_pk, "ecr_said": ecr_said, "salt": ECR_COMMIT_SALT}}))
+        .gas(near_workspaces::types::Gas::from_tgas(200)).transact().await?.into_result()?;
+    let keys = w.worker.view_access_keys(w.writ.id()).await?;
+    for a in [&agent, &a1, &a2] {
+        assert!(keys.iter().all(|k| k.public_key != a.secret_key().public_key()), "every key in the tree is gone");
+    }
+    for k in [c1.as_str(), c2.as_str()] {
+        let c: Value = w.writ.view("get_cell").args_json(json!({"cell": k})).await?.json()?;
+        assert!(c["status"]["Revoked"]["evidence"].as_str().unwrap().contains("closed"), "{}", c["status"]);
+        assert_eq!(c["vault"], "0");
+    }
+    let sol: Value = w.writ.view("solvency").await?.json()?;
+    assert_eq!(sol["vault_total"], "0", "all vaults returned");
+    let err = spend(&a2, w.writ.id(), &pw2.link(2), 1, w.merchant.id()).await.unwrap_err();
+    assert_eq!(proto_tag(&err), "AccessKeyNotFound");
+    bench("B18", "HR revokes one employee's ECR; the agent, its sub-agent and sub-sub-agent all lose their keys", "3 keys deleted by one signed event", "3 keys deleted by one signed event", 0);
+    Ok(())
+}
