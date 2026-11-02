@@ -2,5 +2,10 @@ target/
 node_modules/
 .env
 *.log
-/tmp/
-keri/keystore/
+.demo/
+.sandbox/
+keri/.keystore/
+keri/bundle/
+keri/.venv
+keri/__pycache__/
+tools/*.so

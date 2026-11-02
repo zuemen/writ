@@ -1,0 +1,152 @@
+"""
+驗證端（白名單驗證者，對應 GLEIF 討論稿 Annex A 裡 PSP 的角色）。
+
+只吃發行端匯出的公開 CESR（keri/bundle/），在**全新的暫存 keystore** 裡用 keripy 重新驗整條鏈：
+
+  1. KEL：LE、human、agent 三條事件日誌的簽章與順序；agent 必須是 human 之下的委派 AID（delpre == human）
+  2. TEL：ECR 與 AMC 都在「已發行、未撤銷」狀態
+  3. ACDC：兩張憑證的 SAID、schema、TEL 錨點；AMC 的 edge 指向 ECR，且 ECR 的持有人 == AMC 的簽發人
+  4. 信任錨：ECR 的簽發人 == trust.json 裡的 LE AID（mock；正式版是 QVI 發的 LE vLEI 鏈回 GLEIF 根）
+  5. agent 的 KERI 當前公鑰 == 要掛到 NEAR 上的 function-call key
+
+全部通過才簽 attestation（Ed25519，簽的 bytes 與合約 attestation_message 逐字相同）。
+
+  python verify.py keygen                                    # 產生驗證者金鑰（印出 pk hex）
+  python verify.py attest --verifier verifier.test.near      # 驗鏈 + 印出 register 的 args JSON
+  python verify.py check                                     # 只驗鏈，不簽
+"""
+import argparse, datetime, hashlib, json, os, secrets, sys
+
+import pysodium
+from keri.app import habbing
+from keri.core import coring, parsing, scheming
+from keri.vdr import credentialing, verifying
+
+from common import BUNDLE, HERE, b58, read_json, write_json
+
+VKEY = os.environ.get("WRIT_VERIFIER_KEY", os.path.join(HERE, "..", ".demo", "verifier_key.json"))
+RECORDS = os.path.join(HERE, "..", ".demo", "verifier_records.json")  # LEI 的 salt 只存在驗證者這裡
+
+
+class ChainError(Exception):
+    pass
+
+
+def verify_chain():
+    """回傳 dict(結果)；任何一步失敗都 raise ChainError。"""
+    trust = read_json(os.path.join(BUNDLE, "trust.json"))
+    schemas = read_json(os.path.join(BUNDLE, "schemas.json"))
+    with open(os.path.join(BUNDLE, "chain.cesr"), "rb") as f:
+        stream = bytearray(f.read())
+
+    with habbing.openHby(name="writ-verifier", temp=True) as hby:
+        rgy = credentialing.Regery(hby=hby, name="writ-verifier", temp=True)
+        vry = verifying.Verifier(hby=hby, reger=rgy.reger)
+        for said, sed in schemas.items():
+            hby.db.schema.pin(said, scheming.Schemer(sed=sed))
+        psr = parsing.Parser(kvy=hby.kvy, tvy=rgy.tvy, vry=vry)
+        psr.parse(ims=stream)
+        for _ in range(3):  # 委派、TEL、憑證都可能先進 escrow
+            hby.kvy.processEscrows(); rgy.tvy.processEscrows(); vry.processEscrows()
+
+        checks = []
+
+        def ok(name, cond, detail=""):
+            checks.append(dict(check=name, ok=bool(cond), detail=detail))
+            if not cond:
+                raise ChainError(f"{name}: {detail}")
+
+        amc_said = trust["amc_said"]
+        amc = rgy.reger.creds.get(keys=amc_said)
+        ok("AMC parsed, SAID + schema valid, anchored in TEL", amc is not None, amc_said)
+        ecr_said = amc.edge["ecr"]["n"]
+        ecr = rgy.reger.creds.get(keys=ecr_said)
+        ok("ECR parsed, SAID + schema valid, anchored in TEL", ecr is not None, ecr_said)
+
+        human, agent = amc.issuer, amc.attrib["i"]
+        ok("trust anchor: ECR issued by the pinned legal entity AID", ecr.issuer == trust["le_aid"], ecr.issuer)
+        ok("ECR holder is a natural person who issued the AMC (I2I chain)", ecr.attrib["i"] == human, human)
+        ok("AMC holder is the expected agent AID", agent == trust["agent_aid"], agent)
+
+        for name, cred in (("ECR", ecr), ("AMC", amc)):
+            st = rgy.tevers[cred.regi].vcState(cred.said)
+            ok(f"{name} TEL state is issued (not revoked)", st is not None and st.et == "iss", st.et if st else None)
+
+        hk, ak = hby.kevers.get(human), hby.kevers.get(agent)
+        ok("human KEL verified", hk is not None, f"sn={hk.sn if hk else None}")
+        ok("agent KEL verified as delegated AID under human", ak is not None and ak.delpre == human,
+           f"delpre={ak.delpre if ak else None}")
+
+        a = amc.attrib
+        valid_until = datetime.datetime.fromisoformat(a["validUntil"])
+        ok("AMC validity window not passed", valid_until > datetime.datetime.now(datetime.timezone.utc), a["validUntil"])
+
+        return dict(
+            checks=checks,
+            amc_said=amc_said, ecr_said=ecr_said, lei=ecr.attrib["LEI"],
+            human=human, agent=agent,
+            issuer_pk=hk.verfers[0].raw.hex(),
+            agent_near_pk="ed25519:" + b58(ak.verfers[0].raw),
+            w0=a["paywordRoot"], n=a["paywordLength"], unit=a["unitYocto"], daily=a["dailyLinks"],
+            scope=a["counterparties"], funder=a["settlementRail"],
+            valid_until_ns=int(valid_until.timestamp()) * 1_000_000_000,
+        )
+
+
+def attestation_message(r, lei_commit, verifier):
+    """必須與合約 attestation_message 逐字一致。"""
+    return (
+        "writ:attest:v1\n"
+        f"amc={r['amc_said']}\nissuer_pk={r['issuer_pk']}\nagent_pk={r['agent_near_pk']}\nw0={r['w0']}\n"
+        f"n={r['n']}\nunit={r['unit']}\nscope={','.join(r['scope'])}\nvalid_until={r['valid_until_ns']}\n"
+        f"daily_links={r['daily']}\nlei_commit={lei_commit}\nfunder={r['funder']}\nverifier={verifier}"
+    )
+
+
+def cmd_keygen(a):
+    if os.path.exists(VKEY) and not a.force:
+        print(read_json(VKEY)["pk_hex"]); return
+    pk, sk = pysodium.crypto_sign_keypair()
+    write_json(VKEY, dict(pk_hex=pk.hex(), sk_hex=sk.hex()))
+    print(pk.hex())
+
+
+def cmd_check(a):
+    try:
+        r = verify_chain()
+    except ChainError as e:
+        print(json.dumps(dict(ok=False, error=str(e)), indent=1)); sys.exit(2)
+    for c in r["checks"]:
+        print(("✓ " if c["ok"] else "✗ ") + c["check"] + (f"  [{c['detail']}]" if c["detail"] else ""))
+
+
+def cmd_attest(a):
+    try:
+        r = verify_chain()
+    except ChainError as e:
+        print(json.dumps(dict(ok=False, error=str(e))), file=sys.stderr); sys.exit(2)
+    for c in r["checks"]:
+        print("✓ " + c["check"], file=sys.stderr)
+    key = read_json(VKEY)
+    salt = secrets.token_hex(16)
+    lei_commit = hashlib.sha256(f"{r['lei']}|{salt}".encode()).hexdigest()
+    msg = attestation_message(r, lei_commit, a.verifier).encode()
+    sig = pysodium.crypto_sign_detached(msg, bytes.fromhex(key["sk_hex"]))
+    # LEI 與 salt 只留在驗證者這裡（解封時才用）
+    recs = read_json(RECORDS) if os.path.exists(RECORDS) else {}
+    recs[r["amc_said"]] = dict(lei=r["lei"], salt=salt, lei_commit=lei_commit)
+    write_json(RECORDS, recs)
+    args = dict(amc_said=r["amc_said"], issuer_pk=r["issuer_pk"], agent_pk=r["agent_near_pk"], w0=r["w0"],
+                n=r["n"], unit=r["unit"], scope=r["scope"], valid_until=str(r["valid_until_ns"]),
+                daily_links=r["daily"], lei_commit=lei_commit, verifier=a.verifier, signature=sig.hex())
+    print(json.dumps(dict(funder=r["funder"], args=args), indent=1))
+
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    sp = p.add_subparsers(dest="cmd", required=True)
+    k = sp.add_parser("keygen"); k.add_argument("--force", action="store_true")
+    sp.add_parser("check")
+    t = sp.add_parser("attest"); t.add_argument("--verifier", required=True)
+    a = p.parse_args()
+    dict(keygen=cmd_keygen, check=cmd_check, attest=cmd_attest)[a.cmd](a)

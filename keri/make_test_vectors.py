@@ -1,5 +1,5 @@
 """
-Spike 7 —— 用 keripy 直接建立 mock 鏈：
+產生合約測試用的固定 KERI 向量（contract/tests/fixtures/）—— 用 keripy 直接建立 mock 鏈：
   LE（法人 AID）→ 發 ECR 給 human（人 AID）→ human 發 AMC 給 agent（agent 是 human KEL 之下的委派 AID）
   然後 human 撤銷 AMC，印出錨定撤銷的 ixn 事件與 seal {i, s, d}。
 

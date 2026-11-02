@@ -1,0 +1,32 @@
+# Writ —— 一鍵指令。所有目標都只碰本機 sandbox，不需要 testnet、不需要任何 API key。
+#   make setup   安裝依賴、建置合約、下載 sandbox（需網路一次）
+#   make test    合約攻擊台（16 種攻擊）→ 重產 docs/bench.md
+#   make demo    起本機 sandbox → 布置帳號與 mock vLEI → 跑 60 秒故事 → 關 sandbox
+#   make ui      起 sandbox + 布置 + 開網頁（http://localhost:8787）
+PY ?= python3
+
+setup: keri/.venv/bin/python app/node_modules
+	$(MAKE) -C contract build
+keri/.venv/bin/python:
+	$(PY) -m venv keri/.venv && keri/.venv/bin/pip install -q -r keri/requirements.txt
+app/node_modules:
+	cd app && npm ci
+
+test:
+	@if [ "$$(ulimit -Hn)" != "unlimited" ] && [ "$$(ulimit -Hn)" -lt 65535 ]; then $(MAKE) -C contract test-lowfd; else $(MAKE) -C contract test; fi
+
+keri-check: keri/.venv/bin/python
+	cd keri && .venv/bin/python issuer.py init --scope merchant.test.near --rail acme.test.near >/dev/null 2>&1 || true
+	cd keri && .venv/bin/python verify.py check
+
+demo: setup
+	scripts/sandbox.sh start
+	cd app && npx tsx src/setup.ts && npx tsx src/demo.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
+
+ui: setup
+	scripts/sandbox.sh start
+	cd app && npx tsx src/setup.ts && npx tsx src/server.ts
+
+clean:
+	scripts/sandbox.sh stop; rm -rf .demo .sandbox keri/.keystore keri/bundle
+.PHONY: setup test keri-check demo ui clean
