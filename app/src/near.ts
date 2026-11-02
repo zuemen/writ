@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-export const DEMO = join(ROOT, ".demo");
+export const DEMO = process.env.WRIT_DEMO_DIR ? resolve(ROOT, process.env.WRIT_DEMO_DIR) : join(ROOT, ".demo");
 export const RPC = process.env.NEAR_RPC ?? "http://127.0.0.1:3030";
 export const provider = new JsonRpcProvider({ url: RPC });
 

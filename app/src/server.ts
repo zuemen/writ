@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { ROOT, view, fmt } from "./near.js";
-import { A, INJECTED_INVOICE, balance, pay, present, register, revoke, verifierCheck } from "./flow.js";
+import { A, INJECTED_INVOICE, balance, pay, present, register, releaseUnseal, requestUnseal, revoke, verifierCheck } from "./flow.js";
 import { keriState } from "./keri.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -32,6 +32,7 @@ async function snapshot() {
     keri: { le: st.le, human: st.human, agent: st.agent, ecr: st.ecr, amc: st.amc, agent_near_pk: st.agent_near_pk, amcRevoked: keriRevoked },
     cell,
     present: cell ? await present(cell) : null,
+    unseal: cell ? await view(a.writ.id, "get_unseal", { cell }) : null,
     stats: await view(a.writ.id, "stats"),
     balances: bal,
     invoice: INJECTED_INVOICE(a.attacker.id),
@@ -62,6 +63,16 @@ async function act(path: string) {
     add({ who: "HR", text: `AMC revoked in KERI: TEL rev ${r.rev.rev_said.slice(0, 10)}… anchored by ixn sn=${r.rev.ixn_sn} (off-chain)`, kind: "info" });
     if (r.error) add({ who: "merchant", text: "revoke_by_kel failed: " + r.error, kind: "reject" });
     else add({ who: a.merchant.id, text: "submits signed ixn → revoke_by_kel verifies Ed25519 + seal → agent key deleted", kind: "ok", hash: r.hash });
+  } else if (path === "/api/unseal-request") {
+    if (!cell) return;
+    const r = await requestUnseal(cell);
+    if (r.error) add({ who: a.regulator.id, text: "request_unseal failed: " + r.error, kind: "reject" });
+    else add({ who: a.regulator.id, text: `request_unseal (reason hash of "${r.reason}") → public; 10 s waiting period starts`, kind: "info", hash: r.hash });
+  } else if (path === "/api/unseal-release") {
+    if (!cell) return;
+    const r = await releaseUnseal(cell);
+    if (r.error) add({ who: a.verifier.id, text: `release_unseal → ${r.error}`, kind: "reject", hash: r.hash });
+    else add({ who: a.verifier.id, text: `release_unseal: sha256(LEI|salt) matches the registration commitment → LEI ${r.lei} disclosed (public tx)`, kind: "ok", hash: r.hash });
   } else if (path === "/api/verify") {
     const v = verifierCheck();
     add({ who: "verifier", text: v.ok ? "chain valid" : "REFUSED — " + v.out[0], kind: v.ok ? "info" : "reject" });

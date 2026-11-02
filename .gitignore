@@ -9,3 +9,4 @@ keri/bundle/
 keri/.venv
 keri/__pycache__/
 tools/*.so
+.demo-testnet/

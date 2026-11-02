@@ -25,8 +25,9 @@ from keri.vdr import credentialing, verifying
 
 from common import BUNDLE, HERE, b58, read_json, write_json
 
-VKEY = os.environ.get("WRIT_VERIFIER_KEY", os.path.join(HERE, "..", ".demo", "verifier_key.json"))
-RECORDS = os.path.join(HERE, "..", ".demo", "verifier_records.json")  # LEI 的 salt 只存在驗證者這裡
+_STATE = os.path.join(HERE, "..", os.environ.get("WRIT_DEMO_DIR", ".demo"))
+VKEY = os.environ.get("WRIT_VERIFIER_KEY", os.path.join(_STATE, "verifier_key.json"))
+RECORDS = os.path.join(_STATE, "verifier_records.json")  # LEI 的 salt 只存在驗證者這裡
 
 
 class ChainError(Exception):

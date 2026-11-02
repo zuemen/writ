@@ -110,6 +110,12 @@
     <div class="stats" id="stats"></div>
     <div class="money"><span>attacker balance</span><span id="att"></span></div>
     <div class="money"><span>merchant balance</span><span id="merb"></span></div>
+    <h2 style="margin-top:6px">Regulator</h2>
+    <div class="muted" id="unseal">Disclosure of the legal entity is a public, time-delayed transaction.</div>
+    <div class="row">
+      <button class="ghost" onclick="post('/api/unseal-request')">Request disclosure</button>
+      <button class="ghost" onclick="post('/api/unseal-release')">Verifier discloses</button>
+    </div>
   </section>
 
   <section id="log">
@@ -149,7 +155,9 @@ function render(s) {
     pred(p.not_expired, "within validity window"),
     pred(true, `counterparty scope: <span class="mono">${p.scope.join(", ")}</span>`),
     pred(p.within_limit.used < p.within_limit.of, `within limit: ${p.within_limit.used} of ${p.within_limit.of} links`),
-    `<li><span class="tick sealed">◼</span><span>legal entity: <span class="sealed">sealed</span> <span class="mono muted">commit ${short(p.lei_commit, 12)}</span></span></li>`,
+    p.lei === "sealed"
+      ? `<li><span class="tick sealed">◼</span><span>legal entity: <span class="sealed">sealed</span> <span class="mono muted">commit ${short(p.lei_commit, 12)}</span></span></li>`
+      : `<li><span class="tick sealed">◻</span><span>legal entity: disclosed by public tx <span class="mono">LEI ${p.lei}</span></span></li>`,
   ].join("") : `<li class="muted">No mandate opened yet.</li>`;
   const used = p ? p.within_limit.used : 0, of = p ? p.within_limit.of : 1;
   $("lim").style.width = (100 * used / of) + "%";
@@ -159,6 +167,10 @@ function render(s) {
     .map(([a, b]) => `<div class="stat"><b>${b}</b><span>${a}</span></div>`).join("");
   $("att").innerHTML = `<span class="${s.balances.attacker.startsWith("+0.000") ? "" : "bad"}">${s.balances.attacker}</span>`;
   $("merb").textContent = s.balances.merchant;
+  const u = s.unseal;
+  $("unseal").innerHTML = !u ? "Disclosure of the legal entity is a public, time-delayed transaction."
+    : u.lei ? `Disclosed by public transaction: <span class="mono">LEI ${u.lei}</span>${u.objected ? " · objection on record" : ""}`
+    : `Requested by <span class="mono">${u.requester}</span>; releasable after the waiting period.`;
   $("entries").innerHTML = s.log.slice().reverse().map((e) =>
     `<li class="${e.kind}"><span class="who">${e.who}</span><span>${e.text}${e.hash ? ` <span class="mono hash">tx ${short(e.hash, 12)}</span>` : ""}</span></li>`).join("");
 }

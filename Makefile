@@ -30,4 +30,10 @@ ui: setup
 
 clean:
 	scripts/sandbox.sh stop; rm -rf .demo .sandbox keri/.keystore keri/bundle
-.PHONY: setup test keri-check demo ui clean
+.PHONY: setup test keri-check demo ui clean testnet
+
+# 需要本人同意：會在 NEAR testnet 建帳號、部署、簽交易（測試幣，免費）。結果寫進 docs/testnet.md
+testnet: setup
+	cd app && NEAR_RPC=https://rpc.testnet.near.org WRIT_DEMO_DIR=.demo-testnet npx tsx src/testnet-setup.ts \
+	 && NEAR_RPC=https://rpc.testnet.near.org WRIT_DEMO_DIR=.demo-testnet npx tsx src/demo.ts \
+	 && WRIT_DEMO_DIR=.demo-testnet npx tsx src/testnet-report.ts
