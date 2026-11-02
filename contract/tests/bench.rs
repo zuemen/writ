@@ -1534,7 +1534,7 @@ async fn b21_guarantor_pays_then_recourse_tree_dies_identity_revealed() -> anyho
     let m0 = balance(&w.merchant).await;
     cw.seller("withdraw", json!({})).await.unwrap();
     assert!(balance(&w.merchant).await - m0 > 4 * UNIT, "the seller got the whole amount");
-    bench("B21", "company does not pay; the named guarantor's stake covers the seller automatically", "seller paid in full", "seller paid in full", 0);
+    bench("B21", "company does not pay; the named guarantor's stake covers the seller, no approval needed", "seller paid in full", "seller paid in full", 0);
 
     // 只凍結，不斷電；身分還封著
     let card = cw.card().await;

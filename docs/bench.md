@@ -101,7 +101,7 @@
 | B18 | HR revokes one employee's ECR; the agent, its sub-agent and sub-sub-agent all lose their keys | 3 keys deleted by one signed event | 3 keys deleted by one signed event | 0 |
 | B19 | agent buys on credit, seller delivers, company pays on time | paid, identity sealed | paid, identity sealed | 0 |
 | B20 | default covered by the company's own vault: seller paid, on the record, identity sealed | paid, sealed | paid, sealed | 0 |
-| B21 | company does not pay; the named guarantor's stake covers the seller automatically | seller paid in full | seller paid in full | 0 |
+| B21 | company does not pay; the named guarantor's stake covers the seller, no approval needed | seller paid in full | seller paid in full | 0 |
 | B22 | recourse period ends unpaid: the whole tree loses its keys and the company is named | key deleted, LEI public | key deleted, LEI public | 0 |
 | B23 | company repays the guarantor in time: unfrozen, identity stays sealed | sealed | sealed | 0 |
 | B24 | employee fired with a debt open: the debt stands, the rest is returned afterwards | seller paid, refund after | seller paid, refund after | 0 |

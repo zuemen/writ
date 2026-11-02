@@ -34,8 +34,8 @@ else
   full="$(printf '%s' "$keys" | grep -o 'FullAccess' | wc -l | tr -d ' ')"
   row "testnet contract keys" "$([ "$full" = 0 ] && echo PASS || echo FAIL)" "$full full-access keys on $CONTRACT"
 fi
-[ -s docs/testnet.md ] && [ -s docs/testnet-usdc.md ] && [ -s docs/attack-live.md ] && ev=PASS || ev=FAIL
-row "recorded evidence present" "$ev" "docs/testnet.md docs/testnet-usdc.md docs/attack-live.md"
+[ -s docs/testnet.md ] && [ -s docs/testnet-credit.md ] && [ -s docs/testnet-usdc.md ] && [ -s docs/attack-live.md ] && ev=PASS || ev=FAIL
+row "recorded evidence present" "$ev" "docs/testnet.md docs/testnet-credit.md docs/testnet-usdc.md docs/attack-live.md"
 echo
 if [ $fail = 0 ]; then echo "VERIFY_RESULT|PASS"; else echo "VERIFY_RESULT|FAIL (logs in $LOG)"; fi
 exit $fail
