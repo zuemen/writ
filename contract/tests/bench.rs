@@ -272,6 +272,9 @@ async fn a07_tripwire_deletes_key_after_three_strikes() -> anyhow::Result<()> {
     assert_eq!(proto_tag(&e), "AccessKeyNotFound");
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
     assert_eq!(c["status"], "Tripped");
+    let st: Value = w.writ.view("stats").await?.json()?;
+    assert_eq!(st["tripped"], 1);
+    assert_eq!(st["rejected"], 3);
     bench("A07", "injected agent keeps trying (3 strikes)", "key deleted, next call AccessKeyNotFound", proto_tag(&e), 0);
     Ok(())
 }
@@ -370,6 +373,14 @@ async fn a15_revoke_by_kel_real_keri_event_is_permissionless() -> anyhow::Result
     assert!(format!("{:?}", r.into_result()).contains("BAD_KEL_SIGNATURE"));
     bench("A15", "forged KERI revocation event", "BAD_KEL_SIGNATURE", "BAD_KEL_SIGNATURE", 0);
 
+    // 真簽章、真 ixn，但它錨定的是 AMC 的「發行」（seal s="0"），不是撤銷
+    let iss = &v["iss_ixn"];
+    let r = w.attacker.call(w.writ.id(), "revoke_by_kel")
+        .args_json(json!({"cell": cell.to_string(), "ixn": b64(iss["raw_hex"].as_str().unwrap()), "signature": b64(iss["sig_hex"].as_str().unwrap())}))
+        .max_gas().transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("NO_REVOCATION_SEAL"));
+    bench("A24", "genuine signed KERI event that anchors the AMC issuance, not a revocation", "NO_REVOCATION_SEAL", "NO_REVOCATION_SEAL", 0);
+
     // 真的 ixn：任何人（這裡用 attacker 帳號）都能提交，不需要信任 watcher
     let funder_before = balance(&w.funder).await;
     let out = w.attacker.call(w.writ.id(), "revoke_by_kel")
@@ -408,7 +419,9 @@ async fn a16_failed_transfer_refunds_vault_and_others_cannot_revoke() -> anyhow:
     let e = spend(&agent, w.writ.id(), &pw.link(2), 1, w.merchant.id()).await.unwrap_err();
     assert_eq!(proto_tag(&e), "AccessKeyNotFound");
     let s: Value = w.writ.view("stats").await?.json()?;
-    println!("stats = {}", s);
+    assert_eq!(s["revoked"], 1);
+    let sol: Value = w.writ.view("solvency").await?.json()?;
+    assert_eq!(sol["vault_total"], "0", "closing a cell releases its vault from the total");
     Ok(())
 }
 
@@ -587,6 +600,7 @@ async fn b05_boundaries_accounting_and_events() -> anyhow::Result<()> {
     assert_eq!(st["cells"], 2);
     assert_eq!(st["rejected"], 1);
     assert_eq!(st["paid"], 2);
+    assert_eq!(st["paid_yocto"], (5 * UNIT).to_string());
     // 償付能力：金庫總和 = 0.9 NEAR（第二格）+ 0（第一格已用完）
     let sol: Value = w.writ.view("solvency").await?.json()?;
     assert_eq!(sol["vault_total"], "900000000000000000000000");

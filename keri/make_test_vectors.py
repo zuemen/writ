@@ -90,7 +90,11 @@ with habbing.openHby(name="spike7", temp=True, salt=signing.Salter(raw=b"0123456
                                        paywordRoot="(w0 填在 D2)"),
                              source=dict(ecr=dict(n=ecr.said, s=SCHEMA_ECR)),
                              status=reg_hu.regk)
-    iss2 = reg_hu.issue(said=amc.said); anchor(human, reg_hu, iss2, "0"); rgy.processEscrows()
+    iss2 = reg_hu.issue(said=amc.said); iss_msg, iss_seal = anchor(human, reg_hu, iss2, "0"); rgy.processEscrows()
+    # 發行錨點（seal s="0"）：合約必須拒絕拿它當撤銷證據
+    iss_ixn = serdering.SerderKERI(raw=bytes(iss_msg))
+    iss_body = bytes(iss_msg[:iss_ixn.size])
+    iss_sig = indexing.Siger(qb64b=bytes(hby.db.getSigs(eventing.dgKey(human.pre, iss_ixn.said))[0])).raw
     print("AMC SAID:", amc.said, "| TEL state sn=0 (iss)")
 
     # ---- 3. 撤銷 AMC：rev 事件 + human 的 ixn 錨定 ----
@@ -129,6 +133,7 @@ with habbing.openHby(name="spike7", temp=True, salt=signing.Salter(raw=b"0123456
         ixn=dict(raw_hex=ixn_body.hex(), said=ixn.said, sn=ixn.ked["s"], seal=seal,
                  sig_hex=human_sig_on_ixn.hex(), attach_hex=ixn_attach.hex()),
         rev=dict(ked=rev.ked, said=rev.said),
+        iss_ixn=dict(raw_hex=iss_body.hex(), sig_hex=iss_sig.hex(), seal=iss_seal),
         amc=dict(said=amc.said, sad=amc.sad),
         ecr=dict(said=ecr.said),
     )

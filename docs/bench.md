@@ -1,4 +1,4 @@
-**22 attacks, 22 blocked as expected, attacker gain 0 yoctoNEAR.**
+**24 attacks, 24 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -24,8 +24,11 @@
 | A20 | prompt-injected payment from a stablecoin cell | Rejected:SCOPE | Rejected:SCOPE | 0 |
 | A21 | foreign token pushed into a cell via ft_transfer_call | refunded, vault unchanged | refunded | 0 |
 | A22 | funder swaps the settlement asset after the verifier signed | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
+| A23 | spend more than the vault holds (valid links, within rate) | Rejected:FUNDS | Rejected:FUNDS | 0 |
+| A24 | genuine signed KERI event that anchors the AMC issuance, not a revocation | NO_REVOCATION_SEAL | NO_REVOCATION_SEAL | 0 |
 | B00 | legit payment 3+2 links to in-scope merchant | Paid | Paid | 0 |
 | B01 | AMC revoked in KERI TEL, ixn submitted by anyone | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
 | B02 | payment to a non-existent account | vault refunded by callback | refunded | 0 |
 | B03 | supervisor request → wait → verifier discloses committed LEI (public tx) | LEI disclosed, objection on record | disclosed | 0 |
 | B04 | stablecoin cell: agent pays 3 links in NEP-141 (contract attaches the 1 yocto) | merchant +0.3 tUSDC | merchant +0.3 tUSDC | 0 |
+| B05 | boundaries: vault == amount pays, last link spendable, top_up, counters, solvency | all exact | all exact | 0 |
