@@ -18,7 +18,7 @@ test:
 keri-check: keri/.venv/bin/python
 	rm -rf keri/.keystore keri/bundle keri/registrar
 	cd keri && .venv/bin/python issuer.py init --scope merchant.test.near --rail acme.test.near > /tmp/writ_init.json
-	cd keri && .venv/bin/python verify.py pin --le "$$(.venv/bin/python -c "import json;print(json.load(open('.keystore/state.json'))['le'])")"
+	cd keri && .venv/bin/python verify.py pin --root "$$(.venv/bin/python -c "import json;print(json.load(open('.keystore/state.json'))['root'])")"
 	cd keri && .venv/bin/python verify.py check
 	cd keri && .venv/bin/python test_forgeries.py
 
@@ -35,6 +35,10 @@ attack-live: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && npx tsx src/setup.ts && npx tsx src/agent-live.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
+# 用 Circle 的 testnet USDC 跑一筆真實付款（法人要先從 faucet 領幣）。結果寫進 docs/testnet-usdc.md
+testnet-usdc: setup
+	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/usdc-setup.ts
+
 # 在 testnet 開「鑰匙公開」的格並組出網頁（要先跑過 make testnet）。私鑰只在 .demo-testnet/，不進 repo
 bounty: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/bounty-setup.ts
@@ -42,7 +46,7 @@ bounty: setup
 
 clean:
 	scripts/sandbox.sh stop; rm -rf .demo .sandbox keri/.keystore keri/bundle keri/registrar
-.PHONY: setup test keri-check demo ui clean testnet attack-live bounty
+.PHONY: setup test keri-check demo ui clean testnet testnet-usdc attack-live bounty
 
 # 需要本人同意：會在 NEAR testnet 建帳號、部署、簽交易（測試幣，免費）。結果寫進 docs/testnet.md
 testnet: setup

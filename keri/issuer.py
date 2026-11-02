@@ -25,10 +25,19 @@ from keri.core.eventing import SealEvent
 from keri.vc import proving
 from keri.vdr import credentialing, viring
 
-from common import AMC, BUNDLE, ECR, KEYSTORE, PRIVATE, REGISTRAR, b58, read_json, write_json
+from common import AMC, BUNDLE, ECR, KEYSTORE, LEV, PRIVATE, QVI, REGISTRAR, b58, read_json, write_json
 
 LEI = "WRITDEMO000000000017"  # 虛構 LEI：ISO 17442 檢查碼正確，但不屬於任何真實法人
+QVI_LEI = "WRITDEMOQVI00000000" + "0"  # 虛構的 QVI 識別，只在 mock 鏈裡用
+# ECR 的 rules 區塊（官方 vLEI ECR 必填；文字是 mock，不是 GLEIF 的條款）
+RULES = dict(usageDisclaimer=dict(l="Mock credential for the Writ demo. Not issued under the vLEI Ecosystem Governance Framework."),
+             issuanceDisclaimer=dict(l="Issued by a mock legal entity; no real entity is represented."))
 STATE = os.path.join(KEYSTORE, "state.json")
+
+
+def block(**fields):
+    """ACDC 的 e／r 區塊本身也要自我定址（d 是區塊內容的 SAID）。"""
+    return coring.Saider.saidify(sad=dict(d="", **fields))[1]
 
 
 def open_all():
@@ -61,6 +70,8 @@ def cmd_init(a):
     if os.path.exists(STATE):
         sys.exit("already initialized (rm -rf keri/.keystore to start over)")
     hby, rgy = open_all()
+    root = hby.makeHab(name="root")   # mock GLEIF 根
+    qvi = hby.makeHab(name="qvi")     # mock QVI
     le = hby.makeHab(name="le")
     human = hby.makeHab(name="human")
     agent = hby.makeHab(name="agent", delpre=human.pre)
@@ -70,16 +81,31 @@ def cmd_init(a):
     hby.kvy.processEscrows()
     assert agent.kever is not None and agent.kever.delpre == human.pre, "delegation not completed"
 
+    reg_rt = rgy.makeRegistry(name="root-reg", prefix=root.pre, noBackers=True)
+    anchor(root, reg_rt, reg_rt.vcp, "0")
+    reg_qv = rgy.makeRegistry(name="qvi-reg", prefix=qvi.pre, noBackers=True)
+    anchor(qvi, reg_qv, reg_qv.vcp, "0")
     reg_le = rgy.makeRegistry(name="le-reg", prefix=le.pre, noBackers=True)
     anchor(le, reg_le, reg_le.vcp, "0")
     reg_hu = rgy.makeRegistry(name="human-reg", prefix=human.pre, noBackers=True)
     anchor(human, reg_hu, reg_hu.vcp, "0")
     rgy.processEscrows()
 
+    # 根 → QVI → 法人
+    qvc = proving.credential(issuer=root.pre, schema=QVI.said, recipient=qvi.pre, status=reg_rt.regk, private=True, data=dict(LEI=QVI_LEI))
+    iss_q = reg_rt.issue(said=qvc.said)
+    anchor(root, reg_rt, iss_q, "0")
+    lev = proving.credential(issuer=qvi.pre, schema=LEV.said, recipient=le.pre, status=reg_qv.regk, private=True, data=dict(LEI=LEI),
+                             source=block(qvi=dict(n=qvc.said, s=QVI.said, o="I2I")))
+    iss_l = reg_qv.issue(said=lev.said)
+    anchor(qvi, reg_qv, iss_l, "0")
+    rgy.processEscrows()
+
     # LE → human：ECR
     # private=True：加上 u 鹽值，SAID 才不能被字典攻擊（ECR 路徑撤銷時會公開 ecr_said）
     ecr = proving.credential(issuer=le.pre, schema=ECR.said, recipient=human.pre, status=reg_le.regk, private=True,
-                             data=dict(LEI=LEI, personLegalName="Alex Example", engagementContextRole="Treasury Operations"))
+                             data=dict(LEI=LEI, personLegalName="Alex Example", engagementContextRole="Treasury Operations"),
+                             source=block(le=dict(n=lev.said, s=LEV.said, o="I2I")), rules=block(**RULES))
     iss_e = reg_le.issue(said=ecr.said)
     anchor(le, reg_le, iss_e, "0")
 
@@ -93,7 +119,7 @@ def cmd_init(a):
                   validUntil=valid_until.isoformat(timespec="seconds"), unitYocto=str(int(decimal.Decimal(a.unit))),
                   paywordRoot=links[0].hex(), paywordLength=a.n, dailyLinks=a.daily, maxLinksPerPayment=a.max_links, maxStrikes=a.max_strikes, settlementRail=a.rail,
                   **({"settlementAsset": a.asset} if a.asset else {})),
-        source=dict(d="", ecr=dict(n=ecr.said, s=ECR.said, o="I2I")),
+        source=block(ecr=dict(n=ecr.said, s=ECR.said, o="I2I")),
     )
     iss_a = reg_hu.issue(said=amc.said)
     anchor(human, reg_hu, iss_a, "0")
@@ -106,13 +132,16 @@ def cmd_init(a):
     near_pk = "ed25519:" + b58(pub.raw)
 
     write_json(PRIVATE, dict(agent_near_secret_key=near_sk, payword_seed=seed.hex(), lei_salt_hint="verifier picks its own salt"))
-    write_json(STATE, dict(le=le.pre, human=human.pre, agent=agent.pre, agent_near_pk=near_pk,
-                           reg_le=reg_le.regk, reg_hu=reg_hu.regk, ecr=ecr.said, amc=amc.said,
-                           ecr_iss=iss_e.said, amc_iss=iss_a.said, n=a.n))
+    write_json(STATE, dict(root=root.pre, qvi=qvi.pre, le=le.pre, human=human.pre, agent=agent.pre, agent_near_pk=near_pk,
+                           reg_rt=reg_rt.regk, reg_qv=reg_qv.regk, reg_le=reg_le.regk, reg_hu=reg_hu.regk,
+                           qvc=qvc.said, lev=lev.said, ecr=ecr.said, amc=amc.said,
+                           qvc_iss=iss_q.said, lev_iss=iss_l.said, ecr_iss=iss_e.said, amc_iss=iss_a.said, n=a.n))
     # 憑證本體（含 SAID）留一份，export 時序列化附錨點
+    write_json(os.path.join(KEYSTORE, "qvc.json"), qvc.sad)
+    write_json(os.path.join(KEYSTORE, "lev.json"), lev.sad)
     write_json(os.path.join(KEYSTORE, "ecr.json"), ecr.sad)
     write_json(os.path.join(KEYSTORE, "amc.json"), amc.sad)
-    print(json.dumps(dict(le=le.pre, human=human.pre, agent=agent.pre, agent_near_pk=near_pk,
+    print(json.dumps(dict(root=root.pre, le=le.pre, human=human.pre, agent=agent.pre, agent_near_pk=near_pk,
                           ecr=ecr.said, amc=amc.said, w0=links[0].hex()), indent=1))
     hby.close(); rgy.close()
     cmd_export(a)
@@ -136,18 +165,20 @@ def cmd_export(a):
                                  coring.Saider(qb64=iss_said))
 
     # 順序即驗證端的解析順序：KEL → TEL → ACDC
-    stream = kel(st["le"]) + kel(st["human"]) + kel(st["agent"])
-    stream += tel(st["reg_le"]) + tel(st["reg_hu"]) + tel(st["ecr"]) + tel(st["amc"])
-    stream += acdc(os.path.join(KEYSTORE, "ecr.json"), st["ecr_iss"]) + acdc(os.path.join(KEYSTORE, "amc.json"), st["amc_iss"])
+    kels = kel(st["root"]) + kel(st["qvi"]) + kel(st["le"]) + kel(st["human"])
+    tels = b"".join(tel(st[k]) for k in ("reg_rt", "reg_qv", "reg_le", "reg_hu", "qvc", "lev", "ecr", "amc"))
+    stream = kels + kel(st["agent"]) + tels
+    for name, iss in (("qvc", "qvc_iss"), ("lev", "lev_iss"), ("ecr", "ecr_iss"), ("amc", "amc_iss")):
+        stream += acdc(os.path.join(KEYSTORE, f"{name}.json"), st[iss])
     with open(os.path.join(BUNDLE, "chain.cesr"), "wb") as f:
         f.write(stream)
     write_json(os.path.join(BUNDLE, "schemas.json"), {ECR.said: ECR.sed, AMC.said: AMC.sed})
     # 持有人出示「我要驗哪一張」；信任錨不在這裡，驗證端自己釘（verify.py pin）
-    write_json(os.path.join(BUNDLE, "presentation.json"), dict(ecr_said=st["ecr"], amc_said=st["amc"], agent_aid=st["agent"]))
+    write_json(os.path.join(BUNDLE, "presentation.json"), dict(qvi_said=st["qvc"], lev_said=st["lev"], ecr_said=st["ecr"], amc_said=st["amc"], agent_aid=st["agent"]))
     # 發行方的公開狀態：驗證端直接讀這裡的最新 KEL／TEL，持有人拿舊 bundle 也蓋不掉撤銷
     os.makedirs(REGISTRAR, exist_ok=True)
     with open(os.path.join(REGISTRAR, "state.cesr"), "wb") as f:
-        f.write(kel(st["le"]) + kel(st["human"]) + tel(st["reg_le"]) + tel(st["reg_hu"]) + tel(st["ecr"]) + tel(st["amc"]))
+        f.write(kels + tels)
     print(f"exported {len(stream)} bytes → keri/bundle/chain.cesr")
     hby.close(); rgy.close()
 

@@ -6,7 +6,7 @@ A company's AI agent pays suppliers. The employee who set it up leaves. A suppli
 
 The authorization is an Agent Mandate Credential, the credential GLEIF proposes in its August 2026 discussion paper (KERI/vLEI); no official schema exists yet, so the schema here is a proposal. A NEAR contract enforces it on every payment. Each payment answers three questions on-chain:
 
-1. **Who authorized this agent?** A legal entity → a named employee (role credential) → this agent (mandate credential), checked once off-chain with KERI/ACDC by a whitelisted verifier.
+1. **Who authorized this agent?** A root → a QVI → a legal entity → a named employee (role credential) → this agent (mandate credential), the shape of a vLEI chain, checked once off-chain with KERI/ACDC by a whitelisted verifier. The root and QVI here are mocks.
 2. **Is this payment inside the mandate?** Counterparty in scope, invoice not already paid, within the per-payment cap, the hash-chain budget and the daily rate, not expired.
 3. **Is the mandate still alive?** HR revokes in the credential layer without the employee's help. Once the signed event reaches the contract, it deletes the agent's NEAR key; the next payment cannot even be signed.
 
@@ -24,11 +24,11 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.2+ with
 
 | # | Do | See |
 |---|---|---|
-| 1 | `make setup` | contract builds and is shrunk with wasm-opt (≈ 280 KB); size and `sha256sum` of `contract/res/writ.wasm` printed |
-| 2 | `make test` | `test result: ok. 27 passed` and the table in [`docs/bench.md`](docs/bench.md): **39 attacks, 39 blocked as expected, attacker gain 0 yoctoNEAR** (the attacker's balance is measured at the end of each test) |
+| 1 | `make setup` | contract builds and is shrunk with wasm-opt (≈ 300 KB); size and `sha256sum` of `contract/res/writ.wasm` printed |
+| 2 | `make test` | `test result: ok. 29 passed` and the table in [`docs/bench.md`](docs/bench.md): **39 attacks, 39 blocked as expected, attacker gain 0 yoctoNEAR** (the attacker's balance is measured at the end of each test) |
 | 3 | `make demo` | a fresh local sandbox starts (port 3030 must be free); the 8-step story prints (about 1 min, includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
 | 4 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
-| 5 | `make keri-check` | the verifier prints 14 ✓ lines (KEL, TEL, ACDC, registry control, schemas, delegation, I2I chain), then refuses 8 forged or stale chains; last line `KERI_FORGERIES\|PASS\|8` |
+| 5 | `make keri-check` | the verifier prints 23 ✓ lines (mock root → QVI → legal entity → ECR → AMC: KEL, TEL, ACDC, registry control, schemas, I2I edges, delegation), then refuses 13 forged or stale chains; last line `KERI_FORGERIES\|PASS\|13` |
 | 6 | optional: `NEARAI_API_KEY=... make attack-live` | a real LLM on NEAR AI Cloud reads both invoices and chooses the tool calls; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in `docs/attack-live.md` |
 
 `make test` runs the bench in a fresh sandbox per test. `make demo` / `make ui` run `scripts/sandbox.sh` (a local `neard` sandbox on :3030; data in `.sandbox/`).
@@ -201,7 +201,7 @@ Rejection reasons: `EXPIRED`, `SCOPE`, `INVOICE`, `DUPLICATE`, `PER_TX`, `LIMIT`
 
 ## Mutation testing
 
-`cargo mutants` (config in `contract/.cargo/mutants.toml`; `WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source) ran against an earlier version of the contract. Its survivors became attacks A23–A25 and tests B05, B06. The contract has changed since; `.github/workflows/mutants.yml` re-runs it in shards on demand.
+`cargo mutants` (config in `contract/.cargo/mutants.toml`; `WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source) runs in shards from `.github/workflows/mutants.yml`. On the current contract it produced 154 testable mutants: 142 caught and 12 missed on the first pass. The misses became tests B14 and B15. Earlier survivors became attacks A23–A25 and tests B05, B06.
 
 ## Security review notes
 
@@ -220,8 +220,8 @@ Independent reviews by reading the code, after the first bench, found problems t
 - **The agent in `make demo` and `make ui` is a script.** It issues the malicious call directly, because the point is the gate, not the model, and a script is reproducible. `make attack-live` runs a real LLM instead and needs an API key. Writ does not stop an agent from being fooled; it stops the payment.
 - **The agent's KERI key is its NEAR key.** That is the demo's point, but it makes a KERI signing key a hot key, and rotating it means a new function-call key.
 - **A prompt-injected amount inside every cap and scope still gets paid** if the invoice is new. Writ limits the damage; it does not judge the invoice.
-- **Mock trust root.** The verifier pins the legal entity AID itself (`verify.py pin`). In production the LE vLEI is issued by a QVI and chains to GLEIF's root; the QVI layer is out of scope. The LEI `WRITDEMO000000000017` is fictional.
-- **Mock schemas.** The ECR schema here mirrors the vLEI ECR attribute block but has its own SAID and no rules section. GLEIF has not published an AMC schema (paper p.45); `keri/common.py` is a proposal.
+- **Mock trust chain.** The verifier pins a mock root (`verify.py pin`), standing in for GLEIF's. The QVI and legal entity credentials follow the vLEI structure (I2I edges, rules section on the ECR) but no real QVI issued them. The LEI `WRITDEMO000000000017` is fictional.
+- **Mock schemas.** The QVI, legal entity and ECR schemas have their own SAIDs, not GLEIF's published ones, and their rules text is placeholder. GLEIF has not published an AMC schema (paper p.45); `keri/common.py` is a proposal.
 - **Key rotation and KEL depth.** `revoke_by_kel` checks keys bound at registration until the verifier calls `update_signers`. It checks the signature, `i` and the seal, not `p`, `d` or the rest of the KEL. It takes `ixn` events only, so establishment-only identifiers and seals in `rot` events are not supported, nor are multi-signature identifiers. A signed `ixn` under a key already rotated out still revokes until the update.
 - **No witnesses or watchers.** `wits=[]`, and the verifier's temporary keystore has no first-seen memory, so it cannot detect duplicity across runs. The issuer's public status is a local file standing in for a registry endpoint.
 - **The LEI commitment is the verifier's own.** It is not bound to the ECR on-chain; the verifier could commit to a different LEI than the credential holds, and only the off-chain chain shows this.

@@ -7,14 +7,14 @@
   1. KEL：LE、human、agent 三條事件日誌的簽章與順序；agent 必須是 human 之下的委派 AID（delpre == human）
   2. TEL：ECR 與 AMC 都在「已發行、未撤銷」狀態
   3. ACDC：兩張憑證的 SAID、schema、TEL 錨點；AMC 的 edge 指向 ECR，且 ECR 的持有人 == AMC 的簽發人
-  4. 信任錨：ECR 的簽發人 == 驗證端自己釘住的 LE AID（verify.py pin；正式版是 QVI 發的 LE vLEI 鏈回 GLEIF 根）
+  4. 信任鏈：驗證端釘住的根（verify.py pin；mock，正式版是 GLEIF 根）→ QVI → 法人 → ECR，每層 I2I，LEI 要一致
      憑證的 i 欄位不算數：登錄簿的控制者必須就是簽發人；schema SAID 也由驗證端決定
   5. agent 的 KERI 當前公鑰 == 要掛到 NEAR 上的 function-call key
 
 全部通過才簽 attestation（Ed25519，簽的 bytes 與合約 attestation_message 逐字相同）。
 
   python verify.py keygen                                    # 產生驗證者金鑰（印出 pk hex）
-  python verify.py pin --le <AID>                            # 釘住信任錨（驗證端的設定，不來自持有人）
+  python verify.py pin --root <AID>                          # 釘住信任根（驗證端的設定，不來自持有人）
   python verify.py attest --verifier verifier.test.near      # 驗鏈 + 印出 register 的 args JSON
   python verify.py check                                     # 只驗鏈，不簽
   python verify.py reveal --amc <SAID>                       # 解封：印出當初承諾的 LEI 與 salt
@@ -26,7 +26,7 @@ from keri.app import habbing
 from keri.core import coring, parsing, scheming
 from keri.vdr import credentialing, verifying
 
-from common import AMC, BUNDLE, ECR, HERE, REGISTRAR, b58, read_json, write_json
+from common import AMC, BUNDLE, ECR, HERE, LEV, QVI, REGISTRAR, b58, read_json, write_json
 
 _STATE = os.path.join(HERE, "..", os.environ.get("WRIT_DEMO_DIR", ".demo"))
 VKEY = os.environ.get("WRIT_VERIFIER_KEY", os.path.join(_STATE, "verifier_key.json"))
@@ -41,8 +41,8 @@ class ChainError(Exception):
 def verify_chain():
     """回傳 dict(結果)；任何一步失敗都 raise ChainError。"""
     if not os.path.exists(POLICY):
-        raise ChainError("no pinned trust root: run verify.py pin --le <AID>")
-    le_aid = read_json(POLICY)["le_aid"]
+        raise ChainError("no pinned trust root: run verify.py pin --root <AID>")
+    root_aid = read_json(POLICY)["root_aid"]
     shown = read_json(os.path.join(BUNDLE, "presentation.json"))
     with open(os.path.join(BUNDLE, "chain.cesr"), "rb") as f:
         stream = bytearray(f.read())
@@ -53,7 +53,7 @@ def verify_chain():
         rgy = credentialing.Regery(hby=hby, name="writ-verifier", temp=True)
         vry = verifying.Verifier(hby=hby, reger=rgy.reger)
         # 只接受驗證端自己認得的 schema，不吃持有人帶來的定義
-        for sch in (ECR, AMC):
+        for sch in (QVI, LEV, ECR, AMC):
             hby.db.schema.pin(sch.said, scheming.Schemer(sed=sch.sed))
         psr = parsing.Parser(kvy=hby.kvy, tvy=rgy.tvy, vry=vry)
         psr.parse(ims=stream)
@@ -71,11 +71,11 @@ def verify_chain():
         amc_said = shown["amc_said"]
         amc = rgy.reger.creds.get(keys=amc_said)
         # keripy 不收鏈上游已撤銷的憑證：先講清楚真正原因，不要只說「AMC 解析失敗」
-        for said in (shown.get("ecr_said"), amc_said):
+        names = {shown.get("qvi_said"): "QVI credential", shown.get("lev_said"): "legal entity vLEI", shown.get("ecr_said"): "ECR", amc_said: "AMC"}
+        for said, name in names.items():
             for tever in rgy.tevers.values():
                 st = tever.vcState(said) if said else None
                 if st is not None and st.et == "rev":
-                    name = "ECR" if said == shown.get("ecr_said") else "AMC"
                     raise ChainError(f"{name} revoked in its TEL ({said})")
         ok("AMC parsed, SAID + schema valid, anchored in TEL", amc is not None, amc_said)
         ecr_said = amc.edge["ecr"]["n"]
@@ -83,10 +83,24 @@ def verify_chain():
         ok("ECR parsed, SAID + schema valid, anchored in TEL", ecr is not None, ecr_said)
 
         human, agent = amc.issuer, amc.attrib["i"]
-        ok("trust anchor: ECR issued by the pinned legal entity AID", ecr.issuer == le_aid, ecr.issuer)
+        lev = rgy.reger.creds.get(keys=ecr.edge["le"]["n"]) if "le" in (ecr.edge or {}) else None
+        ok("legal entity vLEI parsed and anchored", lev is not None, shown.get("lev_said"))
+        qvc = rgy.reger.creds.get(keys=lev.edge["qvi"]["n"]) if "qvi" in (lev.edge or {}) else None
+        ok("QVI credential parsed and anchored", qvc is not None, shown.get("qvi_said"))
+        ok("trust root: QVI credential issued by the pinned root AID", qvc.issuer == root_aid, qvc.issuer)
+        ok("I2I: legal entity vLEI issued by the QVI", lev.issuer == qvc.attrib["i"] and lev.edge["qvi"].get("o") == "I2I", lev.issuer)
+        ok("I2I: ECR issued by the legal entity", ecr.issuer == lev.attrib["i"] and ecr.edge["le"].get("o") == "I2I", ecr.issuer)
+        ok("the ECR's LEI is the legal entity vLEI's LEI", ecr.attrib["LEI"] == lev.attrib["LEI"], ecr.attrib["LEI"])
+        ok("ECR carries its rules section", "r" in ecr.sad, "")
+        def said_ok(section):
+            d = section.get("d", "")
+            return bool(d) and coring.Saider(qb64=d).verify(section, prefixed=True)
+        ok("edge and rules sections are self-addressing", all(said_ok(sec) for sec in (lev.edge, ecr.edge, ecr.sad["r"], amc.edge)), "")
+        for label, c in (("QVI credential", qvc), ("legal entity vLEI", lev)):
+            ok(f"{label} registry controlled by its issuer", rgy.tevers[c.regi].pre == c.issuer, c.regi)
         ok("ECR registry controlled by its issuer", rgy.tevers[ecr.regi].pre == ecr.issuer, ecr.regi)
         ok("AMC registry controlled by its issuer", rgy.tevers[amc.regi].pre == amc.issuer, amc.regi)
-        ok("schemas are the ones this verifier accepts", ecr.schema == ECR.said and amc.schema == AMC.said, f"{ecr.schema} {amc.schema}")
+        ok("schemas are the ones this verifier accepts", qvc.schema == QVI.said and lev.schema == LEV.said and ecr.schema == ECR.said and amc.schema == AMC.said, f"{ecr.schema} {amc.schema}")
         ok("AMC edge to the ECR: right schema, I2I", amc.edge["ecr"].get("s") == ECR.said and amc.edge["ecr"].get("o") == "I2I", str(amc.edge["ecr"]))
         ok("ECR holder is a natural person who issued the AMC (I2I chain)", ecr.attrib["i"] == human, human)
         ok("AMC holder is the presented agent AID", agent == shown["agent_aid"], agent)
@@ -141,8 +155,8 @@ def cmd_keygen(a):
 
 
 def cmd_pin(a):
-    write_json(POLICY, dict(le_aid=a.le))
-    print("pinned trust root", a.le)
+    write_json(POLICY, dict(root_aid=a.root))
+    print("pinned trust root", a.root)
 
 
 def cmd_check(a):
@@ -196,7 +210,7 @@ if __name__ == "__main__":
     sp = p.add_subparsers(dest="cmd", required=True)
     k = sp.add_parser("keygen"); k.add_argument("--force", action="store_true")
     sp.add_parser("check")
-    pn = sp.add_parser("pin"); pn.add_argument("--le", required=True)
+    pn = sp.add_parser("pin"); pn.add_argument("--root", required=True)
     t = sp.add_parser("attest"); t.add_argument("--verifier", required=True); t.add_argument("--contract", required=True)
     rv = sp.add_parser("reveal"); rv.add_argument("--amc", required=True)
     a = p.parse_args()

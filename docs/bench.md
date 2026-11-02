@@ -55,3 +55,5 @@
 | B11 | token cell: NEAR above the fee is returned | excess returned | excess returned | 0 |
 | B12 | refund fails because the funder left the token; funder re-registers and claims | tokens recovered | tokens recovered | 0 |
 | B13 | gas burnt by a payment, whole transaction | under 30 Tgas | 1 link 5 Tgas, 100 links 7 Tgas | 0 |
+| B14 | boundaries: j == cap pays, unpaid invoice not on record, maxStrikes 0 never trips, solvency counts storage | all exact | all exact | 0 |
+| B15 | NEAR refund fails because the funder account is gone; it is kept, and claimable after the account returns | refund recovered | refund recovered | 0 |

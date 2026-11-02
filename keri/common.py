@@ -26,7 +26,7 @@ def b58(b: bytes) -> str:
     return "1" * (len(b) - len(b.lstrip(b"\0"))) + out
 
 
-def _schema(title: str, attrs: dict, required: list, edges: dict | None):
+def _schema(title: str, attrs: dict, required: list, edges: dict | None, rules: bool = False):
     """建一份 ACDC JSON Schema，$id 由 keripy 以 Blake3-256 自我定址（SAID）。"""
     a_props = {"d": {"type": "string"}, "u": {"type": "string"}, "i": {"type": "string"}, "dt": {"type": "string", "format": "date-time"}}
     a_props.update(attrs)
@@ -41,6 +41,9 @@ def _schema(title: str, attrs: dict, required: list, edges: dict | None):
     if edges is not None:
         props["e"] = {"oneOf": [{"type": "string"}, {"type": "object", "properties": edges}]}
         req.append("e")
+    if rules:
+        props["r"] = {"oneOf": [{"type": "string"}, {"type": "object"}]}
+        req.append("r")
     sed = {"$id": "", "$schema": "http://json-schema.org/draft-07/schema#", "title": title,
            "type": "object", "credentialType": title.replace(" ", ""), "properties": props,
            "additionalProperties": False, "required": req}
@@ -48,12 +51,17 @@ def _schema(title: str, attrs: dict, required: list, edges: dict | None):
     return schemer
 
 
-# ECR：法人給「自然人」的情境角色憑證（欄位對齊 vLEI ECR 的 a 區塊，但 schema SAID 是本專案自建的 mock）
+# vLEI 的信任鏈：GLEIF 根 → QVI → 法人 → ECR。結構照官方 vLEI（edge、I2I、ECR 的 rules），SAID 是本專案自建的 mock。
+QVI = _schema("Mock Qualified vLEI Issuer Credential", {"LEI": {"type": "string"}}, ["LEI"], None)
+LEV = _schema("Mock Legal Entity vLEI Credential", {"LEI": {"type": "string"}}, ["LEI"],
+              {"d": {"type": "string"}, "qvi": {"type": "object"}})
+# ECR：法人給「自然人」的情境角色憑證（欄位對齊 vLEI ECR 的 a 區塊），edge 指向法人的 vLEI
 ECR = _schema(
     "Mock Engagement Context Role vLEI Credential",
     {"LEI": {"type": "string"}, "personLegalName": {"type": "string"}, "engagementContextRole": {"type": "string"}},
     ["LEI", "personLegalName", "engagementContextRole"],
-    None,
+    {"d": {"type": "string"}, "le": {"type": "object"}},
+    rules=True,
 )
 
 # AMC：GLEIF《Agentic AI in Payments》Annex A p.44 —— 行動類別、交易上限、允許的交易對手、有效時間窗。

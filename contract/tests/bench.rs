@@ -1048,3 +1048,85 @@ async fn b13_gas_cost_of_a_payment() -> anyhow::Result<()> {
     bench("B13", "gas burnt by a payment, whole transaction", "under 30 Tgas", &format!("1 link {} Tgas, 100 links {} Tgas", one, hundred), 0);
     Ok(())
 }
+
+// ---------------------------------------------------------------- 第五輪：cargo-mutants 存活者
+
+#[tokio::test]
+async fn b14_boundaries_from_mutation_survivors() -> anyhow::Result<()> {
+    let w = world().await?;
+    // 單筆上限：剛好等於上限可以付
+    let mut o = default_opts(&w);
+    o.max_links = 3;
+    o.amc_said = "EB14A".into();
+    let (cell, agent, pw) = open_cell(&w, o).await?;
+    let v = spend(&agent, w.writ.id(), &pw.link(3), 3, w.merchant.id()).await.unwrap();
+    assert!(v.get("Paid").is_some(), "j == max_links pays: {}", v);
+    let unpaid = hex::encode(Sha256::digest(b"never paid"));
+    let paid: bool = w.writ.view("invoice_paid").args_json(json!({"cell": cell.to_string(), "invoice_hash": unpaid})).await?.json()?;
+    assert!(!paid, "an invoice never paid is not on record");
+
+    // maxStrikes = 0：一直被拒也不刪鑰匙
+    let mut o = default_opts(&w);
+    o.max_strikes = 0;
+    o.amc_said = "EB14B".into();
+    let (cell, agent, pw) = open_cell(&w, o).await?;
+    for k in 1..=4 {
+        let v = spend(&agent, w.writ.id(), &pw.link(1), 1, w.attacker.id()).await.unwrap();
+        assert_eq!(v["Rejected"]["strikes"], k);
+        assert_eq!(v["Rejected"]["tripped"], false);
+    }
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(c["status"], "Active");
+
+    // solvency 的 storage = 用量 × 每 byte 成本
+    let sol: Value = w.writ.view("solvency").await?.json()?;
+    let usage = w.writ.view_account().await?.storage_usage as u128;
+    assert_eq!(sol["storage"], (usage * 10_000_000_000_000_000_000u128).to_string());
+    assert_eq!(sol["solvent"], true);
+    bench("B14", "boundaries: j == cap pays, unpaid invoice not on record, maxStrikes 0 never trips, solvency counts storage", "all exact", "all exact", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b15_near_refund_failure_is_kept_and_claimable() -> anyhow::Result<()> {
+    let w = world().await?;
+    let vault_total = |w: &World| {
+        let writ = w.writ.clone();
+        async move {
+            let sol: Value = writ.view("solvency").await.unwrap().json().unwrap();
+            sol["vault_total"].as_str().unwrap().parse::<u128>().unwrap()
+        }
+    };
+    // 法人是可以刪掉再重建的子帳號
+    let root = w.worker.root_account()?;
+    let funder_sk = SecretKey::from_random(KeyType::ED25519);
+    let funder = root.create_subaccount("corp").initial_balance(NearToken::from_near(10)).keys(funder_sk.clone()).transact().await?.into_result()?;
+    let o = default_opts(&w);
+    let agent_sk = SecretKey::from_random(KeyType::ED25519);
+    let pw = Payword::new(o.n);
+    let mut args = json!({
+        "amc_said": "EB15", "issuer_aid": AMC_ISSUER, "issuer_pk": o.issuer_pk, "max_links": 10, "max_strikes": 3, "attested_at": ATTESTED_NOW.to_string(),
+        "agent_pk": agent_sk.public_key(), "w0": pw.w0(), "n": o.n, "unit": o.unit.to_string(), "scope": o.scope,
+        "valid_until": (now_ns(&w).await? + 3_600_000_000_000).to_string(), "daily_links": o.daily, "lei_commit": hex::encode([2u8; 32]),
+        "ecr_commit": hex::encode([3u8; 32]), "verifier": w.verifier.id(),
+    });
+    args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, funder.id(), w.writ.id()).as_bytes()).to_bytes()));
+    let id: String = funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_near(1)).max_gas().transact().await?.into_result()?.json()?;
+    let vault = 1_000_000_000_000_000_000_000_000 - fee(20);
+
+    // 法人帳號消失，撤銷的退款一定失敗
+    funder.clone().delete_account(w.merchant.id()).await?.into_result()?;
+    w.verifier.call(w.writ.id(), "revoke").args_json(json!({"cell": id, "evidence": "manual"})).max_gas().transact().await?.into_result()?;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": id})).await?.json()?;
+    assert_eq!(c["unclaimed"], vault.to_string());
+    assert_eq!(vault_total(&w).await, vault, "a kept refund still counts against the balance");
+
+    // 法人重建帳號後領回
+    let funder = root.create_subaccount("corp").initial_balance(NearToken::from_near(3)).keys(funder_sk).transact().await?.into_result()?;
+    let before = balance(&funder).await;
+    funder.call(w.writ.id(), "claim_refund").args_json(json!({"cell": id})).gas(near_workspaces::types::Gas::from_tgas(60)).transact().await?.into_result()?;
+    assert_eq!(vault_total(&w).await, 0);
+    assert!(balance(&funder).await > before + vault / 2, "the refund arrived");
+    bench("B15", "NEAR refund fails because the funder account is gone; it is kept, and claimable after the account returns", "refund recovered", "refund recovered", 0);
+    Ok(())
+}

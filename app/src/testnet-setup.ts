@@ -55,6 +55,6 @@ rmSync(join(ROOT, "keri/.keystore"), { recursive: true, force: true });
 rmSync(join(ROOT, "keri/bundle"), { recursive: true, force: true });
 rmSync(join(ROOT, "keri/registrar"), { recursive: true, force: true });
 const init = py("issuer.py", "init", "--scope", accts.merchant.id, "--rail", accts.acme.id, "--n", "50", "--unit", "1e23", "--daily", "20", "--days", "30");
-py("verify.py", "pin", "--le", JSON.parse(init.slice(init.indexOf("{"), init.lastIndexOf("}") + 1)).le);
+py("verify.py", "pin", "--root", JSON.parse(init.slice(init.indexOf("{"), init.lastIndexOf("}") + 1)).root);
 console.log("  mock vLEI ecosystem issued for", accts.acme.id);
 void provider;

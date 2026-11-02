@@ -21,8 +21,12 @@ from keri.vc import proving
 from keri.vdr import credentialing
 
 import common
-from common import AMC, BUNDLE, ECR, REGISTRAR, write_json
+from common import AMC, BUNDLE, ECR, LEV, QVI, REGISTRAR, write_json
 import verify as V
+
+
+def block(**fields):
+    return coring.Saider.saidify(sad=dict(d="", **fields))[1]
 
 
 def anchor(hab, reg, serder, sn):
@@ -34,10 +38,12 @@ def anchor(hab, reg, serder, sn):
 
 
 def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge_o="I2I", pin_other=False,
-          revoke_after_bundle=None):
+          revoke_after_bundle=None, rogue_qvi=False, ecr_lei="WRITDEMO000000000017", no_rules=False, bad_edge_said=False):
     """建一條鏈並寫出 bundle／registrar。參數決定哪裡造假。"""
     with habbing.openHby(name=name, temp=True) as hby:
         rgy = credentialing.Regery(hby=hby, name=name, temp=True)
+        root = hby.makeHab(name="root")
+        qvi = hby.makeHab(name="qvi")
         le = hby.makeHab(name="le")
         human = hby.makeHab(name="human")
         agent = hby.makeHab(name="agent", delpre=human.pre)
@@ -51,13 +57,32 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
         anchor(agent, reg_ag, reg_ag.vcp, "0")
         reg_le = rgy.makeRegistry(name="le-reg", prefix=le.pre, noBackers=True)
         anchor(le, reg_le, reg_le.vcp, "0")
+        reg_rt = rgy.makeRegistry(name="root-reg", prefix=root.pre, noBackers=True)
+        anchor(root, reg_rt, reg_rt.vcp, "0")
+        reg_qv = rgy.makeRegistry(name="qvi-reg", prefix=qvi.pre, noBackers=True)
+        anchor(qvi, reg_qv, reg_qv.vcp, "0")
+        rgy.processEscrows()
+
+        # rogue_qvi：QVI 憑證是冒牌的根發的，不是驗證端釘住的根
+        fake_root = hby.makeHab(name="fakeroot") if rogue_qvi else None
+        reg_fr = rgy.makeRegistry(name="fake-reg", prefix=fake_root.pre, noBackers=True) if rogue_qvi else None
+        if rogue_qvi:
+            anchor(fake_root, reg_fr, reg_fr.vcp, "0"); rgy.processEscrows()
+        reg_q, hab_q = (reg_fr, fake_root) if rogue_qvi else (reg_rt, root)
+        qvc = proving.credential(issuer=hab_q.pre, schema=QVI.said, recipient=qvi.pre, status=reg_q.regk, private=True, data=dict(LEI="WRITDEMOQVI000000000"))
+        iss_q = reg_q.issue(said=qvc.said); anchor(hab_q, reg_q, iss_q, "0")
+        lev = proving.credential(issuer=qvi.pre, schema=LEV.said, recipient=le.pre, status=reg_qv.regk, private=True, data=dict(LEI="WRITDEMO000000000017"),
+                                 source=block(qvi=dict(n=qvc.said, s=QVI.said, o="I2I")))
+        iss_l = reg_qv.issue(said=lev.said); anchor(qvi, reg_qv, iss_l, "0")
         rgy.processEscrows()
 
         # forge_ecr：員工用自己的登錄簿發一張 i = 真 LE 的 ECR，LE 什麼都沒簽
         reg_e, hab_e = (reg_hu, human) if forge_ecr else (reg_le, le)
         sch = schema or ECR
         ecr = proving.credential(issuer=le.pre, schema=sch.said, recipient=human.pre, status=reg_e.regk, private=True,
-                                 data=dict(LEI="WRITDEMO000000000017", personLegalName="Alex Example", engagementContextRole="Treasury"))
+                                 data=dict(LEI=ecr_lei, personLegalName="Alex Example", engagementContextRole="Treasury"),
+                                 source=block(le=dict(n=lev.said, s=LEV.said, o="I2I")) if not bad_edge_said else dict(d="", le=dict(n=lev.said, s=LEV.said, o="I2I")),
+                                 rules=None if no_rules else block(usageDisclaimer=dict(l="mock")))
         iss_e = reg_e.issue(said=ecr.said)
         anchor(hab_e, reg_e, iss_e, "0")
 
@@ -67,7 +92,7 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
                                  data=dict(actionClass="supplier-payment", counterparties=["merchant.test.near"],
                                            validUntil="2099-01-01T00:00:00+00:00", unitYocto="1", paywordRoot="00" * 32,
                                            paywordLength=5, dailyLinks=5, maxLinksPerPayment=5, maxStrikes=3, settlementRail="acme.test.near"),
-                                 source=dict(d="", ecr=dict(n=ecr.said, s=edge_s or sch.said, o=edge_o)))
+                                 source=block(ecr=dict(n=ecr.said, s=edge_s or sch.said, o=edge_o)))
         iss_a = reg_a.issue(said=amc.said)
         anchor(hab_a, reg_a, iss_a, "0")
         rgy.processEscrows()
@@ -75,23 +100,27 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
         def kel(p): return b"".join(bytes(m) for m in hby.db.clonePreIter(pre=p))
         def tel(p): return b"".join(bytes(m) for m in rgy.reger.clonePreIter(pre=p))
         def acdc(c, iss): return signing.serialize(c, coring.Prefixer(qb64=c.said), coring.Seqner(sn=0), coring.Saider(qb64=iss))
-        regs = [reg_le.regk, reg_hu.regk, reg_ag.regk]
+        regs = [reg_rt.regk, reg_qv.regk, reg_le.regk, reg_hu.regk, reg_ag.regk] + ([reg_fr.regk] if rogue_qvi else [])
+        habs = [root, qvi] + ([fake_root] if rogue_qvi else []) + [le, human, agent]
+        allkel = lambda: b"".join(kel(h.pre) for h in habs)
+        alltel = lambda: b"".join(tel(r) for r in regs) + tel(qvc.said) + tel(lev.said) + tel(ecr.said) + tel(amc.said)
 
         def registrar():
             os.makedirs(REGISTRAR, exist_ok=True)
             with open(os.path.join(REGISTRAR, "state.cesr"), "wb") as f:
-                f.write(kel(le.pre) + kel(human.pre) + kel(agent.pre) + b"".join(tel(r) for r in regs) + tel(ecr.said) + tel(amc.said))
+                f.write(allkel() + alltel())
 
         os.makedirs(BUNDLE, exist_ok=True)
         with open(os.path.join(BUNDLE, "chain.cesr"), "wb") as f:
-            f.write(kel(le.pre) + kel(human.pre) + kel(agent.pre) + b"".join(tel(r) for r in regs) + tel(ecr.said) + tel(amc.said)
-                    + acdc(ecr, iss_e.said) + acdc(amc, iss_a.said))
-        write_json(os.path.join(BUNDLE, "presentation.json"), dict(ecr_said=ecr.said, amc_said=amc.said, agent_aid=agent.pre))
-        write_json(V.POLICY, dict(le_aid=("E" + secrets.token_urlsafe(32)[:43]) if pin_other else le.pre))
+            f.write(allkel() + alltel() + acdc(qvc, iss_q.said) + acdc(lev, iss_l.said) + acdc(ecr, iss_e.said) + acdc(amc, iss_a.said))
+        write_json(os.path.join(BUNDLE, "presentation.json"), dict(qvi_said=qvc.said, lev_said=lev.said, ecr_said=ecr.said, amc_said=amc.said, agent_aid=agent.pre))
+        write_json(V.POLICY, dict(root_aid=("E" + secrets.token_urlsafe(32)[:43]) if pin_other else root.pre))
 
         # 撤銷發生在持有人拿到 bundle 之後：只有 registrar 看得到
         if revoke_after_bundle == "ecr":
             anchor(le, reg_le, reg_le.revoke(said=ecr.said), "1")
+        elif revoke_after_bundle == "lev":
+            anchor(qvi, reg_qv, reg_qv.revoke(said=lev.said), "1")
         elif revoke_after_bundle == "amc":
             anchor(human, reg_hu, reg_hu.revoke(said=amc.said), "1")
         rgy.processEscrows()
@@ -105,12 +134,17 @@ CASES = [
     ("honest chain", dict(), True),
     ("F1 employee forges an ECR naming the real legal entity as issuer", dict(forge_ecr=True), False),
     ("F2 agent key holder issues itself an AMC naming the employee as issuer", dict(forge_amc=True), False),
-    ("F3 chain roots in a legal entity the verifier did not pin", dict(pin_other=True), False),
+    ("F3 chain roots in a root the verifier did not pin", dict(pin_other=True), False),
     ("F4 legal entity's credential is not an ECR (other schema)", dict(schema=OTHER), False),
     ("F5 AMC edge names the wrong schema for the ECR", dict(edge_s=AMC.said), False),
     ("F6 AMC edge is not I2I", dict(edge_o="NI2I"), False),
     ("F7 holder shows an old bundle after HR revoked the ECR", dict(revoke_after_bundle="ecr"), False),
     ("F8 holder shows an old bundle after the employee revoked the AMC", dict(revoke_after_bundle="amc"), False),
+    ("F9 QVI credential issued by a fake root", dict(rogue_qvi=True), False),
+    ("F10 QVI revoked the legal entity's vLEI after the bundle was made", dict(revoke_after_bundle="lev"), False),
+    ("F11 ECR states a different LEI than the legal entity's vLEI", dict(ecr_lei="WRITDEMO999999999999"), False),
+    ("F12 ECR has no rules section", dict(no_rules=True), False),
+    ("F13 ECR edge section is not self-addressing", dict(bad_edge_said=True), False),
 ]
 
 fails = 0

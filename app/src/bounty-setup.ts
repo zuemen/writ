@@ -11,7 +11,7 @@ import { keriPrivate, py, releaseLink } from "./keri.js";
 const a = A();
 for (const d of ["keri/.keystore", "keri/bundle", "keri/registrar"]) rmSync(join(ROOT, d), { recursive: true, force: true });
 const init = py("issuer.py", "init", "--scope", a.merchant.id, "--rail", a.acme.id, "--n", "50", "--unit", "1e23", "--daily", "20", "--days", "30", "--max-strikes", "0");
-py("verify.py", "pin", "--le", JSON.parse(init.slice(init.indexOf("{"), init.lastIndexOf("}") + 1)).le);
+py("verify.py", "pin", "--root", JSON.parse(init.slice(init.indexOf("{"), init.lastIndexOf("}") + 1)).root);
 
 const reg = await register(process.env.WRIT_BOUNTY_DEPOSIT ?? "4.5");
 if (!reg.ok) throw new Error("register failed: " + reg.error);
