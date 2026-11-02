@@ -596,6 +596,9 @@ async fn b05_boundaries_accounting_and_events() -> anyhow::Result<()> {
     let today = now_ns(&w).await? / 86_400_000_000_000;
     assert!(c["day"].as_u64().unwrap() == today || c["day"].as_u64().unwrap() + 1 == today, "day bucket = timestamp / 1 day");
 
+    // 金庫只夠 3 節，要 4 節 → FUNDS（金額 = j × unit，不是 j + unit）
+    let v = spend(&agent, w.writ.id(), &pw.link(4), 4, w.merchant.id()).await.unwrap();
+    assert_eq!(v["Rejected"]["reason"], "FUNDS", "{}", v);
     // 金庫剛好夠 3 節 → 付得出去；再 1 節 → FUNDS
     let v = spend(&agent, w.writ.id(), &pw.link(3), 3, w.merchant.id()).await.unwrap();
     assert!(v.get("Paid").is_some(), "vault exactly equal to amount must pay: {}", v);
@@ -612,13 +615,13 @@ async fn b05_boundaries_accounting_and_events() -> anyhow::Result<()> {
 
     // 計數：這格被拒 1 次；全域 rejected/cells
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell})).await?.json()?;
-    assert_eq!(c["rejects"], 1);
+    assert_eq!(c["rejects"], 2);
     assert_eq!(c["spends"], 2);
     let (cell2, _a2, _p2) = open_cell(&w, default_opts(&w)).await?;
     assert_ne!(cell2.to_string(), cell, "cell ids are unique");
     let st: Value = w.writ.view("stats").await?.json()?;
     assert_eq!(st["cells"], 2);
-    assert_eq!(st["rejected"], 1);
+    assert_eq!(st["rejected"], 2);
     assert_eq!(st["paid"], 2);
     assert_eq!(st["paid_yocto"], (5 * UNIT).to_string());
     // 償付能力：金庫總和 = 0.9 NEAR（第二格）+ 0（第一格已用完）

@@ -19,7 +19,7 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.11+ with l
 | # | Do | See |
 |---|---|---|
 | 1 | `make setup` | contract builds and is shrunk with wasm-opt (≈ 260 KB); size and `sha256sum` of `contract/res/writ.wasm` printed |
-| 2 | `make test` | `test result: ok. 13 passed` and the table in [`docs/bench.md`](docs/bench.md): **22 attacks, 22 blocked as expected, attacker gain 0 yoctoNEAR** |
+| 2 | `make test` | `test result: ok. 15 passed` and the table in [`docs/bench.md`](docs/bench.md): **25 attacks, 25 blocked as expected, attacker gain 0 yoctoNEAR** |
 | 3 | `make demo` | local sandbox starts (port 3030 must be free); the 8-step story prints (about 1 min, includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
 | 4 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → revoke AMC**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
 | 5 | `make keri-check` | the independent verifier prints 10 ✓ lines (KEL, TEL, ACDC, delegation, I2I chain) |
@@ -157,6 +157,10 @@ Rejection reasons: `EXPIRED`, `SCOPE`, `LIMIT`, `CHAIN`, `RATE`, `FUNDS`. Events
 | run out of gas allowance | `NotEnoughAllowance` — not a policy event; `refresh_key` restores it | — |
 
 ---
+
+## Mutation testing
+
+`cargo mutants` (config in `contract/.cargo/mutants.toml`; `WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source) generated 122 mutants of `contract/src/lib.rs`. First pass: 81 caught, 35 missed. Every survivor was turned into a new assertion or attack (A23–A25, B05, B06). Re-running the survivors: 33 caught, 3 missed. Of those three, two are boundary mutants we consider equivalent (`now > valid_until` vs `>=` at a single nanosecond; `refund > 0` vs `>= 0`, where a zero refund changes nothing), and the third (`j * unit` vs `j + unit` in the FUNDS check) was addressed by a test added after the re-run, which has not itself been re-run under cargo-mutants.
 
 ## Not implemented / limits
 
