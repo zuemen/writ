@@ -45,6 +45,8 @@ enum StorageKey {
     Verifiers,
     Cells,
     KeyToCell,
+    Supervisors,
+    Unseals,
 }
 
 /// 格的狀態。Revoked / Tripped 之後鑰匙已不在合約帳號上。
@@ -123,6 +125,17 @@ pub struct Stats {
     pub revoked: u64,
 }
 
+/// 監理方調閱（tier-1 解封：只揭露 LEI）。解封本身就是一筆公開交易。
+#[near(serializers = [borsh, json])]
+#[derive(Clone)]
+pub struct Unseal {
+    pub requester: AccountId,
+    pub reason_hash: String,   // 調閱理由（例如法院命令）的 sha256 hex；理由本文不上鏈
+    pub requested_at: U64,     // ns
+    pub objected: bool,        // 法人提出異議：公開留痕，不是否決（GLEIF 討論稿 p.28–29 的 view-key 模型）
+    pub lei: Option<String>,   // 揭露後才有
+}
+
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Contract {
@@ -133,6 +146,9 @@ pub struct Contract {
     next_id: u64,
     vault_total: u128, // 所有格的金庫總和；合約餘額必須 >= 這個數
     stats: Stats,
+    supervisors: IterableMap<AccountId, bool>,
+    unseals: LookupMap<u64, Unseal>,
+    unseal_delay_ns: u64,
 }
 
 // ---------------- 小工具 ----------------
@@ -170,8 +186,9 @@ pub fn attestation_message(a: &RegisterArgs, funder: &AccountId) -> String {
 
 #[near]
 impl Contract {
+    /// unseal_delay_secs：監理方提出調閱到驗證者可以揭露之間的公開等待期（預設 2 分鐘）。
     #[init]
-    pub fn new() -> Self {
+    pub fn new(unseal_delay_secs: Option<u64>) -> Self {
         Self {
             owner: env::predecessor_account_id(),
             verifiers: IterableMap::new(StorageKey::Verifiers),
@@ -180,6 +197,9 @@ impl Contract {
             next_id: 1,
             vault_total: 0,
             stats: Stats::default(),
+            supervisors: IterableMap::new(StorageKey::Supervisors),
+            unseals: LookupMap::new(StorageKey::Unseals),
+            unseal_delay_ns: unseal_delay_secs.unwrap_or(120) * 1_000_000_000,
         }
     }
 
@@ -458,6 +478,61 @@ impl Contract {
         event("refreshed", serde_json::json!({"cell": cell.0.to_string()}));
     }
 
+    // ================= 監理調閱（tier-1：只揭露 LEI） =================
+
+    pub fn set_supervisor(&mut self, account: AccountId, enabled: bool) {
+        require!(env::predecessor_account_id() == self.owner, "ONLY_OWNER");
+        if enabled {
+            self.supervisors.insert(account, true);
+        } else {
+            self.supervisors.remove(&account);
+        }
+    }
+
+    /// 白名單監理方提出調閱。從這一刻起所有人都看得到「誰、為何（雜湊）、何時」要求揭露這格。
+    pub fn request_unseal(&mut self, cell: U64, reason_hash: String) {
+        let who = env::predecessor_account_id();
+        require!(self.supervisors.get(&who).copied().unwrap_or(false), "NOT_SUPERVISOR");
+        require!(self.cells.contains_key(&cell.0), "NO_CELL");
+        require!(!self.unseals.contains_key(&cell.0), "ALREADY_REQUESTED");
+        hex32(&reason_hash, "reason_hash");
+        let at = env::block_timestamp();
+        self.unseals.insert(cell.0, Unseal { requester: who.clone(), reason_hash: reason_hash.clone(), requested_at: U64(at), objected: false, lei: None });
+        event("unseal_requested", serde_json::json!({"cell": cell.0.to_string(), "requester": who, "reason_hash": reason_hash,
+              "releasable_at": (at + self.unseal_delay_ns).to_string()}));
+    }
+
+    /// 法人可在揭露前提出異議：公開留痕，交由鏈外（法院）處理；不阻止揭露。
+    pub fn object_unseal(&mut self, cell: U64) {
+        let c = self.cells.get(&cell.0).unwrap_or_else(|| env::panic_str("NO_CELL"));
+        require!(env::predecessor_account_id() == c.funder, "ONLY_FUNDER");
+        let mut u = self.unseals.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_REQUEST"));
+        require!(u.lei.is_none(), "ALREADY_RELEASED");
+        u.objected = true;
+        self.unseals.insert(cell.0, u);
+        event("unseal_objected", serde_json::json!({"cell": cell.0.to_string()}));
+    }
+
+    /// 等待期過後，這格的驗證者揭露 (LEI, salt)；合約檢查 sha256(LEI|salt) == 開格時的承諾。
+    /// 驗證者無法揭露一個跟當初承諾不同的 LEI——這就是 GLEIF 討論稿 p.42 說的 reliance record。
+    pub fn release_unseal(&mut self, cell: U64, lei: String, salt: String) {
+        let c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
+        require!(env::predecessor_account_id() == c.verifier, "ONLY_CELL_VERIFIER");
+        let mut u = self.unseals.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_REQUEST"));
+        require!(u.lei.is_none(), "ALREADY_RELEASED");
+        require!(env::block_timestamp() >= u.requested_at.0 + self.unseal_delay_ns, "TOO_EARLY");
+        let digest = hex::encode(env::sha256(format!("{}|{}", lei, salt).as_bytes()));
+        require!(digest == c.lei_commit, "COMMIT_MISMATCH");
+        u.lei = Some(lei.clone());
+        let (requester, objected) = (u.requester.clone(), u.objected);
+        self.unseals.insert(cell.0, u);
+        event("unsealed", serde_json::json!({"cell": cell.0.to_string(), "lei": lei, "requester": requester, "objected": objected}));
+    }
+
+    pub fn get_unseal(&self, cell: U64) -> Option<Unseal> {
+        self.unseals.get(&cell.0).cloned()
+    }
+
     // ================= 給商家／任何人看的 =================
 
     pub fn get_cell(&self, cell: U64) -> Option<Cell> {
@@ -481,7 +556,7 @@ impl Contract {
             "within_limit": { "used": c.idx, "of": c.n, "unit": c.unit.0.to_string() },
             "scope": c.scope,
             "amc_said": c.amc_said,
-            "lei": "sealed",
+            "lei": self.unseals.get(&cell.0).and_then(|u| u.lei.clone()).unwrap_or_else(|| "sealed".to_string()),
             "lei_commit": c.lei_commit,
             "status": c.status,
         }))

@@ -122,6 +122,7 @@ Rejection reasons: `EXPIRED`, `SCOPE`, `LIMIT`, `CHAIN`, `RATE`, `FUNDS`. Events
 - **Privacy is selective disclosure, not anonymity.** The LEI never goes on-chain (only `sha256(LEI‖salt)`, salt held by the verifier). Funding accounts, the agent key and payments are public and linkable on-chain.
 - **Single verifier per cell**, NEAR-native payments only (no NEP-141 path yet), no sub-delegation between agents.
 - **Not deployed to testnet yet.**
+- **Dockerfile is provided but not yet verified** (no Docker daemon in the build environment).
 
 ## Repository layout
 

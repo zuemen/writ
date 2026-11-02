@@ -1,4 +1,4 @@
-**16 attacks, 16 blocked as expected, attacker gain 0 yoctoNEAR.**
+**19 attacks, 19 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -18,6 +18,10 @@
 | A14 | attacker replays someone else's attestation | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
 | A15 | forged KERI revocation event | BAD_KEL_SIGNATURE | BAD_KEL_SIGNATURE | 0 |
 | A16 | stranger tries to revoke (griefing) | NOT_AUTHORIZED | NOT_AUTHORIZED | 0 |
+| A17 | non-supervisor requests disclosure of the legal entity | NOT_SUPERVISOR | NOT_SUPERVISOR | 0 |
+| A18 | verifier discloses before the public waiting period ends | TOO_EARLY | TOO_EARLY | 0 |
+| A19 | verifier discloses a different LEI than it committed to | COMMIT_MISMATCH | COMMIT_MISMATCH | 0 |
 | B00 | legit payment 3+2 links to in-scope merchant | Paid | Paid | 0 |
 | B01 | AMC revoked in KERI TEL, ixn submitted by anyone | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
 | B02 | payment to a non-existent account | vault refunded by callback | refunded | 0 |
+| B03 | supervisor request → wait → verifier discloses committed LEI (public tx) | LEI disclosed, objection on record | disclosed | 0 |

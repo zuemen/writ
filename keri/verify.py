@@ -14,6 +14,7 @@
   python verify.py keygen                                    # 產生驗證者金鑰（印出 pk hex）
   python verify.py attest --verifier verifier.test.near      # 驗鏈 + 印出 register 的 args JSON
   python verify.py check                                     # 只驗鏈，不簽
+  python verify.py reveal --amc <SAID>                       # 解封：印出當初承諾的 LEI 與 salt
 """
 import argparse, datetime, hashlib, json, os, secrets, sys
 
@@ -143,11 +144,19 @@ def cmd_attest(a):
     print(json.dumps(dict(funder=r["funder"], args=args), indent=1))
 
 
+def cmd_reveal(a):
+    """解封時才用：印出驗證者當初承諾的 (LEI, salt)。"""
+    recs = read_json(RECORDS)
+    r = recs.get(a.amc) or sys.exit("no record for this AMC")
+    print(json.dumps(dict(lei=r["lei"], salt=r["salt"])))
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     sp = p.add_subparsers(dest="cmd", required=True)
     k = sp.add_parser("keygen"); k.add_argument("--force", action="store_true")
     sp.add_parser("check")
     t = sp.add_parser("attest"); t.add_argument("--verifier", required=True)
+    rv = sp.add_parser("reveal"); rv.add_argument("--amc", required=True)
     a = p.parse_args()
-    dict(keygen=cmd_keygen, check=cmd_check, attest=cmd_attest)[a.cmd](a)
+    dict(keygen=cmd_keygen, check=cmd_check, attest=cmd_attest, reveal=cmd_reveal)[a.cmd](a)

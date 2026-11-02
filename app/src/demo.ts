@@ -5,13 +5,14 @@
  *   3 商家看五個謂詞（LEI 封著）
  *   4 agent 付款（PayWord 鏈節，每筆一個雜湊檢查）
  *   5 發票藏 prompt injection → agent 付給攻擊者 → 合約拒絕（有 tx hash），攻擊者 0 入帳
- *   6 職員離職：KERI 撤銷 AMC → 任何人提交簽過的 ixn → 合約刪鑰匙
- *   7 agent 再付 → 協定層拒絕
+ *   6 監理方調閱 → 公開等待期 → 驗證者揭露 LEI（合約比對承諾）
+ *   7 職員離職：KERI 撤銷 AMC → 任何人提交簽過的 ixn → 合約刪鑰匙
+ *   8 agent 再付 → 協定層拒絕
  * 每一步寫進 .demo/timeline.json。結尾印 DEMO_RESULT 一行給機器檢查。
  */
 import { join } from "node:path";
 import { DEMO, fmt, view, writeJson } from "./near.js";
-import { A, INJECTED_INVOICE, balance, pay, present, register, revoke, verifierCheck } from "./flow.js";
+import { A, INJECTED_INVOICE, balance, pay, present, register, releaseUnseal, requestUnseal, revoke, verifierCheck } from "./flow.js";
 
 const a = A();
 const timeline: any[] = [];
@@ -44,19 +45,30 @@ const attackerGain = (await balance(a.attacker.id)) - a0;
 say("5", `agent obeys: spend(to=${a.attacker.id}) → ${JSON.stringify(r2.value)}`, { hash: r2.hash });
 say("5", `attacker +${fmt(attackerGain)}`);
 
-say("6", "treasury officer leaves; AMC revoked in KERI (TEL rev anchored by KEL ixn), off-chain");
+// 6. 監理調閱：只揭露 LEI，而且揭露本身是公開交易
+const u1 = await requestUnseal(cell);
+say("6", `${a.regulator.id} requests disclosure (reason hash of "${u1.reason}") → public, waiting period starts`, { hash: u1.hash });
+const tooEarly = await releaseUnseal(cell);
+say("6", `verifier tries to disclose immediately → ${tooEarly.error}`);
+await new Promise((r) => setTimeout(r, 11_000));
+const u2 = await releaseUnseal(cell);
+say("6", `after the waiting period, verifier discloses; contract checks sha256(LEI|salt) == commitment → ${u2.error ?? "LEI " + u2.lei}`, { hash: u2.hash });
+const p2: any = await present(cell);
+say("6", `present(): lei=${p2.lei}`);
+
+say("7", "treasury officer leaves; AMC revoked in KERI (TEL rev anchored by KEL ixn), off-chain");
 const r3 = await revoke(cell);
 if (r3.error) throw new Error("revoke_by_kel: " + r3.error);
-say("6", `${a.merchant.id} submits the signed ixn (sn=${r3.rev.ixn_sn}) → key deleted`, { hash: r3.hash });
+say("7", `${a.merchant.id} submits the signed ixn (sn=${r3.rev.ixn_sn}) → key deleted`, { hash: r3.hash });
 
 const r4 = await pay(cell, 1, a.merchant.id);
-say("7", `agent tries again → ${r4.tag} (${r4.error})`);
+say("8", `agent tries again → ${r4.tag} (${r4.error})`);
 const vc = verifierCheck();
-say("7", `verifier re-check: ${vc.ok ? "valid" : "REFUSED — " + vc.out[0]}`);
+say("8", `verifier re-check: ${vc.ok ? "valid" : "REFUSED — " + vc.out[0]}`);
 const s: any = await view(a.writ.id, "stats");
 say("=", `stats ${JSON.stringify(s)}`);
 
-const ok = !!r1.value?.Paid && r2.value?.Rejected?.reason === "SCOPE" && attackerGain === 0n && !r3.error && r4.tag === "MANDATE REVOKED" && !vc.ok;
-console.log(`\nDEMO_RESULT|${ok ? "PASS" : "FAIL"}|paid=${!!r1.value?.Paid}|injection=${r2.value?.Rejected?.reason}|attacker_gain=${attackerGain}|revoked=${r4.tag}`);
-console.log("The chain never learned which company this was. It knew the person had left.");
+const ok = !!r1.value?.Paid && r2.value?.Rejected?.reason === "SCOPE" && tooEarly.error === "TOO_EARLY" && p2.lei === u2.lei && attackerGain === 0n && !r3.error && r4.tag === "MANDATE REVOKED" && !vc.ok;
+console.log(`\nDEMO_RESULT|${ok ? "PASS" : "FAIL"}|paid=${!!r1.value?.Paid}|injection=${r2.value?.Rejected?.reason}|attacker_gain=${attackerGain}|disclosed=${p2.lei === u2.lei}|revoked=${r4.tag}`);
+console.log("The chain learned which company this was only through a public, time-delayed disclosure. It knew the person had left one block after KERI did.");
 process.exit(ok ? 0 : 1);

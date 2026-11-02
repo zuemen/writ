@@ -15,7 +15,7 @@ const ROOTACC = "test.near";
 const rootKey = readJson(join(ROOT, ".sandbox", "validator_key.json")).secret_key as KeyPairString;
 const root = as(ROOTACC, rootKey);
 
-const plan: Record<string, string> = { writ: "60", verifier: "10", acme: "100", merchant: "10", attacker: "10" };
+const plan: Record<string, string> = { writ: "60", verifier: "10", acme: "100", merchant: "10", attacker: "10", regulator: "10" };
 const accts: Record<string, { id: string; sk: KeyPairString }> = {};
 
 for (const [name, amt] of Object.entries(plan)) {
@@ -35,7 +35,8 @@ const writ = as(accts.writ.id, accts.writ.sk);
 const wasm = readFileSync(join(ROOT, "contract/target/wasm32-unknown-unknown/release/writ.wasm"));
 const d = await writ.deployContract(wasm);
 console.log(`  deployed writ.wasm (${wasm.length} bytes) tx ${d.transaction.hash}`);
-await call(writ, accts.writ.id, "new", {});
+await call(writ, accts.writ.id, "new", { unseal_delay_secs: Number(process.env.UNSEAL_DELAY ?? 10) });
+await call(writ, accts.writ.id, "set_supervisor", { account: accts.regulator.id, enabled: true });
 
 const vpk = py("verify.py", "keygen", "--force").trim();
 const r = await call(writ, accts.writ.id, "set_verifier", { account: accts.verifier.id, pk_hex: vpk });

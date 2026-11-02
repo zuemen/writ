@@ -20,6 +20,9 @@ case "${1:-}" in
   start)
     BIN="$(find_bin)"; [ -x "$BIN" ] || { echo "near-sandbox not found: run 'make -C contract test' once or set NEAR_SANDBOX_BIN"; exit 1; }
     if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then echo "sandbox already running"; exit 0; fi
+    if curl -sf http://127.0.0.1:3030/status >/dev/null; then
+      echo "port 3030 is already serving a NEAR RPC that this script did not start (another sandbox?). Stop it first."; exit 1
+    fi
     rm -rf "$HOME_DIR"; mkdir -p "$HOME_DIR"
     env $(preload) "$BIN" --home "$HOME_DIR" init >/dev/null 2>&1
     (env $(preload) nohup "$BIN" --home "$HOME_DIR" run > "$HOME_DIR/run.log" 2>&1 & echo $! > "$PIDF")

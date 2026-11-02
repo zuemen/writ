@@ -53,7 +53,7 @@ struct World {
 async fn world() -> anyhow::Result<World> {
     let worker = near_workspaces::sandbox().await?;
     let writ = worker.dev_deploy(&std::fs::read(WASM)?).await?;
-    writ.call("new").transact().await?.into_result()?;
+    writ.call("new").args_json(json!({"unseal_delay_secs": 5})).transact().await?.into_result()?;
     let verifier = worker.dev_create_account().await?;
     let funder = worker.dev_create_account().await?;
     let merchant = worker.dev_create_account().await?;
@@ -388,5 +388,51 @@ async fn a16_failed_transfer_refunds_vault_and_others_cannot_revoke() -> anyhow:
     assert_eq!(proto_tag(&e), "AccessKeyNotFound");
     let s: Value = w.writ.view("stats").await?.json()?;
     println!("stats = {}", s);
+    Ok(())
+}
+
+// ---------------------------------------------------------------- 監理調閱（tier-1）
+
+#[tokio::test]
+async fn a17_unseal_needs_supervisor_waiting_period_and_matching_commitment() -> anyhow::Result<()> {
+    let w = world().await?;
+    let (cell, _agent, _pw) = open_cell(&w, default_opts(&w)).await?;
+    let supervisor = w.worker.dev_create_account().await?;
+    let reason = hex::encode(Sha256::digest(b"court order 2026-TPE-001"));
+
+    // 非監理方不能提出調閱
+    let r = w.attacker.call(w.writ.id(), "request_unseal").args_json(json!({"cell": cell.to_string(), "reason_hash": reason})).transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("NOT_SUPERVISOR"));
+    bench("A17", "non-supervisor requests disclosure of the legal entity", "NOT_SUPERVISOR", "NOT_SUPERVISOR", 0);
+
+    w.writ.call("set_supervisor").args_json(json!({"account": supervisor.id(), "enabled": true})).transact().await?.into_result()?;
+    supervisor.call(w.writ.id(), "request_unseal").args_json(json!({"cell": cell.to_string(), "reason_hash": reason})).transact().await?.into_result()?;
+
+    // 等待期內不能揭露
+    let release = |lei: &str, salt: &str| {
+        let (lei, salt) = (lei.to_string(), salt.to_string());
+        let v = w.verifier.clone(); let id = w.writ.id().clone(); let c = cell.to_string();
+        async move { v.call(&id, "release_unseal").args_json(json!({"cell": c, "lei": lei, "salt": salt})).transact().await.unwrap().into_result() }
+    };
+    let e = format!("{:?}", release("5493001KJTIIGC8Y1R12", "salt-demo").await);
+    assert!(e.contains("TOO_EARLY"), "{}", e);
+    bench("A18", "verifier discloses before the public waiting period ends", "TOO_EARLY", "TOO_EARLY", 0);
+
+    // 法人提出異議（公開留痕，不阻擋）
+    w.funder.call(w.writ.id(), "object_unseal").args_json(json!({"cell": cell.to_string()})).transact().await?.into_result()?;
+    w.worker.fast_forward(200).await?;
+
+    // 驗證者想揭露一個不同的 LEI（栽贓給別家公司）
+    let e = format!("{:?}", release("529900T8BM49AURSDO55", "salt-demo").await);
+    assert!(e.contains("COMMIT_MISMATCH"), "{}", e);
+    bench("A19", "verifier discloses a different LEI than it committed to", "COMMIT_MISMATCH", "COMMIT_MISMATCH", 0);
+
+    let out = release("5493001KJTIIGC8Y1R12", "salt-demo").await?;
+    println!("unsealed logs: {:?}", out.logs());
+    let p: Value = w.writ.view("present").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(p["lei"], "5493001KJTIIGC8Y1R12");
+    let u: Value = w.writ.view("get_unseal").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(u["objected"], true);
+    bench("B03", "supervisor request → wait → verifier discloses committed LEI (public tx)", "LEI disclosed, objection on record", "disclosed", 0);
     Ok(())
 }
