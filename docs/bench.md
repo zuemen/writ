@@ -1,4 +1,4 @@
-**45 attacks, 45 blocked as expected, attacker gain 0 yoctoNEAR.**
+**66 attacks, 66 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -47,6 +47,27 @@
 | A43 | an agent dismisses someone else's sub-agent | NOT_PARENT | NOT_PARENT | 0 |
 | A44 | chain of hires past the depth limit | Rejected:HIRE_DEPTH | Rejected:HIRE_DEPTH | 0 |
 | A45 | hires past the tree size limit | Rejected:HIRE_TREE | Rejected:HIRE_TREE | 0 |
+| A46 | seller claims default before the due date | NOT_DUE | NOT_DUE | 0 |
+| A47 | stranger claims someone else's default | ONLY_SELLER | ONLY_SELLER | 0 |
+| A48 | frozen company keeps buying on credit | Rejected:FROZEN | Rejected:FROZEN | 0 |
+| A49 | guarantor cuts the power before the recourse period ends | RECOURSE_OPEN | RECOURSE_OPEN | 0 |
+| A50 | guarantor reveals the company before enforcement | NOT_ENFORCED | NOT_ENFORCED | 0 |
+| A51 | company revokes its own agent to walk away from a debt and take the vault | vault kept | vault kept | 0 |
+| A52 | seller claims default without delivering | NOT_DELIVERED | NOT_DELIVERED | 0 |
+| A53 | seller refuses the money, then claims default anyway | settled on the ledger | settled on the ledger | 0 |
+| A54 | company disputes for free to stall a debt | ESCROW_FULL_AMOUNT | ESCROW_FULL_AMOUNT | 0 |
+| A55 | guarantor decides a dispute it has money in | ONLY_ARBITER | ONLY_ARBITER | 0 |
+| A56 | a colluding seller defaults first to drain the bond another seller relies on | first seller's bond intact | first seller's bond intact | 0 |
+| A57 | injected order with a due date outside the agreed terms | Rejected:TENOR | Rejected:TENOR | 0 |
+| A58 | injected order to a seller outside the mandate | Rejected:SCOPE | Rejected:SCOPE | 0 |
+| A59 | seller accepts an order the guarantor has no stake to back | GUARANTOR_CAPACITY | GUARANTOR_CAPACITY | 0 |
+| A60 | guarantor pulls its stake while it has exposure | STAKE_EXPOSED | STAKE_EXPOSED | 0 |
+| A61 | guarantor commits to an innocent company's LEI and reveals it | LE_DID_NOT_SIGN | LE_DID_NOT_SIGN | 0 |
+| A62 | hire with a huge duplicated scope, to make the tree too expensive to revoke | Rejected:HIRE_SCOPE | Rejected:HIRE_SCOPE | 0 |
+| A63 | parent and sub-agent each pay the same invoice | Rejected:DUPLICATE | Rejected:DUPLICATE | 0 |
+| A64 | a dismissed key is hired again | Rejected:HIRE_KEY | Rejected:HIRE_KEY | 0 |
+| A65 | parent is tripped; its sub-agent keeps spending | Rejected:SUSPENDED | Rejected:SUSPENDED | 0 |
+| A66 | agent spends the bond locked for a seller | Rejected:FUNDS | Rejected:FUNDS | 0 |
 | B00 | legit payment 3+2 links to in-scope merchant | Paid | Paid | 0 |
 | B01 | AMC revoked in KERI TEL, ixn submitted by anyone | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
 | B02 | payment to a non-existent account | Rejected:TRANSFER_FAILED, vault refunded | Rejected:TRANSFER_FAILED, vault refunded | 0 |
@@ -66,3 +87,11 @@
 | B16 | agent hires a sub-agent with a narrower mandate; it pays inside it | Paid, parent's links spent | Paid, parent's links spent | 0 |
 | B17 | one revocation closes a full tree of 16 agents in one transaction | 16 keys deleted | 16 keys deleted, 17 Tgas | 0 |
 | B18 | HR revokes one employee's ECR; the agent, its sub-agent and sub-sub-agent all lose their keys | 3 keys deleted by one signed event | 3 keys deleted by one signed event | 0 |
+| B19 | agent buys on credit, seller delivers, company pays on time | paid, identity sealed | paid, identity sealed | 0 |
+| B20 | default covered by the company's own vault: seller paid, on the record, identity sealed | paid, sealed | paid, sealed | 0 |
+| B21 | company does not pay; the named guarantor's stake covers the seller automatically | seller paid in full | seller paid in full | 0 |
+| B22 | recourse period ends unpaid: the whole tree loses its keys and the company is named | key deleted, LEI public | key deleted, LEI public | 0 |
+| B23 | company repays the guarantor in time: unfrozen, identity stays sealed | sealed | sealed | 0 |
+| B24 | employee fired with a debt open: the debt stands, the rest is returned afterwards | seller paid, refund after | seller paid, refund after | 0 |
+| B25 | dispute with full escrow, arbiter and timeout paths; unaccepted offers expire | resolved | resolved | 0 |
+| B26 | funder reinstates a tripped parent: its sub-agents work again | Paid | Paid | 0 |

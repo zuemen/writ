@@ -37,7 +37,7 @@ pub const MAX_ATTESTATION_AGE_NS: u64 = 3_600_000_000_000;
 
 /// 子 agent 的 gas 上限。雇用費從上層金庫扣，所以子 agent 燒的 gas 也是這棵樹自己付的。
 pub const CHILD_ALLOWANCE: NearToken = NearToken::from_millinear(100);
-const CHILD_STORAGE: u128 = 15_000_000_000_000_000_000_000;
+const CHILD_STORAGE: u128 = 20_000_000_000_000_000_000_000;
 /// 一棵樹最多幾層、幾格：撤銷要在一筆交易內刪掉整棵樹，所以大小要有上限。
 pub const MAX_DEPTH: u32 = 3;
 pub const MAX_TREE: u32 = 16;
@@ -50,13 +50,15 @@ fn register_fee(n: u32) -> u128 {
     REGISTER_FEE.as_yoctonear() + (n as u128) * STORAGE_PER_INVOICE
 }
 /// agent 鑰匙能呼叫的方法——只有這一個寫入方法。
-pub const AGENT_METHODS: &str = "spend,hire,dismiss";
+pub const AGENT_METHODS: &str = "spend,hire,dismiss,open_credit,settle";
 /// scope 最多幾個收款人。
 pub const MAX_SCOPE: usize = 16;
 const NS_PER_DAY: u64 = 86_400_000_000_000;
 const GAS_FOR_CALLBACK: Gas = Gas::from_tgas(25); // 要付得起撤銷後的 ft_transfer（10）＋ on_refund（5）
 const GAS_FOR_REFUND_CB: Gas = Gas::from_tgas(5);
 const MAX_EVIDENCE: usize = 128;
+/// 一筆信用紀錄的儲存，開單時從根格金庫收，不退。
+const CREDIT_STORAGE: u128 = 5_000_000_000_000_000_000_000;
 const GAS_FOR_FT: Gas = Gas::from_tgas(10);
 
 #[derive(BorshStorageKey)]
@@ -69,6 +71,12 @@ enum StorageKey {
     Unseals,
     UsedAmcs,
     PaidInvoices,
+    Credits,
+    Terms,
+    Stakes,
+    Claimable,
+    Entities,
+    UsedKeys,
 }
 
 /// 格的狀態。Revoked / Tripped 之後鑰匙已不在合約帳號上。
@@ -126,6 +134,8 @@ pub struct Cell {
 pub enum Verdict {
     Paid { cell: U64, amount: U128, idx: u32, remaining_links: u32 },
     Hired { cell: U64, child: U64, links: u32, remaining_links: u32 },
+    CreditOpened { cell: U64, credit: U64, amount: U128, due_at: U64 },
+    CreditSettled { credit: U64, amount: U128 },
     Rejected { cell: U64, reason: String, strikes: u32, tripped: bool },
 }
 
@@ -155,6 +165,98 @@ pub struct RegisterArgs {
     /// 結算資產：省略 = NEAR；NEP-141 合約帳號 = 以該代幣支付（綁在 attestation 裡）
     #[serde(default)]
     pub asset: Option<AccountId>,
+    /// 信用條款：省略 = 這格不能賒帳
+    #[serde(default)]
+    pub credit: Option<CreditArgs>,
+}
+
+/// 信用條款：驗證者（同時是具名保證人）簽進 attestation，開格後不能改。
+#[near(serializers = [borsh, json])]
+#[derive(Clone)]
+pub struct CreditArgs {
+    pub limit: U128,            // 未結清總額上限
+    pub bond_bps: u32,          // 保證金比例（萬分比），賣方接受時逐筆鎖定
+    pub min_tenor: U64,         // 到期日距今最短（秒），防注入把到期設成幾秒後
+    pub max_tenor: U64,
+    pub terms_hash: String,     // 公司簽過的條款雜湊（準據法、同意揭露等）
+    pub terms_sig: String,      // LE 對 (合約, AMC, terms_hash, LEI) 的簽章 hex；揭露時才驗，防栽贓
+    pub entity_tag: String,     // 保證人給這家公司的固定假名，跨格累積紀錄
+    pub arbiter: AccountId,     // 爭議仲裁人，不得是保證人
+}
+
+/// 一棵樹的信用狀態（只存在根格）。
+#[near(serializers = [borsh, json])]
+#[derive(Clone)]
+pub struct CreditTerms {
+    pub args: CreditArgs,
+    pub guarantor: AccountId,
+    pub outstanding: U128,      // 未結清總額
+    pub bond_locked: U128,      // 已鎖定的保證金（在根格金庫內）
+    pub open_debts: u32,        // 欠保證人的筆數；大於 0 就不能再賒
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub enum CreditStatus {
+    Open,       // agent 開單，賣方還沒接受
+    Accepted,   // 賣方接受，保證金與保證人曝險已鎖
+    Delivered,  // 賣方已交貨，到期沒付才有違約
+    Disputed,   // 公司附全額押金提出爭議
+    Settled,    // 已付
+    Cancelled,  // 逾時未接受，或仲裁判賣方敗
+    Defaulted,  // 已賠給賣方，欠保證人（或已由保證金賠完）
+    Reimbursed, // 公司已還保證人，維持封存
+    Enforced,   // 追償期滿，整棵樹已斷電，可揭露
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone)]
+pub struct Credit {
+    pub id: U64,
+    pub cell: U64,
+    pub root: U64,
+    pub seller: AccountId,
+    pub amount: U128,
+    pub invoice_hash: String,
+    pub opened_at: U64,
+    pub due_at: U64,
+    pub status: CreditStatus,
+    pub bond_locked: U128,
+    pub exposure: U128,         // 保證人為這筆承擔的金額
+    pub delivery_hash: Option<String>,
+    pub dispute_escrow: U128,
+    pub debt: U128,             // 保證人實際賠付、公司還沒還的金額
+    pub recourse_until: U64,
+}
+
+/// 保證人的質押。
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Default)]
+pub struct Stake {
+    pub amount: U128,
+    pub exposure: U128,
+    pub unstake_at: U64, // 0 = 沒有申請提領
+}
+
+/// 假名的付款紀錄，風險卡顯示。
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Default)]
+pub struct EntityRecord {
+    pub settled: u32,
+    pub settled_amount: U128,
+    pub defaults: u32,
+    pub first_seen: U64,
+}
+
+/// 時間窗（秒）。示範時設短，正式部署用預設值。
+#[near(serializers = [borsh, json])]
+#[derive(Clone)]
+pub struct Windows {
+    pub accept_ttl: U64,
+    pub grace: U64,
+    pub recourse: U64,
+    pub dispute_timeout: U64,
+    pub unstake_delay: U64,
 }
 
 /// agent 雇用子 agent 的條件。全部只能比上層更窄，合約逐項檢查。
@@ -217,6 +319,14 @@ pub struct Contract {
     unseal_delay_ns: u64,
     used_amcs: LookupMap<String, u64>, // 一張 AMC 只能開一格；撤銷後不能用同一張 attestation 復活
     paid_invoices: LookupSet<Vec<u8>>, // cell id ‖ 發票雜湊：同一張發票不能付兩次
+    used_keys: LookupSet<PublicKey>, // 鑰匙一生只用一次：解僱、撤銷、tripwire 之後都不能再被雇用或開格
+    credits: LookupMap<u64, Credit>,
+    terms: LookupMap<u64, CreditTerms>,
+    stakes: LookupMap<AccountId, Stake>,
+    claimable: LookupMap<AccountId, u128>, // 先記帳後提領：賣方自己來領
+    entities: LookupMap<String, EntityRecord>,
+    next_credit: u64,
+    windows: Windows,
 }
 
 // ---------------- 小工具 ----------------
@@ -236,7 +346,7 @@ fn event(name: &str, data: Value) {
 pub fn attestation_message(a: &RegisterArgs, funder: &AccountId, contract: &AccountId) -> String {
     let scope: Vec<&str> = a.scope.iter().map(|s| s.as_str()).collect();
     format!(
-        "writ:attest:v3\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}",
+        "writ:attest:v4\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}\ncredit={}",
         contract,
         a.amc_said,
         a.issuer_aid,
@@ -255,7 +365,8 @@ pub fn attestation_message(a: &RegisterArgs, funder: &AccountId, contract: &Acco
         funder,
         a.verifier,
         a.attested_at.0,
-        a.asset.as_ref().map(|t| t.as_str()).unwrap_or("near")
+        a.asset.as_ref().map(|t| t.as_str()).unwrap_or("near"),
+        a.credit.as_ref().map(|c| format!("{},{},{},{},{},{},{},{}", c.limit.0, c.bond_bps, c.min_tenor.0, c.max_tenor.0, c.terms_hash, c.terms_sig, c.entity_tag, c.arbiter)).unwrap_or_else(|| "none".to_string())
     )
 }
 
@@ -266,7 +377,7 @@ impl Contract {
     /// unseal_delay_secs：監理方提出調閱到驗證者可以揭露之間的公開等待期（預設 2 分鐘）。
     #[init]
     #[private]
-    pub fn new(owner: AccountId, unseal_delay_secs: Option<u64>) -> Self {
+    pub fn new(owner: AccountId, unseal_delay_secs: Option<u64>, windows: Option<Windows>) -> Self {
         Self {
             owner,
             verifiers: IterableMap::new(StorageKey::Verifiers),
@@ -280,6 +391,20 @@ impl Contract {
             unseal_delay_ns: unseal_delay_secs.unwrap_or(120) * 1_000_000_000,
             used_amcs: LookupMap::new(StorageKey::UsedAmcs),
             paid_invoices: LookupSet::new(StorageKey::PaidInvoices),
+            used_keys: LookupSet::new(StorageKey::UsedKeys),
+            credits: LookupMap::new(StorageKey::Credits),
+            terms: LookupMap::new(StorageKey::Terms),
+            stakes: LookupMap::new(StorageKey::Stakes),
+            claimable: LookupMap::new(StorageKey::Claimable),
+            entities: LookupMap::new(StorageKey::Entities),
+            next_credit: 1,
+            windows: windows.unwrap_or(Windows {
+                accept_ttl: U64(86_400),
+                grace: U64(3 * 86_400),
+                recourse: U64(14 * 86_400),
+                dispute_timeout: U64(14 * 86_400),
+                unstake_delay: U64(30 * 86_400),
+            }),
         }
     }
 
@@ -312,12 +437,12 @@ impl Contract {
         require!(env::block_timestamp().saturating_sub(args.attested_at.0) <= MAX_ATTESTATION_AGE_NS, "STALE_ATTESTATION");
         require!(!args.scope.is_empty() && args.scope.len() <= MAX_SCOPE, "BAD_SCOPE");
         require!(args.valid_until.0 > env::block_timestamp(), "ALREADY_EXPIRED");
-        require!(!self.key_to_cell.contains_key(&args.agent_pk), "KEY_IN_USE");
         hex32(&args.w0, "w0");
         hex32(&args.issuer_pk, "issuer_pk");
         hex32(&args.lei_commit, "lei_commit");
         hex32(&args.ecr_commit, "ecr_commit");
         require!(!self.used_amcs.contains_key(&args.amc_said), "AMC_ALREADY_USED");
+        require!(!self.used_keys.contains(&args.agent_pk), "KEY_IN_USE");
 
         // 謂詞 1：鏈有效 —— 白名單驗證者的簽章
         let vpk_hex = self.verifiers.get(&args.verifier).unwrap_or_else(|| env::panic_str("UNKNOWN_VERIFIER"));
@@ -368,7 +493,24 @@ impl Contract {
         };
         self.cells.insert(id, cell);
         self.key_to_cell.insert(args.agent_pk.clone(), id);
+        self.used_keys.insert(args.agent_pk.clone());
         self.used_amcs.insert(args.amc_said.clone(), id);
+        if let Some(cr) = &args.credit {
+            require!(args.asset.is_none(), "CREDIT_NEAR_ONLY");
+            require!(cr.arbiter != args.verifier, "ARBITER_IS_GUARANTOR");
+            require!(cr.bond_bps <= 10_000 && cr.min_tenor.0 <= cr.max_tenor.0, "BAD_CREDIT_TERMS");
+            hex32(&cr.terms_hash, "terms_hash");
+            self.terms.insert(id, CreditTerms {
+                args: cr.clone(),
+                guarantor: args.verifier.clone(),
+                outstanding: U128(0),
+                bond_locked: U128(0),
+                open_debts: 0,
+            });
+            if !self.entities.contains_key(&cr.entity_tag) {
+                self.entities.insert(cr.entity_tag.clone(), EntityRecord { first_seen: U64(env::block_timestamp()), ..Default::default() });
+            }
+        }
         self.vault_total += vault;
         self.stats.cells += 1;
         event(
@@ -424,10 +566,14 @@ impl Contract {
             c.day_used = 0;
         }
 
-        let invoice_key = Self::invoice_key(id, &invoice_hash);
-        // 依序檢查：過期 → 對手 → 發票 → 單筆上限 → 額度（鏈長）→ 雜湊鏈 → 速率 → 金庫
+        // 發票在整棵樹只能付一次，不是每格一次
+        let invoice_key = Self::invoice_key(c.root, &invoice_hash);
+        let free = self.free_vault(id, &c);
+        // 依序檢查：過期 → 上層停權 → 對手 → 發票 → 單筆上限 → 額度（鏈長）→ 雜湊鏈 → 速率 → 金庫
         let reason: Option<&str> = if now > c.valid_until.0 {
             Some("EXPIRED")
+        } else if self.suspended(&c) {
+            Some("SUSPENDED")
         } else if !c.scope.iter().any(|s| *s == to) {
             Some("SCOPE")
         } else if invoice_key.is_none() {
@@ -442,7 +588,7 @@ impl Contract {
             Some("CHAIN")
         } else if c.day_used.saturating_add(j) > c.daily_links {
             Some("RATE")
-        } else if c.vault.0 < (j as u128) * c.unit.0 {
+        } else if free < (j as u128) * c.unit.0 {
             Some("FUNDS")
         } else {
             None
@@ -508,15 +654,17 @@ impl Contract {
         let tree_size = root_cell.as_ref().map(|r| r.tree_size).unwrap_or(c.tree_size);
         let fee = hire_fee(j);
         let funded = match &root_cell {
-            None => c.vault.0 >= amount.saturating_add(fee),
-            Some(r) => c.vault.0 >= amount && r.vault.0 >= fee,
+            None => self.free_vault(id, &c) >= amount.saturating_add(fee),
+            Some(r) => c.vault.0 >= amount && self.free_vault(c.root, r) >= fee,
         };
         let w0_ok = hex::decode(&child.w0).map(|v| v.len() == 32).unwrap_or(false);
         let reason: Option<&str> = if now > c.valid_until.0 {
             Some("EXPIRED")
+        } else if self.suspended(&c) {
+            Some("SUSPENDED")
         } else if c.asset.is_some() {
             Some("HIRE_TOKEN")
-        } else if child.scope.is_empty() || !child.scope.iter().all(|s| c.scope.contains(s)) {
+        } else if child.scope.is_empty() || child.scope.len() > MAX_SCOPE || !child.scope.iter().all(|s| c.scope.contains(s)) {
             Some("HIRE_SCOPE")
         } else if child.valid_until.0 > c.valid_until.0
             || child.valid_until.0 <= now
@@ -531,7 +679,7 @@ impl Contract {
             Some("HIRE_DEPTH")
         } else if tree_size >= MAX_TREE {
             Some("HIRE_TREE")
-        } else if self.key_to_cell.contains_key(&child.agent_pk) {
+        } else if self.used_keys.contains(&child.agent_pk) {
             Some("HIRE_KEY")
         } else if j == 0 || c.idx.saturating_add(j) > c.n {
             Some("LIMIT")
@@ -593,6 +741,7 @@ impl Contract {
         };
         self.cells.insert(child_id, cell);
         self.key_to_cell.insert(child.agent_pk.clone(), child_id);
+        self.used_keys.insert(child.agent_pk.clone());
         self.stats.cells += 1;
         let remaining = c.n - c.idx;
         match root_cell {
@@ -629,6 +778,28 @@ impl Contract {
         self.close(child.0, c, Status::Revoked { by: env::current_account_id(), evidence: format!("dismissed by cell {}", id) });
     }
 
+    /// 這格往上任何一層被 tripwire 停權或已關閉，它就不能動錢（公司 reinstate 上層後恢復）。
+    fn suspended(&self, c: &Cell) -> bool {
+        let mut cur = c.parent;
+        while let Some(p) = cur {
+            match self.cells.get(&p) {
+                Some(up) if up.status == Status::Active => cur = up.parent,
+                _ => return true,
+            }
+        }
+        false
+    }
+
+    /// 這格能動用的錢：根格要扣掉已鎖給賣方的保證金。
+    fn free_vault(&self, id: u64, c: &Cell) -> u128 {
+        if c.root == id {
+            let locked = self.terms.get(&id).map(|t| t.bond_locked.0).unwrap_or(0);
+            c.vault.0.saturating_sub(locked)
+        } else {
+            c.vault.0
+        }
+    }
+
     /// 政策拒絕：計 strike，連續太多次刪鑰匙。回傳 Rejected，交易本身成功。
     fn reject(&mut self, id: u64, mut c: Cell, pk: PublicKey, r: &str) -> Verdict {
         c.rejects += 1;
@@ -659,7 +830,7 @@ impl Contract {
             return Verdict::Paid { cell, amount, idx, remaining_links: remaining };
         }
         // 沒付成：這張發票還能再付；鏈節已消耗不退（防重放）；錢退回金庫
-        if let Some(k) = Self::invoice_key(cell.0, &invoice_hash) {
+        if let Some(k) = Self::invoice_key(c.root, &invoice_hash) {
             self.paid_invoices.remove(&k);
         }
         c.spends = c.spends.saturating_sub(1);
@@ -775,7 +946,16 @@ impl Contract {
             }
             self.cells.insert(cid, cell);
         }
-        if asset.is_none() {
+        // 整棵樹還有未結清的信用：金庫留在根格付欠款，靠撤銷賴不了帳；結清後才可領回
+        let root_id = self.cells.get(&id).map(|c| c.root).unwrap_or(id);
+        let keep = refund > 0 && self.terms.get(&root_id).map(|t| t.outstanding.0 > 0).unwrap_or(false);
+        if keep {
+            if let Some(mut r) = self.cells.get(&root_id).cloned() {
+                r.vault = U128(r.vault.0 + refund);
+                self.cells.insert(root_id, r);
+            }
+            refund = 0;
+        } else if asset.is_none() {
             self.vault_total -= refund;
         }
         if let Some((first, rest)) = keys.split_first() {
@@ -971,7 +1151,8 @@ impl Contract {
     // ================= 給商家／任何人看的 =================
 
     pub fn invoice_paid(&self, cell: U64, invoice_hash: String) -> bool {
-        Self::invoice_key(cell.0, &invoice_hash).is_some_and(|k| self.paid_invoices.contains(&k))
+        let root = self.cells.get(&cell.0).map(|c| c.root).unwrap_or(cell.0);
+        Self::invoice_key(root, &invoice_hash).is_some_and(|k| self.paid_invoices.contains(&k))
     }
 
     pub fn get_cell(&self, cell: U64) -> Option<Cell> {
@@ -989,6 +1170,7 @@ impl Contract {
         Some(serde_json::json!({
             "cell": cell.0.to_string(),
             "chain_valid": self.verifiers.contains_key(&c.verifier),
+            "credit": self.terms.contains_key(&c.root),
             "verifier": c.verifier,
             "not_revoked": c.status == Status::Active,
             "not_expired": now <= c.valid_until.0,
@@ -1001,6 +1183,50 @@ impl Contract {
             "parent": c.parent.map(|p| p.to_string()),
             "children": c.children.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
             "depth": c.depth,
+        }))
+    }
+
+    pub fn credit_of(&self, credit: U64) -> Option<Credit> {
+        self.credits.get(&credit.0).cloned()
+    }
+
+    pub fn stake_of(&self, account: AccountId) -> Option<Stake> {
+        self.stakes.get(&account).cloned()
+    }
+
+    pub fn claimable_of(&self, account: AccountId) -> U128 {
+        U128(self.claimable.get(&account).copied().unwrap_or(0))
+    }
+
+    /// 賣方決定要不要賒之前看的卡：公司名封存，保證人具名。
+    pub fn risk_card(&self, cell: U64) -> Option<Value> {
+        let c = self.cells.get(&cell.0)?;
+        let t = self.terms.get(&c.root)?;
+        let root = self.cells.get(&c.root)?;
+        let stake = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+        let rec = self.entities.get(&t.args.entity_tag).cloned().unwrap_or_default();
+        Some(serde_json::json!({
+            "legal_entity": self.unseals.get(&c.root).and_then(|u| u.lei.clone()).unwrap_or_else(|| "sealed".to_string()),
+            "lei_commit": c.lei_commit,
+            "guarantor": t.guarantor,
+            "guarantor_listed": self.verifiers.contains_key(&t.guarantor),
+            "guarantor_stake": stake.amount,
+            "guarantor_exposure": stake.exposure,
+            "credit_limit": t.args.limit,
+            "outstanding": t.outstanding,
+            "bond_bps": t.args.bond_bps,
+            "bond_available": U128(root.vault.0.saturating_sub(t.bond_locked.0)),
+            "min_tenor": t.args.min_tenor,
+            "max_tenor": t.args.max_tenor,
+            "terms_hash": t.args.terms_hash,
+            "arbiter": t.args.arbiter,
+            "entity_tag": t.args.entity_tag,
+            "settled": rec.settled,
+            "settled_amount": rec.settled_amount,
+            "defaults": rec.defaults,
+            "first_seen": rec.first_seen,
+            "frozen": t.open_debts > 0,
+            "status": root.status,
         }))
     }
 
@@ -1030,6 +1256,469 @@ impl Contract {
     }
 }
 
+// ================= 信用：Who pays is named before the agent buys =================
+#[near]
+impl Contract {
+    /// 保證人質押。有曝險不得提領。
+    #[payable]
+    pub fn stake(&mut self) {
+        let who = env::predecessor_account_id();
+        require!(self.verifiers.contains_key(&who), "NOT_A_VERIFIER");
+        let d = env::attached_deposit().as_yoctonear();
+        let mut st = self.stakes.get(&who).cloned().unwrap_or_default();
+        st.amount = U128(st.amount.0 + d);
+        self.stakes.insert(who.clone(), st);
+        self.vault_total += d;
+        event("staked", serde_json::json!({"guarantor": who, "amount": d.to_string()}));
+    }
+
+    pub fn request_unstake(&mut self) {
+        let who = env::predecessor_account_id();
+        let mut st = self.stakes.get(&who).cloned().unwrap_or_else(|| env::panic_str("NO_STAKE"));
+        st.unstake_at = U64(env::block_timestamp() + self.windows.unstake_delay.0 * 1_000_000_000);
+        self.stakes.insert(who, st);
+    }
+
+    pub fn withdraw_stake(&mut self, amount: U128) -> Promise {
+        let who = env::predecessor_account_id();
+        let mut st = self.stakes.get(&who).cloned().unwrap_or_else(|| env::panic_str("NO_STAKE"));
+        require!(st.unstake_at.0 > 0 && env::block_timestamp() >= st.unstake_at.0, "UNSTAKE_TOO_EARLY");
+        require!(st.amount.0.saturating_sub(st.exposure.0) >= amount.0, "STAKE_EXPOSED");
+        st.amount = U128(st.amount.0 - amount.0);
+        self.stakes.insert(who.clone(), st);
+        self.vault_total -= amount.0;
+        Promise::new(who).transfer(NearToken::from_yoctonear(amount.0))
+    }
+
+    /// agent 下單賒帳：花鏈節（人授權的額度），不動錢。賣方接受前沒有任何人受拘束。
+    pub fn open_credit(&mut self, preimage: String, j: u32, to: AccountId, invoice_hash: String, due_at: U64) -> Verdict {
+        require!(env::signer_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
+        let pk = env::signer_account_pk();
+        let id = *self.key_to_cell.get(&pk).unwrap_or_else(|| env::panic_str("NO_CELL"));
+        let mut c = self.cells.get(&id).cloned().unwrap();
+        require!(c.status == Status::Active, "NOT_ACTIVE");
+        let now = env::block_timestamp();
+        let today = now / NS_PER_DAY;
+        if today != c.day {
+            c.day = today;
+            c.day_used = 0;
+        }
+        let terms = self.terms.get(&c.root).cloned();
+        let amount = (j as u128).saturating_mul(c.unit.0);
+        let invoice_key = Self::invoice_key(c.root, &invoice_hash);
+        let root_vault = if c.root == id { c.vault.0 } else { self.cells.get(&c.root).map(|r| r.vault.0).unwrap_or(0) };
+        let reason: Option<&str> = if terms.is_none() {
+            Some("NO_CREDIT")
+        } else if now > c.valid_until.0 {
+            Some("EXPIRED")
+        } else if self.suspended(&c) {
+            Some("SUSPENDED")
+        } else if terms.as_ref().unwrap().open_debts > 0 {
+            Some("FROZEN")
+        } else if !c.scope.iter().any(|s| *s == to) {
+            Some("SCOPE")
+        } else if invoice_key.is_none() {
+            Some("INVOICE")
+        } else if self.paid_invoices.contains(invoice_key.as_ref().unwrap()) {
+            Some("DUPLICATE")
+        } else if j > c.max_links {
+            Some("PER_TX")
+        } else if j == 0 || c.idx.saturating_add(j) > c.n {
+            Some("LIMIT")
+        } else if !Self::chain_ok(&preimage, j, &c.w_cur) {
+            Some("CHAIN")
+        } else if c.day_used.saturating_add(j) > c.daily_links {
+            Some("RATE")
+        } else if terms.as_ref().unwrap().outstanding.0.saturating_add(amount) > terms.as_ref().unwrap().args.limit.0 {
+            Some("CREDIT_LIMIT")
+        } else if due_at.0 < now.saturating_add(terms.as_ref().unwrap().args.min_tenor.0 * 1_000_000_000)
+            || due_at.0 > now.saturating_add(terms.as_ref().unwrap().args.max_tenor.0 * 1_000_000_000)
+        {
+            Some("TENOR")
+        } else if root_vault.saturating_sub(terms.as_ref().unwrap().bond_locked.0) < CREDIT_STORAGE {
+            Some("FUNDS")
+        } else {
+            None
+        };
+        if let Some(r) = reason {
+            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "to": to, "j": j, "strikes": c.strikes + 1}));
+            return self.reject(id, c, pk, r);
+        }
+        let mut t = terms.unwrap();
+        t.outstanding = U128(t.outstanding.0 + amount);
+        self.paid_invoices.insert(invoice_key.unwrap());
+        c.w_cur = preimage.to_lowercase();
+        c.idx += j;
+        c.day_used += j;
+        c.strikes = 0;
+        let root_id = c.root;
+        if root_id == id {
+            c.vault = U128(c.vault.0 - CREDIT_STORAGE);
+            self.cells.insert(id, c);
+        } else {
+            self.cells.insert(id, c);
+            let mut r = self.cells.get(&root_id).cloned().unwrap();
+            r.vault = U128(r.vault.0 - CREDIT_STORAGE);
+            self.cells.insert(root_id, r);
+        }
+        self.vault_total -= CREDIT_STORAGE;
+        self.terms.insert(root_id, t);
+        let credit = self.next_credit;
+        self.next_credit += 1;
+        self.credits.insert(credit, Credit {
+            id: U64(credit),
+            cell: U64(id),
+            root: U64(root_id),
+            seller: to.clone(),
+            amount: U128(amount),
+            invoice_hash,
+            opened_at: U64(now),
+            due_at,
+            status: CreditStatus::Open,
+            bond_locked: U128(0),
+            exposure: U128(0),
+            delivery_hash: None,
+            dispute_escrow: U128(0),
+            debt: U128(0),
+            recourse_until: U64(0),
+        });
+        event("credit_opened", serde_json::json!({"credit": credit.to_string(), "cell": id.to_string(), "seller": to, "amount": amount.to_string(), "due_at": due_at.0.to_string()}));
+        Verdict::CreditOpened { cell: U64(id), credit: U64(credit), amount: U128(amount), due_at }
+    }
+
+    /// 賣方接受：逐筆鎖定保證金與保證人曝險，別的賣方搶不走。
+    pub fn accept_credit(&mut self, credit: U64) {
+        let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        require!(env::predecessor_account_id() == cr.seller, "ONLY_SELLER");
+        require!(cr.status == CreditStatus::Open, "NOT_OPEN");
+        require!(env::block_timestamp() <= cr.opened_at.0 + self.windows.accept_ttl.0 * 1_000_000_000, "OFFER_EXPIRED");
+        let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
+        let root = self.cells.get(&cr.root.0).cloned().unwrap();
+        let want = cr.amount.0 * (t.args.bond_bps as u128) / 10_000;
+        let free = root.vault.0.saturating_sub(t.bond_locked.0);
+        let bond = want.min(free);
+        let exposure = cr.amount.0 - bond;
+        let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+        require!(st.amount.0.saturating_sub(st.exposure.0) >= exposure, "GUARANTOR_CAPACITY");
+        st.exposure = U128(st.exposure.0 + exposure);
+        self.stakes.insert(t.guarantor.clone(), st);
+        t.bond_locked = U128(t.bond_locked.0 + bond);
+        self.terms.insert(cr.root.0, t);
+        cr.bond_locked = U128(bond);
+        cr.exposure = U128(exposure);
+        cr.status = CreditStatus::Accepted;
+        self.credits.insert(credit.0, cr);
+        event("credit_accepted", serde_json::json!({"credit": credit.0.to_string(), "bond": bond.to_string(), "guarantor_exposure": exposure.to_string()}));
+    }
+
+    /// 逾時沒人接受：任何人可取消，額度放回（鏈節不退）。
+    pub fn cancel_open(&mut self, credit: U64) {
+        let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        require!(cr.status == CreditStatus::Open, "NOT_OPEN");
+        require!(env::block_timestamp() > cr.opened_at.0 + self.windows.accept_ttl.0 * 1_000_000_000, "OFFER_LIVE");
+        self.release(&mut cr, CreditStatus::Cancelled, 0);
+        self.credits.insert(credit.0, cr);
+    }
+
+    /// 賣方交貨，提交憑據。沒交貨就沒有違約。
+    pub fn mark_delivered(&mut self, credit: U64, delivery_hash: String) {
+        let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        require!(env::predecessor_account_id() == cr.seller, "ONLY_SELLER");
+        require!(cr.status == CreditStatus::Accepted, "NOT_ACCEPTED");
+        hex32(&delivery_hash, "delivery_hash");
+        cr.delivery_hash = Some(delivery_hash);
+        cr.status = CreditStatus::Delivered;
+        self.credits.insert(credit.0, cr);
+        event("credit_delivered", serde_json::json!({"credit": credit.0.to_string()}));
+    }
+
+    /// agent 從自己的金庫結清。agent 鑰匙不受過期影響；被撤銷後由公司結清。
+    pub fn settle(&mut self, credit: U64) -> Verdict {
+        require!(env::signer_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
+        let pk = env::signer_account_pk();
+        let id = *self.key_to_cell.get(&pk).unwrap_or_else(|| env::panic_str("NO_CELL"));
+        let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        require!(cr.cell.0 == id, "NOT_YOUR_CREDIT");
+        require!(matches!(cr.status, CreditStatus::Accepted | CreditStatus::Delivered), "NOT_SETTLEABLE");
+        let mut c = self.cells.get(&id).cloned().unwrap();
+        // 付這一筆時，這筆自己鎖的保證金可以用
+        let usable = if id == cr.root.0 { self.free_vault(id, &c) + cr.bond_locked.0 } else { c.vault.0 };
+        require!(usable >= cr.amount.0, "VAULT_SHORT");
+        c.vault = U128(c.vault.0 - cr.amount.0);
+        self.cells.insert(id, c);
+        let amount = cr.amount;
+        self.credit_seller(&cr.seller.clone(), amount.0);
+        self.finish_settled(&mut cr);
+        self.credits.insert(credit.0, cr);
+        Verdict::CreditSettled { credit, amount }
+    }
+
+    /// 公司結清：附上金額，或不附錢時從根格金庫扣。撤銷、過期之後也能用。
+    #[payable]
+    pub fn settle_by_funder(&mut self, credit: U64) {
+        let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        let root = self.cells.get(&cr.root.0).cloned().unwrap();
+        require!(env::predecessor_account_id() == root.funder, "ONLY_FUNDER");
+        require!(matches!(cr.status, CreditStatus::Accepted | CreditStatus::Delivered), "NOT_SETTLEABLE");
+        let attached = env::attached_deposit().as_yoctonear();
+        if attached >= cr.amount.0 {
+            self.vault_total += cr.amount.0;
+            if attached > cr.amount.0 {
+                Promise::new(root.funder.clone()).transfer(NearToken::from_yoctonear(attached - cr.amount.0)).detach();
+            }
+        } else {
+            require!(attached == 0, "PARTIAL_DEPOSIT");
+            // 被鎖的這筆保證金可以用來付這一筆
+            let t = self.terms.get(&cr.root.0).unwrap();
+            let usable = root.vault.0.saturating_sub(t.bond_locked.0 - cr.bond_locked.0);
+            require!(usable >= cr.amount.0, "VAULT_SHORT");
+            let mut r = root.clone();
+            r.vault = U128(r.vault.0 - cr.amount.0);
+            self.cells.insert(cr.root.0, r);
+        }
+        let amount = cr.amount.0;
+        self.credit_seller(&cr.seller.clone(), amount);
+        self.finish_settled(&mut cr);
+        self.credits.insert(credit.0, cr);
+    }
+
+    /// 賣方提領。先記帳後提領：賣方刪帳號也不會讓公司被判違約。
+    pub fn withdraw(&mut self) -> Promise {
+        let who = env::predecessor_account_id();
+        let amount = self.claimable.get(&who).copied().unwrap_or(0);
+        require!(amount > 0, "NOTHING_TO_WITHDRAW");
+        self.claimable.remove(&who);
+        self.vault_total -= amount;
+        Promise::new(who).transfer(NearToken::from_yoctonear(amount))
+    }
+
+    /// 公司對貨有意見：附全額押金提出爭議，這時不算違約，也不揭露。賴帳者靠這招省不了錢。
+    #[payable]
+    pub fn dispute(&mut self, credit: U64, reason_hash: String) {
+        let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        let root = self.cells.get(&cr.root.0).cloned().unwrap();
+        require!(env::predecessor_account_id() == root.funder, "ONLY_FUNDER");
+        require!(matches!(cr.status, CreditStatus::Accepted | CreditStatus::Delivered), "NOT_DISPUTABLE");
+        require!(env::attached_deposit().as_yoctonear() >= cr.amount.0, "ESCROW_FULL_AMOUNT");
+        hex32(&reason_hash, "reason_hash");
+        cr.dispute_escrow = U128(env::attached_deposit().as_yoctonear());
+        self.vault_total += cr.dispute_escrow.0;
+        cr.status = CreditStatus::Disputed;
+        cr.recourse_until = U64(env::block_timestamp() + self.windows.dispute_timeout.0 * 1_000_000_000);
+        self.credits.insert(credit.0, cr);
+        event("credit_disputed", serde_json::json!({"credit": credit.0.to_string(), "reason_hash": reason_hash}));
+    }
+
+    /// 仲裁人裁定。不得是保證人（開格時已檢查）。
+    pub fn resolve_dispute(&mut self, credit: U64, to_seller: bool) {
+        let cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        let t = self.terms.get(&cr.root.0).cloned().unwrap();
+        require!(env::predecessor_account_id() == t.args.arbiter, "ONLY_ARBITER");
+        self.finish_dispute(cr, to_seller);
+    }
+
+    /// 仲裁人逾時：有交貨憑據就給賣方，沒有就退公司。
+    pub fn resolve_timeout(&mut self, credit: U64) {
+        let cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        require!(cr.status == CreditStatus::Disputed, "NOT_DISPUTED");
+        require!(env::block_timestamp() > cr.recourse_until.0, "ARBITER_STILL_HAS_TIME");
+        let delivered = cr.delivery_hash.is_some();
+        self.finish_dispute(cr, delivered);
+    }
+
+    /// 違約：到期加寬限期仍未付，條件全是鏈上狀態，不問買賣糾紛。
+    /// 賠付順序：該格金庫 → 根格可用金庫 → 這筆鎖定的保證金 → 保證人質押。只凍結新賒帳，不斷電。
+    pub fn claim_default(&mut self, credit: U64) {
+        let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        require!(env::predecessor_account_id() == cr.seller, "ONLY_SELLER");
+        require!(cr.status == CreditStatus::Delivered, "NOT_DELIVERED");
+        let now = env::block_timestamp();
+        require!(now > cr.due_at.0 + self.windows.grace.0 * 1_000_000_000, "NOT_DUE");
+        let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
+        let mut left = cr.amount.0;
+        if cr.cell.0 != cr.root.0 {
+            let mut c = self.cells.get(&cr.cell.0).cloned().unwrap();
+            let take = left.min(c.vault.0);
+            c.vault = U128(c.vault.0 - take);
+            left -= take;
+            self.cells.insert(cr.cell.0, c);
+        }
+        let mut r = self.cells.get(&cr.root.0).cloned().unwrap();
+        // 根格金庫：別筆鎖定的保證金不能動，這筆的可以
+        let usable = r.vault.0.saturating_sub(t.bond_locked.0 - cr.bond_locked.0);
+        let take = left.min(usable);
+        r.vault = U128(r.vault.0 - take);
+        left -= take;
+        self.cells.insert(cr.root.0, r);
+        let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+        st.exposure = U128(st.exposure.0 - cr.exposure.0);
+        require!(st.amount.0 >= left, "GUARANTOR_SHORT");
+        st.amount = U128(st.amount.0 - left);
+        self.stakes.insert(t.guarantor.clone(), st);
+        self.credit_seller(&cr.seller.clone(), cr.amount.0);
+        t.outstanding = U128(t.outstanding.0 - cr.amount.0);
+        t.bond_locked = U128(t.bond_locked.0 - cr.bond_locked.0);
+        cr.debt = U128(left);
+        cr.recourse_until = U64(now + self.windows.recourse.0 * 1_000_000_000);
+        cr.status = CreditStatus::Defaulted;
+        if left > 0 {
+            t.open_debts += 1;
+        }
+        let mut rec = self.entities.get(&t.args.entity_tag).cloned().unwrap_or_default();
+        rec.defaults += 1;
+        self.entities.insert(t.args.entity_tag.clone(), rec);
+        self.terms.insert(cr.root.0, t);
+        self.credits.insert(credit.0, cr.clone());
+        event("credit_defaulted", serde_json::json!({"credit": credit.0.to_string(), "guarantor_paid": left.to_string(), "recourse_until": cr.recourse_until.0.to_string()}));
+        self.release_retained(cr.root.0);
+    }
+
+    /// 公司償還保證人：解凍，維持封存。
+    #[payable]
+    pub fn reimburse(&mut self, credit: U64) {
+        let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        let root = self.cells.get(&cr.root.0).cloned().unwrap();
+        require!(env::predecessor_account_id() == root.funder, "ONLY_FUNDER");
+        require!(cr.status == CreditStatus::Defaulted && cr.debt.0 > 0, "NO_DEBT");
+        let d = env::attached_deposit().as_yoctonear();
+        require!(d >= cr.debt.0, "PAY_FULL_DEBT");
+        let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
+        let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+        st.amount = U128(st.amount.0 + cr.debt.0);
+        self.stakes.insert(t.guarantor.clone(), st);
+        self.vault_total += cr.debt.0;
+        if d > cr.debt.0 {
+            Promise::new(root.funder.clone()).transfer(NearToken::from_yoctonear(d - cr.debt.0)).detach();
+        }
+        t.open_debts -= 1;
+        self.terms.insert(cr.root.0, t);
+        cr.debt = U128(0);
+        cr.status = CreditStatus::Reimbursed;
+        self.credits.insert(credit.0, cr);
+        event("credit_reimbursed", serde_json::json!({"credit": credit.0.to_string()}));
+    }
+
+    /// 追償期滿公司仍不還：保證人斷整棵樹的電。
+    pub fn enforce_recourse(&mut self, credit: U64) {
+        let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        let t = self.terms.get(&cr.root.0).cloned().unwrap();
+        require!(env::predecessor_account_id() == t.guarantor, "ONLY_GUARANTOR");
+        require!(cr.status == CreditStatus::Defaulted && cr.debt.0 > 0, "NO_DEBT");
+        require!(env::block_timestamp() > cr.recourse_until.0, "RECOURSE_OPEN");
+        cr.status = CreditStatus::Enforced;
+        self.credits.insert(credit.0, cr.clone());
+        let root = self.cells.get(&cr.root.0).cloned().unwrap();
+        if root.status == Status::Active || matches!(root.status, Status::Tripped) {
+            self.close(cr.root.0, root, Status::Revoked { by: env::predecessor_account_id(), evidence: format!("recourse on credit {}", credit.0) });
+        }
+        event("credit_enforced", serde_json::json!({"credit": credit.0.to_string()}));
+    }
+
+    /// 最後一步：公開公司身分。驗 LEI 承諾、ECR 承諾，以及 LE 對這份條款與 LEI 的簽章，保證人栽贓不了別家公司。
+    /// 不看現行白名單，owner 擋不掉。
+    pub fn credit_unseal(&mut self, credit: U64, lei: String, salt: String, ecr: EcrOpening) {
+        let cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        let t = self.terms.get(&cr.root.0).cloned().unwrap();
+        require!(env::predecessor_account_id() == t.guarantor, "ONLY_GUARANTOR");
+        require!(cr.status == CreditStatus::Enforced, "NOT_ENFORCED");
+        let root = self.cells.get(&cr.root.0).cloned().unwrap();
+        let digest = hex::encode(env::sha256(format!("{}|{}", lei, salt).as_bytes()));
+        require!(digest == root.lei_commit, "COMMIT_MISMATCH");
+        let open = hex::encode(env::sha256(format!("{}|{}|{}|{}", ecr.le_aid, ecr.le_pk, ecr.ecr_said, ecr.salt).as_bytes()));
+        require!(open == root.ecr_commit, "BAD_ECR_OPENING");
+        let sig: [u8; 64] = hex::decode(&t.args.terms_sig).ok().and_then(|v| v.as_slice().try_into().ok()).unwrap_or_else(|| env::panic_str("BAD_TERMS_SIG"));
+        let msg = format!("writ:terms:v1\ncontract={}\namc={}\nterms={}\nlei={}", env::current_account_id(), root.amc_said, t.args.terms_hash, lei);
+        require!(env::ed25519_verify(&sig, msg.as_bytes(), &hex32(&ecr.le_pk, "le_pk")), "LE_DID_NOT_SIGN");
+        self.unseals.insert(cr.root.0, Unseal { requester: cr.seller.clone(), reason_hash: t.args.terms_hash.clone(), requested_at: U64(env::block_timestamp()), objected: false, lei: Some(lei.clone()) });
+        event("credit_unsealed", serde_json::json!({"credit": credit.0.to_string(), "lei": lei, "le_aid": ecr.le_aid}));
+    }
+
+    /// 有名有姓的責任收據：這筆單是誰的 agent 下的、依據哪份條款、誰擔保。
+    pub fn liability_receipt(&self, credit: U64) -> Option<Value> {
+        let cr = self.credits.get(&credit.0)?;
+        let t = self.terms.get(&cr.root.0)?;
+        let root = self.cells.get(&cr.root.0)?;
+        let mut path = vec![cr.cell.0];
+        let mut cur = self.cells.get(&cr.cell.0)?;
+        while let Some(p) = cur.parent {
+            path.push(p);
+            cur = self.cells.get(&p)?;
+        }
+        Some(serde_json::json!({
+            "credit": cr.id, "status": cr.status, "seller": cr.seller, "amount": cr.amount, "due_at": cr.due_at,
+            "invoice_hash": cr.invoice_hash, "agent_path": path.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+            "amc_said": root.amc_said, "guarantor": t.guarantor, "terms_hash": t.args.terms_hash, "entity_tag": t.args.entity_tag,
+            "lei_commit": root.lei_commit, "legal_entity": self.unseals.get(&cr.root.0).and_then(|u| u.lei.clone()).unwrap_or_else(|| "sealed".to_string()),
+        }))
+    }
+
+    fn credit_seller(&mut self, seller: &AccountId, amount: u128) {
+        let cur = self.claimable.get(seller).copied().unwrap_or(0);
+        self.claimable.insert(seller.clone(), cur + amount);
+    }
+
+    /// 解除這筆的鎖定與額度。keep_bps 不用於現況，保留簡單的呼叫形狀。
+    fn release(&mut self, cr: &mut Credit, status: CreditStatus, _unused: u8) {
+        let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
+        t.outstanding = U128(t.outstanding.0 - cr.amount.0);
+        t.bond_locked = U128(t.bond_locked.0 - cr.bond_locked.0);
+        if cr.exposure.0 > 0 {
+            let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+            st.exposure = U128(st.exposure.0 - cr.exposure.0);
+            self.stakes.insert(t.guarantor.clone(), st);
+        }
+        self.terms.insert(cr.root.0, t);
+        cr.status = status;
+        self.release_retained(cr.root.0);
+    }
+
+    fn finish_settled(&mut self, cr: &mut Credit) {
+        let tag = self.terms.get(&cr.root.0).unwrap().args.entity_tag.clone();
+        let mut rec = self.entities.get(&tag).cloned().unwrap_or_default();
+        rec.settled += 1;
+        rec.settled_amount = U128(rec.settled_amount.0 + cr.amount.0);
+        self.entities.insert(tag, rec);
+        self.release(cr, CreditStatus::Settled, 0);
+        event("credit_settled", serde_json::json!({"credit": cr.id.0.to_string(), "amount": cr.amount.0.to_string()}));
+    }
+
+    fn finish_dispute(&mut self, mut cr: Credit, to_seller: bool) {
+        require!(cr.status == CreditStatus::Disputed, "NOT_DISPUTED");
+        let root = self.cells.get(&cr.root.0).cloned().unwrap();
+        let escrow = cr.dispute_escrow.0;
+        let amount = cr.amount.0;
+        cr.dispute_escrow = U128(0);
+        if to_seller {
+            self.credit_seller(&cr.seller.clone(), amount);
+            if escrow > amount {
+                self.vault_total -= escrow - amount;
+                Promise::new(root.funder.clone()).transfer(NearToken::from_yoctonear(escrow - amount)).detach();
+            }
+            self.finish_settled(&mut cr);
+        } else {
+            self.vault_total -= escrow;
+            Promise::new(root.funder.clone()).transfer(NearToken::from_yoctonear(escrow)).detach();
+            self.release(&mut cr, CreditStatus::Cancelled, 0);
+        }
+        event("credit_resolved", serde_json::json!({"credit": cr.id.0.to_string(), "to_seller": to_seller}));
+        self.credits.insert(cr.id.0, cr);
+    }
+
+    /// 樹已關閉且沒有未結清：留在根格的金庫轉成法人可領（claim_refund）。
+    fn release_retained(&mut self, root_id: u64) {
+        let Some(t) = self.terms.get(&root_id) else { return };
+        if t.outstanding.0 > 0 {
+            return;
+        }
+        let Some(mut r) = self.cells.get(&root_id).cloned() else { return };
+        if matches!(r.status, Status::Revoked { .. }) && r.vault.0 > 0 {
+            r.unclaimed = U128(r.unclaimed.0 + r.vault.0);
+            r.vault = U128(0);
+            self.cells.insert(root_id, r);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1050,7 +1739,7 @@ mod tests {
             testing_env!(c, near_sdk::test_vm_config(), near_sdk::RuntimeFeesConfig::test(), Default::default(), results);
         };
         ctx(vec![]);
-        let mut w = Contract::new(writ.clone(), None);
+        let mut w = Contract::new(writ.clone(), None, None);
         let pk: PublicKey = "ed25519:6E8sCci9badyRkXb3JoRpBj5p8C6Tw41ELDZoiihKEtp".parse().unwrap();
         let cell = |status: Status| Cell {
             amc_said: "E".into(), issuer_aid: String::new(), issuer_pk: String::new(), agent_pk: pk.clone(), verifier: writ.clone(), funder: funder.clone(),
