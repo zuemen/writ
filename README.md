@@ -1,6 +1,6 @@
-# Writ
+# Writ: Verifiable, Revocable Payment Mandates for AI Agents
 
-**GLEIF Agent Mandate Credentials, enforced on NEAR.** Verify once, enforce every time, revoke at block speed.
+**An AI agent can pay only whom it was authorized to pay, only as much as it was authorized to spend, and only until a human takes the authorization back.** The authorization is a GLEIF Agent Mandate Credential (KERI/vLEI); NEAR enforces it on every payment. Verify once, enforce every time, revoke at block speed.
 
 An AI agent pays suppliers on behalf of a company. Writ answers three questions for every payment, on-chain, without putting the company's identity on-chain:
 
