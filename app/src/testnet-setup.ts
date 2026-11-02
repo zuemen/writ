@@ -9,7 +9,7 @@ import { DEMO, NEAR, ROOT, as, call, deployLocked, writeJson, readJson, provider
 import { py } from "./keri.js";
 
 const tag = process.env.WRIT_TESTNET_TAG ?? `writ${Date.now().toString(36)}`;
-const names = ["writ", "owner", "verifier", "acme", "merchant", "attacker", "regulator"];
+const names = ["writ", "owner", "verifier", "acme", "merchant", "supplier", "attacker", "regulator"];
 const path = join(DEMO, "accounts.json");
 const accts: Record<string, { id: string; sk: KeyPairString }> = existsSync(path) ? readJson(path) : {};
 
