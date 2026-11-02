@@ -3159,22 +3159,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
-name = "sealed-mandate"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bs58 0.5.1",
- "ed25519-dalek",
- "hex",
- "near-sdk",
- "near-workspaces",
- "rand 0.8.8",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
-]
-
-[[package]]
 name = "sec1"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4372,6 +4356,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "writ"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bs58 0.5.1",
+ "ed25519-dalek",
+ "hex",
+ "near-sdk",
+ "near-workspaces",
+ "rand 0.8.8",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
 ]
 
 [[package]]

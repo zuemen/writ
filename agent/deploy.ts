@@ -1,6 +1,6 @@
 /**
  * 把合約部署到 RPC 指向的鏈上的某個帳號（sandbox：test.near；testnet：你的帳號），並呼叫 new()。
- *   RPC=http://127.0.0.1:3030 CONTRACT=test.near OWNER_KEY=ed25519:... WASM=../contract/target/wasm32-unknown-unknown/release/sealed_mandate.wasm npx tsx deploy.ts
+ *   RPC=http://127.0.0.1:3030 CONTRACT=test.near OWNER_KEY=ed25519:... WASM=../contract/target/wasm32-unknown-unknown/release/writ.wasm npx tsx deploy.ts
  */
 import { Account, JsonRpcProvider, KeyPairSigner, teraToGas, type KeyPairString } from "near-api-js";
 import { readFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 const RPC = process.env.RPC ?? "http://127.0.0.1:3030";
 const CONTRACT = process.env.CONTRACT!;
 const OWNER_KEY = process.env.OWNER_KEY! as KeyPairString;
-const WASM = process.env.WASM ?? "../contract/target/wasm32-unknown-unknown/release/sealed_mandate.wasm";
+const WASM = process.env.WASM ?? "../contract/target/wasm32-unknown-unknown/release/writ.wasm";
 
 const provider = new JsonRpcProvider({ url: RPC });
 const owner = new Account(CONTRACT, provider, KeyPairSigner.fromSecretKey(OWNER_KEY));

@@ -1,5 +1,5 @@
 [package]
-name = "sealed-mandate"
+name = "writ"
 version = "0.1.0"
 edition = "2021"
 # Spike 版（D1）：驗證 Keypom 模式、ed25519_verify、sha256 鏈。D2 起長成正式合約。
@@ -12,6 +12,7 @@ near-sdk = "5.30.0"
 hex = "0.4"
 
 [dev-dependencies]
+hex = "0.4"
 near-sdk = { version = "5.30.0", features = ["unit-testing"] }
 near-workspaces = "0.24.0"
 tokio = { version = "1", features = ["full"] }
