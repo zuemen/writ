@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 LOG="$(mktemp -d)"
 RPC="https://test.rpc.fastnear.com"
-CONTRACT="writ-credit-writ.testnet"
+CONTRACT="writ-guarantee.testnet"
 fail=0
 row() { printf '%-34s %-6s %s\n' "$1" "$2" "$3"; [ "$2" = "PASS" ] || [ "$2" = "SKIP" ] || fail=1; }
 

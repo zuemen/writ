@@ -21,7 +21,7 @@ const pool: any = existsSync(path) ? readJson(path) : { rpc: RPC, contract: a.wr
 
 if (!pool.relayer) {
   const kp = KeyPair.fromRandom("ed25519");
-  const id = `relay.${a.owner.id}`;
+  const id = `relay-${a.writ.id.split(".")[0]}.${a.owner.id}`;
   const full = KeyPair.fromRandom("ed25519");
   await as(a.owner.id, a.owner.sk).signAndSendTransaction({
     receiverId: id,

@@ -239,7 +239,7 @@ btn("s3").addEventListener("click", async () => {
     return out("o3", o, "err");
   }
   const c: any = await provider.callFunction({ contractId: cfg.contract, method: "credit_of", args: { credit: creditId } });
-  out("o3", { ...o, verdict: "You are paid in full", why: `The contract paid you from the company's money first, then ${nearStr(c.debt)} from the guarantor's stake. Nobody had to agree. The company's agents are frozen: no new credit, no payments, no hires. It is still sealed: it can still repay the guarantor.` }, "block");
+  out("o3", { ...o, verdict: "You are paid in full", why: `The contract paid you from the company's money first, then ${nearStr(c.debt)} from the guarantor's stake. No approval needed. The company's agents are frozen: no new credit, no payments, no hires. It is still sealed: it can still repay the guarantor.` }, "block");
   setSteps("step", 4);
   btn("s4").textContent = "Waiting";
   await renderCard();
