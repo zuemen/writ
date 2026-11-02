@@ -50,7 +50,7 @@ rmSync(join(ROOT, "keri/registrar"), { recursive: true, force: true });
 const out = py("issuer.py", "init", "--scope", accts.merchant.id, "--rail", accts.acme.id,
   "--n", process.env.WRIT_N ?? "50", "--unit", "1e23", "--daily", process.env.WRIT_DAILY ?? "20", "--days", "30",
   "--max-strikes", process.env.WRIT_MAX_STRIKES ?? "3",
-  "--credit-limit", "1e24", "--bond-bps", "0", "--min-tenor", "0", "--max-tenor", "86400", "--arbiter", accts.arbiter.id, "--contract", accts.writ.id);
+  "--credit-limit", "1e24", "--bond-bps", "0", "--premium-bps", "200", "--min-tenor", "0", "--max-tenor", "86400", "--arbiter", accts.arbiter.id, "--contract", accts.writ.id);
 const st = JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1));
 py("verify.py", "pin", "--root", st.root); // 信任錨由驗證端釘住，不是持有人出示的
 console.log(`  KERI: LE ${st.le.slice(0, 12)}… → ECR → human ${st.human.slice(0, 12)}… → AMC → agent ${st.agent.slice(0, 12)}… (delegated)`);

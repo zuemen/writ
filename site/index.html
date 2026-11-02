@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Writ: who pays when the AI gets it wrong</title>
-<meta name="description" content="AI agents can buy on credit because who pays is named before they buy. A guarantor on NEAR pays automatically; the company's name stays sealed unless it never repays. Run it in your browser.">
-<meta property="og:title" content="Writ: who pays when the AI gets it wrong?">
+<title>Writ: who pays if an AI agent's company doesn't</title>
+<meta name="description" content="AI agents can buy on credit because who pays is named before they buy. A guarantor with stake on NEAR pays the seller; the company's name stays sealed unless it never repays. Run it in your browser.">
+<meta property="og:title" content="Writ: who pays if an AI agent's company doesn't?">
 <meta property="og:description" content="Who pays is named before the agent buys. Run it in your browser, then try to steal a published agent key.">
 <meta property="og:image" content="https://writ-near.112306007.workers.dev/og.png">
 <meta property="og:type" content="website">
@@ -78,7 +78,7 @@
   .mini { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:12px; }
   .mini .node { padding:7px 9px; }
   .mini .node b { font-size:12.5px; }
-  .mini .stamp { right:50%; transform:translateX(50%) rotate(-7deg); top:7px; font-size:13px; padding:0 5px; border-width:2px; }
+  .mini .stamp { right:6px; left:auto; top:auto; bottom:6px; transform:rotate(-5deg); font-size:10.5px; padding:0 4px; border-width:1.5px; letter-spacing:0; }
   .pick { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
   .clock { font:600 13px var(--mono); color:var(--ox); margin-top:6px; min-height:18px; }
 
@@ -142,6 +142,10 @@
   .note { font-size:14px; color:var(--soft); margin:12px 0 0; max-width:760px; }
 
   .how { display:grid; grid-template-columns:repeat(4,1fr); border-top:2px solid var(--ink); }
+  .verdict4 { grid-column:2 / -1; margin-top:12px; padding:14px 16px; border:1px solid var(--rule-strong); background:#fffdf7; }
+  .verdict4[hidden] { display:none; }
+  .vname { margin:6px 0 10px; font:500 15px var(--mono); color:var(--ox); overflow-wrap:anywhere; }
+  .node.dead { background:#f7ebe6; }
   .how div.col { padding:20px 24px 4px 0; }
   .how div.col + div.col { padding-left:24px; border-left:1px solid var(--rule); }
   .how h4 { font:600 23px/1.2 var(--serif); margin:6px 0 8px; }
@@ -163,7 +167,17 @@
   @media (prefers-reduced-motion:reduce) { .reveal, .stamp.on { animation-duration:.01s; animation-delay:0s; } html { scroll-behavior:auto; } }
   @media (max-width:880px) {
     .hero, .steal { grid-template-columns:1fr; gap:34px; }
-    .hero { padding:40px 0 52px; }
+    .hero { padding:28px 0 44px; display:flex; flex-direction:column; gap:18px; }
+    .hero > div:first-child { display:contents; }
+    .hero h1 { order:1; margin:0; font-size:clamp(34px,10vw,46px); }
+    .hero .eyebrow.reveal { order:0; margin:0; }
+    .hero .org { order:2; }
+    .hero .lead { order:3; margin:0; }
+    .hero .cta { order:4; margin:0; }
+    .verdict4 { grid-column:1 / -1; }
+    .big { gap:4px; }
+    .big .num { font-size:64px; }
+    .tally span { line-height:1.25; }
     .how { grid-template-columns:1fr; }
     .how div.col + div.col { padding-left:0; border-left:0; border-top:1px solid var(--rule); }
     .proof { grid-template-columns:1fr 1fr; }
@@ -193,18 +207,19 @@
   <div class="hero">
     <div>
       <div class="eyebrow reveal">Accountable AI agents, on NEAR</div>
-      <h1 class="reveal d1">Who pays when the AI gets it wrong? <em>Named before it buys.</em></h1>
-      <p class="lead reveal d2">An AI agent wants to buy from you on credit. You can't see the company behind it, and you don't have to: a named guarantor has money locked on-chain. If the company doesn't pay, the guarantor does, automatically. If the company never repays, every agent it runs loses its key, and its name goes public.</p>
+      <h1 class="reveal d1">Who pays if an AI agent's company doesn't? <em>Named before it buys.</em></h1>
+      <p class="lead reveal d2">An AI agent wants to buy from you on credit. You can't see the company behind it, and you don't have to: a named guarantor has money locked on-chain and earns a fee for standing behind it. If the company doesn't pay, you claim and you're paid, no approval needed. If it never repays, the guarantor can delete the keys of that mandate's agents and name the company.</p>
       <div class="cta reveal d3"><a class="btn" href="#run">Sell to an AI agent</a><a class="btn ghost" href="#steal">Try to steal a key</a></div>
     </div>
     <div class="org reveal d2" id="org"><div class="org-in">
       <div class="eyebrow" style="margin-bottom:10px">Risk card · live on testnet · <span id="treeNo">…</span></div>
       <dl class="card-row">
-        <dt>Company</dt><dd id="rcCompany"><span class="sealed">Demo Trading Ltd</span> sealed</dd>
+        <dt>Company</dt><dd id="rcCompany"><span class="sealed">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span> sealed</dd>
         <dt>Guarantor</dt><dd id="rcGuarantor">…</dd>
         <dt>Guarantor stake</dt><dd id="rcStake">…</dd>
         <dt>Credit limit</dt><dd id="rcLimit">…</dd>
         <dt>Bond</dt><dd id="rcBond">…</dd>
+        <dt>Guarantee fee</dt><dd id="rcFee">…</dd>
         <dt>Payment record</dt><dd id="rcRecord">…</dd>
       </dl>
       <div class="mini">
@@ -214,7 +229,7 @@
       </div>
     </div></div>
   </div>
-  <a class="keystrip" href="#steal" style="text-decoration:none"><b>This agent's private key is public.</b><code id="keyTop">…</code><span style="font-weight:600;white-space:nowrap"><span id="attemptsTop">…</span> attempts, 0 stolen. Try it ↓</span></a>
+  <a class="keystrip" href="#steal" style="text-decoration:none"><b>This agent's private key is public.</b><code id="keyTop">…</code><span style="font-weight:600;white-space:nowrap"><span id="attemptsTop">…</span> attempts, <span id="stolenTop">…</span> stolen. Try it ↓</span></a>
 </main>
 
 <section id="run"><div class="wrap">
@@ -231,7 +246,7 @@
     </div>
     <div class="step" data-step="2">
       <div class="n">2</div>
-      <div><h4>Accept the order and ship</h4><p>Accepting locks the bond and the guarantor's exposure for this order, so no other seller can drain them.</p></div>
+      <div><h4>Accept the order and ship</h4><p>Accepting pays the guarantor its fee and locks the bond and the guarantor's exposure for this order, so no other seller can drain them.</p></div>
       <div class="act"><button class="btn" id="s2" disabled>Accept and ship</button></div>
       <div class="out" id="o2"></div>
     </div>
@@ -246,6 +261,11 @@
       <div><h4>The company doesn't repay the guarantor</h4><p>It had a recourse period to repay and stay sealed. Until now its agents were frozen but kept their keys, and any money they held could still repay the debt.</p><div class="clock" id="clock4"></div></div>
       <div class="act"><button class="btn danger" id="s4" disabled>Waiting</button></div>
       <div class="out" id="o4"></div>
+      <div class="verdict4" id="r4" hidden>
+        <div class="eyebrow">Risk card now</div>
+        <p class="vname" id="r4name"></p>
+        <div class="mini"><div class="node dead"><b>AP agent</b><span>key deleted</span><div class="stamp on">REVOKED</div></div><div class="node dead"><b>Procurement</b><span>key deleted</span><div class="stamp on">REVOKED</div></div><div class="node dead"><b>Quotes</b><span>key deleted</span><div class="stamp on">REVOKED</div></div></div>
+      </div>
     </div>
   </div>
   <p class="pooltext" id="pooltext"></p>
@@ -258,7 +278,7 @@
   <div class="steps">
     <div class="step" data-fstep="1">
       <div class="n">1</div>
-      <div><h4>A poisoned invoice reaches the lowest agent</h4><p>Suppose it obeys. Real models often do; see below.</p><div class="poison" id="poison"></div></div>
+      <div><h4>A poisoned invoice reaches the lowest agent</h4><p>Suppose it obeys. Real models sometimes do; see below.</p><div class="poison" id="poison"></div></div>
       <div class="act"><button class="btn" id="f1">Obey the invoice</button></div>
       <div class="out" id="fo1"></div>
     </div>
@@ -334,7 +354,7 @@
   <p class="sub">GLEIF's August 2026 discussion paper calls for an Agent Mandate Credential and leaves sub-delegation between agents open. Writ puts the mandate's state, the whole tree under it, and who pays for its debts in one NEAR contract.</p>
   <div class="how">
     <div class="col"><div class="eyebrow">Who answers</div><h4>A sealed name, a named guarantor</h4><p>Root → QVI → legal entity → employee on the official vLEI schemas, then a proposed Agent Mandate Credential to the agent. The guarantor checks the chain off-chain with keripy and signs. On-chain there is only a commitment to the LEI. The issuers in this demo are mocks.</p></div>
-    <div class="col"><div class="eyebrow">Who pays</div><h4>A fixed order, no one's consent</h4><p>On default: the agent's vault, the company's vault, its bond, then the guarantor's stake. The seller is paid in full up to the limit the stake covers. The company then has a recourse period to repay the guarantor and stay sealed.</p></div>
+    <div class="col"><div class="eyebrow">Who pays</div><h4>A fixed order, written in advance</h4><p>On default: the agent's vault, then the company's vault including its bond, then the guarantor's stake. The seller claims, no approval needed; the company can stop it only by escrowing the full amount and disputing. It then has a recourse period to repay the guarantor and stay sealed.</p></div>
     <div class="col"><div class="eyebrow">What it may do</div><h4>Only ever narrower</h4><p>An agent hires by spending budget links the employee already released. Payees, expiry, rate and per-payment cap can only shrink, up to 3 levels and 16 agents. Every payment is checked on-chain: payee, unpaid invoice, cap, hash-chain budget, rate, expiry.</p></div>
     <div class="col"><div class="eyebrow">When it ends</div><h4>The key stops existing</h4><p>NEAR lets a contract add and delete keys on its own account, and each agent key is restricted by the protocol to five methods. Closing the root deletes every key in one batch: 16 agents, 17 Tgas. Debts keep the money in the tree until they are paid.</p></div>
   </div>
@@ -344,17 +364,18 @@
   <div class="eyebrow">Check it yourself</div>
   <h3 class="title">Every number has a command.</h3>
   <div class="proof">
-    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>75 / 75</b><span>attacks blocked in the bench; attacker gain measured, 0</span></a>
+    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>78 / 78</b><span>attacks blocked in the bench; attacker gain measured, 0</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>16 keys, 1 tx</b><span>a full tree closed in one transaction, 17 Tgas</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/keri/test_forgeries.py"><b>14</b><span>forged or stale credential chains the verifier refuses</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/docs/testnet-usdc.md"><b>0.1 USDC</b><span>paid in Circle's testnet USDC, injection rejected</span></a>
   </div>
   <ul class="limits">
     <li>The vLEI schemas are GLEIF's; the issuers are mocks with a fictional LEI, and no real QVI issued anything. The Agent Mandate Credential schema is a proposal, since GLEIF has not published one.</li>
-    <li>Testnet only, no real users, and no real guarantor has underwritten anything. Who would guarantee an agent, and at what fee, is an open commercial question. Credit is in NEAR only; the terms text is a placeholder no lawyer has reviewed.</li>
+    <li>Testnet only, no real users, and no real guarantor has underwritten anything. The fee here is a demo number: 2%. Who would guarantee an agent, and at what price, is an open commercial question. Credit is in NEAR only; the terms text is a placeholder no lawyer has reviewed.</li>
     <li>A guarantor that also holds the company's legal-entity key could name that company falsely: the contract checks the signature, and the link between that key and the LEI is checked off-chain.</li>
     <li>The company's LEI stays a commitment until it is disclosed, but funding accounts and payments are public and linkable.</li>
     <li>Revocation takes effect when the signed event reaches the contract; no relayer ships with the repo. A fooled payment inside every limit, to a permitted payee, for a new invoice, still gets paid.</li>
+    <li>Disclosure takes the guarantor's action, since it holds the salt, and it does not happen if money left in the tree repays the debt. Closing affects the agents under one mandate, not every mandate the company has.</li>
     <li>The buttons on this page sign real testnet transactions, with short windows so you can watch them: 15 seconds to due, 20 seconds of recourse. The guarantor's steps run from this page. The agents do not think here; the model results are separate runs on a local sandbox.</li>
   </ul>
   <p class="note">All limits are in the <a href="https://github.com/zuemen/writ#not-implemented--limits">README</a>, with the trust model. <span class="mono">make verify</span> reruns everything and prints a scorecard.</p>

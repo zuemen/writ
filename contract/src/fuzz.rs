@@ -201,7 +201,7 @@ mod fuzz {
                 w.used_keys.insert(p2.clone());
                 w.vault_total += v;
                 if i < 2 {
-                    w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(20 * UNIT), bond_bps: bps, min_tenor: U64(10), max_tenor: U64(1000), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: format!("t{}", i), arbiter: acc("arb.near") }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
+                    w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(20 * UNIT), bond_bps: bps, premium_bps: 150, min_tenor: U64(10), max_tenor: U64(1000), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: format!("t{}", i), arbiter: acc("arb.near") }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
                 }
                 id
             }).unwrap();

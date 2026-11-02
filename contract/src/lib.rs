@@ -176,6 +176,7 @@ pub struct RegisterArgs {
 pub struct CreditArgs {
     pub limit: U128,            // 未結清總額上限
     pub bond_bps: u32,          // 保證金比例（萬分比），賣方接受時逐筆鎖定
+    pub premium_bps: u32,       // 保證費（萬分比），賣方接受時由公司金庫付給保證人，不退
     pub min_tenor: U64,         // 到期日距今最短（秒），防注入把到期設成幾秒後
     pub max_tenor: U64,
     pub terms_hash: String,     // 公司簽過的條款雜湊（準據法、同意揭露等）
@@ -238,6 +239,7 @@ pub struct Stake {
     pub amount: U128,
     pub exposure: U128,
     pub unstake_at: U64, // 0 = 沒有申請提領
+    pub earned: U128,    // 累計收到的保證費
 }
 
 /// 假名的付款紀錄，風險卡顯示。
@@ -349,7 +351,7 @@ fn event(name: &str, data: Value) {
 pub fn attestation_message(a: &RegisterArgs, funder: &AccountId, contract: &AccountId) -> String {
     let scope: Vec<&str> = a.scope.iter().map(|s| s.as_str()).collect();
     format!(
-        "writ:attest:v4\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}\ncredit={}",
+        "writ:attest:v5\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}\ncredit={}",
         contract,
         a.amc_said,
         a.issuer_aid,
@@ -369,7 +371,7 @@ pub fn attestation_message(a: &RegisterArgs, funder: &AccountId, contract: &Acco
         a.verifier,
         a.attested_at.0,
         a.asset.as_ref().map(|t| t.as_str()).unwrap_or("near"),
-        a.credit.as_ref().map(|c| format!("{},{},{},{},{},{},{},{}", c.limit.0, c.bond_bps, c.min_tenor.0, c.max_tenor.0, c.terms_hash, c.terms_sig, c.entity_tag, c.arbiter)).unwrap_or_else(|| "none".to_string())
+        a.credit.as_ref().map(|c| format!("{},{},{},{},{},{},{},{},{}", c.limit.0, c.bond_bps, c.premium_bps, c.min_tenor.0, c.max_tenor.0, c.terms_hash, c.terms_sig, c.entity_tag, c.arbiter)).unwrap_or_else(|| "none".to_string())
     )
 }
 
@@ -502,7 +504,7 @@ impl Contract {
         if let Some(cr) = &args.credit {
             require!(args.asset.is_none(), "CREDIT_NEAR_ONLY");
             require!(cr.arbiter != args.verifier && cr.arbiter != funder, "ARBITER_NOT_INDEPENDENT");
-            require!(cr.bond_bps <= 10_000 && cr.min_tenor.0 <= cr.max_tenor.0, "BAD_CREDIT_TERMS");
+            require!(cr.bond_bps <= 10_000 && cr.premium_bps <= 2_000 && cr.min_tenor.0 <= cr.max_tenor.0, "BAD_CREDIT_TERMS");
             hex32(&cr.terms_hash, "terms_hash");
             require!(hex::decode(&cr.terms_sig).map(|v| v.len() == 64).unwrap_or(false), "BAD_TERMS_SIG");
             self.terms.insert(id, CreditTerms {
@@ -1243,6 +1245,8 @@ impl Contract {
             "credit_limit": t.args.limit,
             "outstanding": t.outstanding,
             "bond_bps": t.args.bond_bps,
+            "premium_bps": t.args.premium_bps,
+            "guarantor_earned": stake.earned,
             "bond_available": U128(root.vault.0.saturating_sub(t.bond_locked.0)),
             "min_tenor": t.args.min_tenor,
             "max_tenor": t.args.max_tenor,
@@ -1425,7 +1429,7 @@ impl Contract {
         require!(cr.status == CreditStatus::Open, "NOT_OPEN");
         require!(env::block_timestamp() <= cr.opened_at.0 + self.windows.accept_ttl.0 * 1_000_000_000, "OFFER_EXPIRED");
         let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
-        let root = self.cells.get(&cr.root.0).cloned().unwrap();
+        let mut root = self.cells.get(&cr.root.0).cloned().unwrap();
         let cell = self.cells.get(&cr.cell.0).cloned().unwrap();
         // 公司已撤銷或停權、已凍結、期限已過：這張報價不能再成立，否則是拿保證人的錢墊
         require!(cell.status == Status::Active && !self.suspended(&cell), "AGENT_NOT_ACTIVE");
@@ -1434,12 +1438,20 @@ impl Contract {
         require!(cr.seller != t.args.arbiter, "ARBITER_NOT_INDEPENDENT");
         // 保證人或公司自己當賣方，等於自己製造違約：前者可走到揭露，後者把質押領給自己
         require!(cr.seller != t.guarantor && cr.seller != root.funder, "SELLER_NOT_INDEPENDENT");
-        let want = cr.amount.0 * (t.args.bond_bps as u128) / 10_000;
+        // 保證費：這是保證人肯做的理由。接受當下收，之後怎麼結束都不退（曝險已經承擔）
+        let premium = cr.amount.0 * (t.args.premium_bps as u128) / 10_000;
         let free = root.vault.0.saturating_sub(t.bond_locked.0);
+        require!(free >= premium, "PREMIUM_SHORT");
+        root.vault = U128(root.vault.0 - premium);
+        self.cells.insert(cr.root.0, root);
+        let free = free - premium;
+        let want = cr.amount.0 * (t.args.bond_bps as u128) / 10_000;
         let bond = want.min(free);
         let exposure = cr.amount.0 - bond;
         let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
-        require!(st.amount.0.saturating_sub(st.exposure.0) >= exposure, "GUARANTOR_CAPACITY");
+        require!(st.amount.0.saturating_add(premium).saturating_sub(st.exposure.0) >= exposure, "GUARANTOR_CAPACITY");
+        st.amount = U128(st.amount.0 + premium);
+        st.earned = U128(st.earned.0 + premium);
         st.exposure = U128(st.exposure.0 + exposure);
         self.stakes.insert(t.guarantor.clone(), st);
         t.bond_locked = U128(t.bond_locked.0 + bond);
@@ -1448,7 +1460,7 @@ impl Contract {
         cr.exposure = U128(exposure);
         cr.status = CreditStatus::Accepted;
         self.credits.insert(credit.0, cr);
-        event("credit_accepted", serde_json::json!({"credit": credit.0.to_string(), "bond": bond.to_string(), "guarantor_exposure": exposure.to_string()}));
+        event("credit_accepted", serde_json::json!({"credit": credit.0.to_string(), "bond": bond.to_string(), "premium": premium.to_string(), "guarantor_exposure": exposure.to_string()}));
     }
 
     /// 取消：沒人接受的報價逾時後任何人可取消，公司或保證人隨時可取消；
@@ -1881,7 +1893,7 @@ mod tests {
         assert_eq!(w.vault_total, 5);
 
         // 公司還欠錢：撤銷中轉帳失敗的錢留在根格，不退給公司
-        let args = CreditArgs { limit: U128(1), bond_bps: 0, min_tenor: U64(0), max_tenor: U64(1), terms_hash: String::new(), terms_sig: String::new(), entity_tag: String::new(), arbiter: writ.clone() };
+        let args = CreditArgs { limit: U128(1), bond_bps: 0, premium_bps: 0, min_tenor: U64(0), max_tenor: U64(1), terms_hash: String::new(), terms_sig: String::new(), entity_tag: String::new(), arbiter: writ.clone() };
         w.terms.insert(1, CreditTerms { args, guarantor: writ.clone(), terms_ecr_commit: String::new(), outstanding: U128(0), bond_locked: U128(0), open_debts: 1 });
         ctx(vec![PromiseResult::Failed]);
         assert!(matches!(w.on_transfer(U64(1), U128(5), "00".repeat(32), funder.clone(), 1, 0, Err(PromiseError::Failed)), Verdict::Rejected { .. }));

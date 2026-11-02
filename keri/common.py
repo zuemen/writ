@@ -96,6 +96,7 @@ AMC = _schema(
         "settlementAsset": {"type": "string"},
         "creditLimitYocto": {"type": "string"},
         "bondBps": {"type": "integer"},
+        "premiumBps": {"type": "integer"},
         "minTenorSecs": {"type": "integer"},
         "maxTenorSecs": {"type": "integer"},
         "termsHash": {"type": "string"},

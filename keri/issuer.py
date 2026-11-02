@@ -66,7 +66,7 @@ TERMS_HASH = hashlib.sha256(TERMS.encode()).hexdigest()
 def credit_attrs(a):
     if not a.credit_limit:
         return {}
-    return dict(creditLimitYocto=str(int(decimal.Decimal(a.credit_limit))), bondBps=a.bond_bps, minTenorSecs=a.min_tenor,
+    return dict(creditLimitYocto=str(int(decimal.Decimal(a.credit_limit))), bondBps=a.bond_bps, premiumBps=a.premium_bps, minTenorSecs=a.min_tenor,
                 maxTenorSecs=a.max_tenor, termsHash=TERMS_HASH, arbiter=a.arbiter)
 
 
@@ -272,6 +272,7 @@ if __name__ == "__main__":
     i.add_argument("--max-links", type=int, default=10, help="單筆最多幾節")
     i.add_argument("--credit-limit", default=None, help="可賒總額（yocto）；省略 = 這張 AMC 不能賒帳")
     i.add_argument("--bond-bps", type=int, default=5000)
+    i.add_argument("--premium-bps", type=int, default=0, help="保證費，賣方接受時由公司金庫付給保證人")
     i.add_argument("--min-tenor", type=int, default=60)
     i.add_argument("--max-tenor", type=int, default=2592000)
     i.add_argument("--arbiter", default=None)

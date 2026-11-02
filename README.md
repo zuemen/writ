@@ -7,8 +7,9 @@ Trust isn't proving an AI won't fail. It's knowing who pays when it does.
 An AI agent wants to buy from you on credit. Nobody can prove it won't be fooled, and you can't see the company behind it. **Writ is a standby letter of credit for agents, in a NEAR contract:**
 
 1. **The company's name is sealed and a guarantor is named.** The seller reads a risk card: guarantor, locked stake, credit limit, bond, payment record, and only a commitment to the company's LEI.
-2. **If the company doesn't pay, the seller is still paid.** After delivery, the due date and an inspection window, the seller claims default. Nobody has to agree. The money comes from the agent's vault, the company's vault, its bond and then the guarantor's stake. The company can no longer pay anyone else, hire or take new credit.
-3. **If it repays the guarantor in time, it stays sealed.** If it doesn't, the guarantor closes the whole tree of agents in one transaction, any money left in the tree goes to the guarantor first, and the company's name goes public.
+2. **The guarantor earns a fee.** When the seller accepts, the company's vault pays the guarantor a percentage of the order, signed into the mandate. That is why a guarantor would do this.
+3. **If the company doesn't pay, the seller is still paid.** After delivery, the due date and an inspection window, the seller claims default, with no approval needed. The money comes from the agent's vault, then the company's vault including its bond, then the guarantor's stake. The company can stop this only by escrowing the full amount and opening a dispute. Until it repays, its agents can't pay, hire or take new credit.
+4. **If it repays the guarantor in time, it stays sealed.** If it doesn't, the guarantor closes that mandate's whole tree of agents in one transaction, money left in the tree repays the guarantor first, and if a debt remains the guarantor names the company. The contract checks the name against the commitment and the legal entity's signature.
 
 Under that, every agent is tied to the person who authorized it. Each hire can only narrow what it may do, and firing that person deletes every key in the tree. The chain follows GLEIF's vLEI: legal entity → named employee (role credential, official schema) → agent (Agent Mandate Credential, a proposal based on GLEIF's August 2026 discussion paper) → the agents it hires.
 
@@ -35,11 +36,11 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with
 | # | Do | See |
 |---|---|---|
 | 1 | `make setup` | contract builds and is shrunk with wasm-opt (≈ 300 KB); size and `sha256sum` of `contract/res/writ.wasm` printed |
-| 2 | `make test` | `test result: ok. 54 passed` and the table in [`docs/bench.md`](docs/bench.md): **75 attacks, 45 blocked as expected, attacker gain 0 yoctoNEAR** (the attacker's balance is measured at the end of each test) |
-| 3 | `make demo` | a fresh local sandbox starts (port 3030 must be free); the 8-step story prints (about 1 min, includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
-| 4 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
-| 5 | `make keri-check` | the verifier prints 23 ✓ lines (mock root → QVI → legal entity → ECR → AMC: KEL, TEL, ACDC, registry control, schemas, I2I edges, delegation), then refuses 14 forged or stale chains; last line `KERI_FORGERIES\|PASS\|14` |
-| 6 | `make credit-demo` | the whole credit story with real KERI signatures: risk card, paid on time and sealed, unpaid and the guarantor pays, frozen, recourse over, keys deleted, a false company refused, the real one named; ends in `CREDIT_RESULT\|PASS` |
+| 2 | `make test` | `test result: ok. 59 passed` and the table in [`docs/bench.md`](docs/bench.md): **78 attacks, 78 blocked** (the attacker's balance is measured at the end of each test) |
+| 3 | `make credit-demo` | the whole credit story with real KERI signatures: risk card, paid on time and sealed, unpaid and the guarantor pays, frozen, recourse over, keys deleted, a false company refused, the real one named; ends in `CREDIT_RESULT\|PASS` |
+| 4 | `make demo` | a fresh local sandbox starts (port 3030 must be free); the 8-step story prints (about 1 min, includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
+| 5 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
+| 6 | `make keri-check` | the verifier prints 23 ✓ lines (mock root → QVI → legal entity → ECR → AMC: KEL, TEL, ACDC, registry control, schemas, I2I edges, delegation), then refuses 14 forged or stale chains; last line `KERI_FORGERIES\|PASS\|14` |
 | 7 | optional: `NEARAI_API_KEY=... make attack-live` (or `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` for any OpenAI-compatible provider) | a real LLM reads both invoices and chooses the tool calls; 5 attacks × `LLM_RUNS` per model in `LLM_MODEL`; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in `docs/attack-live.md` |
 
 `make test` runs the bench in a fresh sandbox per test. `make demo` / `make ui` run `scripts/sandbox.sh` (a local `neard` sandbox on :3030; data in `.sandbox/`).
@@ -71,6 +72,40 @@ DEMO_RESULT|PASS|paid=true|injection=SCOPE|attacker_gain=0|disclosed=true|revoke
 
 ## How it works
 
+The credit path, with the identity layer below it:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Company (name sealed)
+    participant G as Guarantor (named, staked)
+    participant W as Writ contract (NEAR)
+    participant A as Agent
+    participant S as Seller
+    G->>G: checks the company's vLEI chain off-chain
+    G-->>C: attestation (limit, bond, fee, arbiter, LEI commitment)
+    C->>W: register + vault
+    G->>W: stake
+    S->>W: risk_card: guarantor, stake, limit, fee, record, no name
+    A->>W: open_credit (budget links, no money moves)
+    S->>W: accept_credit: fee to guarantor, bond and exposure locked
+    S->>W: mark_delivered
+    alt company pays
+        A->>W: settle: seller paid, name stays sealed
+    else not paid after due date and inspection
+        S->>W: claim_default: vault, then stake pays the seller in full
+        W-->>C: agents frozen, recourse period starts
+        alt repays
+            C->>W: reimburse: unfrozen, name stays sealed
+        else never repays
+            G->>W: enforce_recourse: every key in the tree deleted, tree's money to guarantor
+            G->>W: credit_unseal: name checked against commitment and LE signature
+        end
+    end
+```
+
+The mandate underneath:
+
 ```
  credential time (once, off-chain + one on-chain signature check)          runtime (every payment, on-chain)
  ───────────────────────────────────────────────────────────────          ──────────────────────────────────
@@ -82,7 +117,7 @@ DEMO_RESULT|PASS|paid=true|injection=SCOPE|attacker_gain=0|disclosed=true|revoke
                 │                                                                    sha256^j(preimage) == w_cur?
  legal entity: register(attestation) + deposit                                       within n? within daily rate?
  contract: ed25519_verify(attestation) → add function-call key                       vault covers j × unit?
-           (receiver = contract, methods = ["spend"])                      → pay, or Rejected{reason} + event
+           (receiver = contract, five agent methods)                       → pay, or Rejected{reason} + event
                                                                            3 strikes → delete key
  revocation: HR revokes the employee's ECR (or the employee revokes the AMC) in KERI (TEL rev, anchored by KEL ixn)
              anyone submits the ixn → contract ed25519_verify + seal check → delete key, refund vault
@@ -102,7 +137,7 @@ sequenceDiagram
     V->>V: fresh keystore: verify KEL, TEL, ACDC, delegation
     V-->>LE: attestation (Ed25519)
     LE->>W: register(attestation) + deposit
-    W->>W: ed25519_verify, add function-call key (spend only)
+    W->>W: ed25519_verify, add function-call key (agent methods only)
     H-->>A: release PayWord links off-chain
     A->>W: spend(preimage, j, to)
     W-->>M: pay, or Rejected{reason} with a tx hash
@@ -181,6 +216,14 @@ GLEIF, *Agentic AI in Payments: Establishing Interoperable Trust and Control* (d
 
 ---
 
+## Why anyone would pay for this
+
+- **The seller** gets paid even if the company doesn't, and can sell to an agent without learning who is behind it.
+- **The company** gets credit for its agents without showing its name to every counterparty, and pays only on what sellers accept.
+- **The guarantor** earns `premium_bps` of every accepted order, on-chain, and its income is simply accepted volume × fee, against losses it can price from a public payment record. It has its own stake at risk, so it has a reason to check the company.
+
+Nothing here has been priced with a real customer: the 2% in the demo is a placeholder. The likely guarantors are firms that already underwrite trade credit or verify companies, which is a hypothesis we have not tested with any of them. The contract takes no protocol fee.
+
 ## How a company would adopt it
 
 Nobody uses this in production yet. This is the intended path:
@@ -236,13 +279,13 @@ const r = await agent.pay({ invoice: "INV-0042", to: "supplier.near", links: 1, 
 | `release_unseal(cell, lei, salt)` | the cell's verifier | after the waiting period; must match the registration commitment |
 | `present(cell)`, `get_cell`, `cell_of`, `get_unseal`, `invoice_paid`, `stats`, `solvency`, `verifiers`, `attestation_preview` | view | |
 
-Rejection reasons: `EXPIRED`, `SCOPE`, `INVOICE`, `DUPLICATE`, `PER_TX`, `LIMIT`, `CHAIN`, `RATE`, `FUNDS`, `TRANSFER_FAILED`, `HIRE_SCOPE`, `HIRE_TERMS`, `HIRE_DEPTH`, `HIRE_TREE`, `HIRE_KEY`, `HIRE_TOKEN`. Events: NEP-297, `standard: "writ"`.
+Rejection reasons: `EXPIRED`, `SCOPE`, `INVOICE`, `DUPLICATE`, `PER_TX`, `LIMIT`, `CHAIN`, `RATE`, `FUNDS`, `TRANSFER_FAILED`, `HIRE_SCOPE`, `HIRE_TERMS`, `HIRE_DEPTH`, `HIRE_TREE`, `HIRE_KEY`, `HIRE_TOKEN`, `FROZEN`, `NO_CREDIT`, `TENOR`, `CREDIT_LIMIT`. Events: NEP-297, `standard: "writ"`.
 
 ### What the agent's key cannot do (protocol layer, no transaction is created)
 
 | Attempt | Error | Bench |
 |---|---|---|
-| call any method other than `spend` | `InvalidAccessKeyError::MethodNameMismatch` | A08 |
+| call any method outside the five agent methods | `InvalidAccessKeyError::MethodNameMismatch` | A08 |
 | attach a deposit (e.g. NEP-141 `ft_transfer` needs 1 yocto) | `DepositWithFunctionCall` | A09 |
 | plain `Transfer` from the contract account | `RequiresFullAccess` | A10 |
 | call another contract | `ReceiverMismatch` | A11 |
@@ -253,7 +296,7 @@ Rejection reasons: `EXPIRED`, `SCOPE`, `INVOICE`, `DUPLICATE`, `PER_TX`, `LIMIT`
 
 ## Mutation testing
 
-`cargo mutants` (config in `contract/.cargo/mutants.toml`; `WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source) runs in shards from `.github/workflows/mutants.yml`. On the current contract it produced 154 testable mutants: 142 caught on the first pass; those 12 misses became tests B14 and B15 and some fixes. Re-run: **151 caught, 3 missed.** The three are boundary mutants we consider equivalent: `>` vs `>=` where the excess refund is zero (`register`), at one exact nanosecond of expiry (`spend`), and where a zero refund changes nothing (`close`). Earlier survivors became attacks A23–A25 and tests B05, B06.
+`cargo mutants` (config in `contract/.cargo/mutants.toml`; `WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source) runs in shards from `.github/workflows/mutants.yml`. On an earlier version of the contract, before the credit module, it produced 154 testable mutants: 142 caught on the first pass; those 12 misses became tests B14 and B15 and some fixes. Re-run: **151 caught, 3 missed.** The three are boundary mutants we consider equivalent: `>` vs `>=` where the excess refund is zero (`register`), at one exact nanosecond of expiry (`spend`), and where a zero refund changes nothing (`close`). Earlier survivors became attacks A23–A25 and tests B05, B06.
 
 ## Security review notes
 
@@ -269,7 +312,8 @@ Code reviews after the first bench, done with AI review agents, found problems t
 
 ## Not implemented / limits
 
-- **No real guarantor exists yet.** The demo guarantor is a test account. Who would underwrite agents, how a guarantor prices it and what fee it takes are open questions. The contract has no fee logic.
+- **No real guarantor exists yet.** The demo guarantor is a test account and the 2% fee is a placeholder. Who would underwrite agents, and at what price, is untested. The fee is not refunded if an accepted order is later cancelled.
+- **Disclosure takes the guarantor.** Only it holds the salt, so a guarantor that stays quiet reveals nothing, and a debt repaid from money left in the tree reveals nothing. Closing covers one mandate's tree, not every mandate the company has.
 - **The terms are a placeholder.** `terms_hash` commits to demo text no lawyer has reviewed. Whether an on-chain default and disclosure have legal effect depends on a real agreement and a jurisdiction.
 - **Credit is in NEAR only.** USDC works for `spend`, not for credit.
 - **The guarantor's stake is the real limit.** A guarantor's exposure across cells cannot exceed its stake while orders are open, but it can request an unstake in advance; the risk card shows `guarantor_unstake_at` so a seller can see it.

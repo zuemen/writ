@@ -67,3 +67,7 @@ testnet: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/testnet-setup.ts \
 	 && NEAR_RPC=https://test.rpc.fastnear.com WRIT_UNSEAL_SECS=60 WRIT_DEMO_DIR=.demo-testnet npx tsx src/demo.ts \
 	 && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/testnet-report.ts
+
+# 賒帳故事在 testnet 跑一次，留交易連結（要先 make testnet）
+credit-testnet:
+	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet WRIT_RECOURSE_SECS=20 WRIT_CREDIT_REPORT=../docs/testnet-credit.md npx tsx src/credit-demo.ts

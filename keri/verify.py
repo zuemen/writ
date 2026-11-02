@@ -128,7 +128,7 @@ def verify_chain():
             le_pk=hby.kevers[ecr.issuer].verfers[0].raw.hex(),
             agent_near_pk="ed25519:" + b58(ak.verfers[0].raw),
             w0=a["paywordRoot"], n=a["paywordLength"], unit=a["unitYocto"], daily=a["dailyLinks"],
-            credit=dict(limit=a["creditLimitYocto"], bond_bps=a["bondBps"], min_tenor=str(a["minTenorSecs"]), max_tenor=str(a["maxTenorSecs"]),
+            credit=dict(limit=a["creditLimitYocto"], bond_bps=a["bondBps"], premium_bps=a.get("premiumBps", 0), min_tenor=str(a["minTenorSecs"]), max_tenor=str(a["maxTenorSecs"]),
                         terms_hash=a["termsHash"], arbiter=a["arbiter"]) if a.get("creditLimitYocto") else None,
             max_links=a["maxLinksPerPayment"], max_strikes=a["maxStrikes"], le_aid=ecr.issuer,
             scope=a["counterparties"], funder=a["settlementRail"], asset=a.get("settlementAsset"),
@@ -139,13 +139,13 @@ def verify_chain():
 def credit_line(c):
     if not c:
         return "none"
-    return f"{c['limit']},{c['bond_bps']},{c['min_tenor']},{c['max_tenor']},{c['terms_hash']},{c['terms_sig']},{c['entity_tag']},{c['arbiter']}"
+    return f"{c['limit']},{c['bond_bps']},{c['premium_bps']},{c['min_tenor']},{c['max_tenor']},{c['terms_hash']},{c['terms_sig']},{c['entity_tag']},{c['arbiter']}"
 
 
 def attestation_message(r, lei_commit, ecr_commit, verifier, contract, attested_at, credit=None):
     """必須與合約 attestation_message 逐字一致。"""
     return (
-        "writ:attest:v4\n"
+        "writ:attest:v5\n"
         f"contract={contract}\namc={r['amc_said']}\nissuer_aid={r['issuer_aid']}\nissuer_pk={r['issuer_pk']}\nagent_pk={r['agent_near_pk']}\nw0={r['w0']}\n"
         f"n={r['n']}\nunit={r['unit']}\nscope={','.join(r['scope'])}\nvalid_until={r['valid_until_ns']}\n"
         f"daily_links={r['daily']}\nmax_links={r['max_links']}\nmax_strikes={r['max_strikes']}\nlei_commit={lei_commit}\necr_commit={ecr_commit}\n"
