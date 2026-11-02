@@ -512,11 +512,27 @@ async fn b04_stablecoin_cell_pays_in_nep141_and_refunds_on_revoke() -> anyhow::R
     assert_eq!(ft_balance(&w, &token, w.attacker.id()).await, 0);
     bench("A20", "prompt-injected payment from a stablecoin cell", "Rejected:SCOPE", "Rejected:SCOPE", 0);
 
+    // 攻擊者持有同一種代幣，硬塞進這格（想污染帳）→ 退回
+    w.funder.call(token.id(), "ft_transfer").args_json(json!({"receiver_id": w.attacker.id(), "amount": T.to_string()}))
+        .deposit(NearToken::from_yoctonear(1)).transact().await?.into_result()?;
+    w.attacker.call(token.id(), "ft_transfer_call")
+        .args_json(json!({"receiver_id": w.writ.id(), "amount": T.to_string(), "msg": cell.to_string()}))
+        .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+    assert_eq!(ft_balance(&w, &token, w.attacker.id()).await, T, "same token from a non-funder is refunded");
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(c["vault"], (5 * T - 3 * T / 10).to_string());
+    bench("A25", "non-funder pushes the cell's own stablecoin into it", "refunded, vault unchanged", "refunded", 0);
+
     // 法人撤銷 → 剩餘代幣退回法人
     let before = ft_balance(&w, &token, w.funder.id()).await;
     w.funder.call(w.writ.id(), "revoke").args_json(json!({"cell": cell.to_string(), "evidence": "manual"})).max_gas().transact().await?.into_result()?;
     let after = ft_balance(&w, &token, w.funder.id()).await;
     assert_eq!(after - before, 5 * T - 3 * T / 10, "remaining 4.7 tUSDC refunded");
+    // 撤銷後法人再入金 → 退回（格已關閉）
+    w.funder.call(token.id(), "ft_transfer_call")
+        .args_json(json!({"receiver_id": w.writ.id(), "amount": T.to_string(), "msg": cell.to_string()}))
+        .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+    assert_eq!(ft_balance(&w, &token, w.funder.id()).await, after, "deposit into a closed cell is refunded");
     Ok(())
 }
 
@@ -606,5 +622,33 @@ async fn b05_boundaries_accounting_and_events() -> anyhow::Result<()> {
     assert_eq!(sol["vault_total"], "900000000000000000000000");
     assert_eq!(sol["solvent"], true);
     bench("B05", "boundaries: vault == amount pays, last link spendable, top_up, counters, solvency", "all exact", "all exact", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b06_refresh_key_restores_gas_allowance() -> anyhow::Result<()> {
+    let w = world().await?;
+    let (cell, agent, pw) = open_cell(&w, default_opts(&w)).await?;
+    let allowance = |w: &World| {
+        let (wk, id, pk) = (w.worker.clone(), w.writ.id().clone(), agent.secret_key().public_key());
+        async move {
+            let keys = wk.view_access_keys(&id).await.unwrap();
+            let k = keys.into_iter().find(|k| k.public_key == pk).expect("agent key present");
+            match k.access_key.permission {
+                near_workspaces::types::AccessKeyPermission::FunctionCall(f) => f.allowance.unwrap().as_yoctonear(),
+                _ => panic!("agent key must be a function-call key"),
+            }
+        }
+    };
+    let full = allowance(&w).await;
+    assert!(spend(&agent, w.writ.id(), &pw.link(1), 1, w.merchant.id()).await.unwrap().get("Paid").is_some());
+    let used = allowance(&w).await;
+    assert!(used < full, "gas allowance is consumed by the agent's transactions");
+    let r = w.attacker.call(w.writ.id(), "refresh_key").args_json(json!({"cell": cell.to_string()})).transact().await?;
+    assert!(format!("{:?}", r.into_result()).contains("NOT_AUTHORIZED"));
+    w.funder.call(w.writ.id(), "refresh_key").args_json(json!({"cell": cell.to_string()})).max_gas().transact().await?.into_result()?;
+    assert_eq!(allowance(&w).await, full, "refresh_key restores the full allowance with the same key");
+    assert!(spend(&agent, w.writ.id(), &pw.link(2), 1, w.merchant.id()).await.unwrap().get("Paid").is_some());
+    bench("B06", "gas allowance consumed → funder refresh_key (stranger refused)", "allowance restored, agent keeps paying", "restored", 0);
     Ok(())
 }
