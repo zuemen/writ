@@ -12,6 +12,8 @@ The authorization is an Agent Mandate Credential, the credential GLEIF proposes 
 
 **Live on NEAR testnet:** contract [`writ.writmvyy7yqe-owner.testnet`](https://testnet.nearblocks.io/address/writ.writmvyy7yqe-owner.testnet), every step with its transaction in [`docs/testnet.md`](docs/testnet.md). It has no full-access key.
 
+**Try to steal from it:** <https://writ-steal.112306007.workers.dev> publishes an agent's private key on purpose and signs real testnet transactions from your browser. The key alone moves nothing. `make bounty` opens such a cell; the key lives only on that page, never in this repo.
+
 This README is written for a machine reviewer: every claim below has a command. The trust assumptions are listed in [Trust model](#trust-model).
 
 ---

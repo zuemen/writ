@@ -35,9 +35,14 @@ attack-live: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && npx tsx src/setup.ts && npx tsx src/agent-live.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
+# 在 testnet 開「鑰匙公開」的格並組出網頁（要先跑過 make testnet）。私鑰只在 .demo-testnet/，不進 repo
+bounty: setup
+	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/bounty-setup.ts
+	bash scripts/build_site.sh
+
 clean:
 	scripts/sandbox.sh stop; rm -rf .demo .sandbox keri/.keystore keri/bundle keri/registrar
-.PHONY: setup test keri-check demo ui clean testnet attack-live
+.PHONY: setup test keri-check demo ui clean testnet attack-live bounty
 
 # 需要本人同意：會在 NEAR testnet 建帳號、部署、簽交易（測試幣，免費）。結果寫進 docs/testnet.md
 testnet: setup

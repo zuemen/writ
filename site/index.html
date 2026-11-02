@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Writ: steal from this agent</title>
+<meta name="description" content="An AI agent's private key, published. Its vault holds testnet NEAR. Try to take it.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#f4f1ea; --card:#fffefa; --ink:#1a1814; --muted:#6b665c; --line:#ddd8cc; --ok:#1d6b45; --ok-bg:#e4f1e8; --bad:#a8251c; --bad-bg:#f8e2df; --warn:#7a5a12; --warn-bg:#f6ecd5; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.55 Inter,system-ui,sans-serif; }
+  main { max-width:880px; margin:0 auto; padding:48px 16px 64px; }
+  .brand { font:600 26px Fraunces,Georgia,serif; color:var(--ink); text-decoration:none; }
+  h1 { font:600 clamp(34px,6vw,52px)/1.08 Fraunces,Georgia,serif; margin:28px 0 14px; letter-spacing:-.01em; }
+  .lead { font-size:18px; color:#37332b; max-width:640px; margin:0 0 28px; }
+  h2 { font:600 21px Fraunces,Georgia,serif; margin:0 0 4px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:22px; margin-bottom:18px; }
+  .mono { font-family:"IBM Plex Mono",monospace; }
+  .label { font:600 11px Inter; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin-bottom:8px; }
+  .keyrow { display:flex; gap:10px; align-items:flex-start; }
+  #key { flex:1; min-width:0; overflow-wrap:anywhere; font:14px/1.5 "IBM Plex Mono",monospace; background:var(--bad-bg); color:var(--bad); padding:12px; border-radius:8px; }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:18px; }
+  .stat { border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; }
+  .stat b { display:block; font:600 24px Fraunces,Georgia,serif; }
+  .stat span { font:600 10px Inter; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+  button { font:600 14px Inter; border:1px solid var(--ink); background:var(--card); color:var(--ink); padding:10px 14px; border-radius:8px; cursor:pointer; text-align:left; }
+  button:hover:not(:disabled) { background:var(--ink); color:var(--card); }
+  button:disabled { opacity:.5; cursor:progress; }
+  .attacks { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px; margin-top:14px; }
+  input { font:14px "IBM Plex Mono",monospace; padding:10px; width:100%; border:1px solid var(--line); border-radius:8px; background:#fff; margin-top:6px; }
+  ul#log { list-style:none; margin:14px 0 0; padding:0; }
+  #log li { border-left:4px solid var(--line); background:#faf8f2; border-radius:0 8px 8px 0; padding:10px 14px; margin-bottom:8px; }
+  #log li.blocked { border-color:var(--warn); background:var(--warn-bg); }
+  #log li.paid { border-color:var(--ok); background:var(--ok-bg); }
+  #log li.error { border-color:var(--bad); background:var(--bad-bg); }
+  #log .a { font-size:13px; color:var(--muted); }
+  #log .w { font-size:14px; margin-top:2px; }
+  #log a { font-size:13px; margin-left:8px; }
+  .muted { color:var(--muted); font-size:13px; }
+  a { color:inherit; }
+  ol { padding-left:20px; margin:8px 0 0; }
+  footer { font-size:14px; color:var(--muted); margin-top:26px; }
+  @media (max-width:560px) { .stats { grid-template-columns:repeat(2,1fr); } .keyrow { flex-direction:column; } }
+</style>
+</head>
+<body>
+<main>
+  <a class="brand" href="https://github.com/zuemen/writ">Writ</a>
+  <h1>This is an AI agent's private key. Steal its money.</h1>
+  <p class="lead">The key below is live on NEAR testnet and signs for a company's accounts-payable agent. It controls a vault of testnet NEAR. Your browser signs real transactions with it; there is no server. With a plain spending limit, a thief holding the key can spend up to that limit. Here, without the employee's next link, the key cannot spend at all.</p>
+
+  <section class="card">
+    <div class="label">Agent private key, published on purpose</div>
+    <div class="keyrow"><div id="key">loading…</div><button id="copy">Copy</button></div>
+    <div class="stats">
+      <div class="stat"><b id="vault">…</b><span>NEAR in vault</span></div>
+      <div class="stat"><b id="rejected">…</b><span>attempts rejected</span></div>
+      <div class="stat"><b id="paid">…</b><span>payments made</span></div>
+      <div class="stat"><b id="links">…</b><span>budget links used</span></div>
+    </div>
+    <p class="muted">Contract <a class="mono" id="contract" target="_blank" rel="noopener"></a> has no full-access key. The one payment so far is <a id="firstpay" target="_blank" rel="noopener">this one</a>, made with a link the employee released.</p>
+  </section>
+
+  <section class="card">
+    <h2>Try it</h2>
+    <p class="muted">Each button signs with the key above. Testnet only; nothing here has real value.</p>
+    <label class="muted" for="to">Your NEAR account (for the first attack)</label>
+    <input id="to" placeholder="attacker.testnet" autocomplete="off" spellcheck="false">
+    <div class="attacks">
+      <button data-attack="self">Pay my own account</button>
+      <button data-attack="guess">Pay the merchant with a guessed link</button>
+      <button data-attack="replay">Replay the link already on-chain</button>
+      <button data-attack="drain">Drain 50 links at once</button>
+      <button data-attack="transfer">Send NEAR directly with this key</button>
+      <button data-attack="admin">Make myself a verifier</button>
+      <button data-attack="deposit">Attach a deposit to reach a token</button>
+    </div>
+    <ul id="log"></ul>
+  </section>
+
+  <section class="card">
+    <h2>Why the key is not enough</h2>
+    <ol>
+      <li><b>The key decides who can act.</b> NEAR restricts it at the protocol level to one contract and one method, <span class="mono">spend</span>.</li>
+      <li><b>The mandate decides how much, and to whom.</b> Payees and limits come from a credential a verifier checked. The only allowed payee here is <span class="mono" id="merchant"></span>.</li>
+      <li><b>A hash chain decides whether it may spend now.</b> The budget is a chain of preimages held by the employee, released link by link. Without the next one, the key has nothing to spend.</li>
+      <li><b>HR can take it all back.</b> On other cells, HR revokes the employee's credential and the contract deletes the agent's key. That part is in the <a href="https://github.com/zuemen/writ/blob/main/docs/testnet.md">testnet run</a>.</li>
+    </ol>
+    <p class="muted">This cell keeps its key after repeated failures so that you can keep trying; a normal mandate deletes the key after three rejections in a row. Each attempt uses some of the key's gas allowance, so the page may report <span class="mono">NotEnoughAllowance</span> until the funder refills it. Writ limits what a stolen key or a fooled agent can do. It cannot stop a holder of both the key and the employee's links.</p>
+  </section>
+
+  <footer>Find a way to move the money without a released link? Open an issue at <a href="https://github.com/zuemen/writ">github.com/zuemen/writ</a>. Built at NEAR HACKATHON.</footer>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
