@@ -6,6 +6,7 @@ node_modules/
 .sandbox/
 keri/.keystore/
 keri/bundle/
+keri/registrar/
 keri/.venv
 keri/__pycache__/
 tools/*.so

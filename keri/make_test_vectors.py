@@ -77,7 +77,7 @@ with habbing.openHby(name="spike7", temp=True, salt=signing.Salter(raw=b"0123456
 
     # LE → human：ECR（mock 欄位對齊 vLEI ECR schema 的 a 區塊）
     ecr = proving.credential(issuer=le.pre, schema=SCHEMA_ECR, recipient=human.pre,
-                             data=dict(LEI="5493001KJTIIGC8Y1R12", personLegalName="Chu Ting-Yi",
+                             data=dict(LEI="WRITDEMO000000000017", personLegalName="Alex Example",
                                        engagementContextRole="Treasury Operations"),
                              status=reg_le.regk)
     iss = reg_le.issue(said=ecr.said); anchor(le, reg_le, iss, "0"); rgy.processEscrows()

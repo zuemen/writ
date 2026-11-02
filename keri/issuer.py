@@ -25,9 +25,9 @@ from keri.core.eventing import SealEvent
 from keri.vc import proving
 from keri.vdr import credentialing, viring
 
-from common import AMC, BUNDLE, ECR, KEYSTORE, PRIVATE, b58, read_json, write_json
+from common import AMC, BUNDLE, ECR, KEYSTORE, PRIVATE, REGISTRAR, b58, read_json, write_json
 
-LEI = "5493001KJTIIGC8Y1R12"  # mock LEI（格式正確的範例值）
+LEI = "WRITDEMO000000000017"  # 虛構 LEI：ISO 17442 檢查碼正確，但不屬於任何真實法人
 STATE = os.path.join(KEYSTORE, "state.json")
 
 
@@ -77,8 +77,9 @@ def cmd_init(a):
     rgy.processEscrows()
 
     # LE → human：ECR
-    ecr = proving.credential(issuer=le.pre, schema=ECR.said, recipient=human.pre, status=reg_le.regk,
-                             data=dict(LEI=LEI, personLegalName="Chu Ting-Yi", engagementContextRole="Treasury Operations"))
+    # private=True：加上 u 鹽值，SAID 才不能被字典攻擊（ECR 路徑撤銷時會公開 ecr_said）
+    ecr = proving.credential(issuer=le.pre, schema=ECR.said, recipient=human.pre, status=reg_le.regk, private=True,
+                             data=dict(LEI=LEI, personLegalName="Alex Example", engagementContextRole="Treasury Operations"))
     iss_e = reg_le.issue(said=ecr.said)
     anchor(le, reg_le, iss_e, "0")
 
@@ -87,12 +88,12 @@ def cmd_init(a):
     links = payword(seed, a.n)
     valid_until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=a.days)
     amc = proving.credential(
-        issuer=human.pre, schema=AMC.said, recipient=agent.pre, status=reg_hu.regk,
+        issuer=human.pre, schema=AMC.said, recipient=agent.pre, status=reg_hu.regk, private=True,
         data=dict(actionClass="supplier-payment", counterparties=a.scope.split(","),
                   validUntil=valid_until.isoformat(timespec="seconds"), unitYocto=str(int(decimal.Decimal(a.unit))),
                   paywordRoot=links[0].hex(), paywordLength=a.n, dailyLinks=a.daily, settlementRail=a.rail,
                   **({"settlementAsset": a.asset} if a.asset else {})),
-        source=dict(d="", ecr=dict(n=ecr.said, s=ECR.said)),
+        source=dict(d="", ecr=dict(n=ecr.said, s=ECR.said, o="I2I")),
     )
     iss_a = reg_hu.issue(said=amc.said)
     anchor(human, reg_hu, iss_a, "0")
@@ -141,8 +142,12 @@ def cmd_export(a):
     with open(os.path.join(BUNDLE, "chain.cesr"), "wb") as f:
         f.write(stream)
     write_json(os.path.join(BUNDLE, "schemas.json"), {ECR.said: ECR.sed, AMC.said: AMC.sed})
-    # 驗證端唯一的「信任錨」：mock LE 的 AID（正式版由 QVI 發的 LE vLEI 鏈回 GLEIF 根）
-    write_json(os.path.join(BUNDLE, "trust.json"), dict(le_aid=st["le"], ecr_said=st["ecr"], amc_said=st["amc"], agent_aid=st["agent"]))
+    # 持有人出示「我要驗哪一張」；信任錨不在這裡，驗證端自己釘（verify.py pin）
+    write_json(os.path.join(BUNDLE, "presentation.json"), dict(ecr_said=st["ecr"], amc_said=st["amc"], agent_aid=st["agent"]))
+    # 發行方的公開狀態：驗證端直接讀這裡的最新 KEL／TEL，持有人拿舊 bundle 也蓋不掉撤銷
+    os.makedirs(REGISTRAR, exist_ok=True)
+    with open(os.path.join(REGISTRAR, "state.cesr"), "wb") as f:
+        f.write(kel(st["le"]) + kel(st["human"]) + tel(st["reg_le"]) + tel(st["reg_hu"]) + tel(st["ecr"]) + tel(st["amc"]))
     print(f"exported {len(stream)} bytes → keri/bundle/chain.cesr")
     hby.close(); rgy.close()
 

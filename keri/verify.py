@@ -1,17 +1,20 @@
 """
 驗證端（白名單驗證者，對應 GLEIF 討論稿 Annex A 裡 PSP 的角色）。
 
-只吃發行端匯出的公開 CESR（keri/bundle/），在**全新的暫存 keystore** 裡用 keripy 重新驗整條鏈：
+吃持有人出示的公開 CESR（keri/bundle/），在**全新的暫存 keystore** 裡用 keripy 重新驗整條鏈；
+憑證狀態另外向發行方的公開來源查（keri/registrar/），不信任持有人給的 TEL：
 
   1. KEL：LE、human、agent 三條事件日誌的簽章與順序；agent 必須是 human 之下的委派 AID（delpre == human）
   2. TEL：ECR 與 AMC 都在「已發行、未撤銷」狀態
   3. ACDC：兩張憑證的 SAID、schema、TEL 錨點；AMC 的 edge 指向 ECR，且 ECR 的持有人 == AMC 的簽發人
-  4. 信任錨：ECR 的簽發人 == trust.json 裡的 LE AID（mock；正式版是 QVI 發的 LE vLEI 鏈回 GLEIF 根）
+  4. 信任錨：ECR 的簽發人 == 驗證端自己釘住的 LE AID（verify.py pin；正式版是 QVI 發的 LE vLEI 鏈回 GLEIF 根）
+     憑證的 i 欄位不算數：登錄簿的控制者必須就是簽發人；schema SAID 也由驗證端決定
   5. agent 的 KERI 當前公鑰 == 要掛到 NEAR 上的 function-call key
 
 全部通過才簽 attestation（Ed25519，簽的 bytes 與合約 attestation_message 逐字相同）。
 
   python verify.py keygen                                    # 產生驗證者金鑰（印出 pk hex）
+  python verify.py pin --le <AID>                            # 釘住信任錨（驗證端的設定，不來自持有人）
   python verify.py attest --verifier verifier.test.near      # 驗鏈 + 印出 register 的 args JSON
   python verify.py check                                     # 只驗鏈，不簽
   python verify.py reveal --amc <SAID>                       # 解封：印出當初承諾的 LEI 與 salt
@@ -23,11 +26,12 @@ from keri.app import habbing
 from keri.core import coring, parsing, scheming
 from keri.vdr import credentialing, verifying
 
-from common import BUNDLE, HERE, b58, read_json, write_json
+from common import AMC, BUNDLE, ECR, HERE, REGISTRAR, b58, read_json, write_json
 
 _STATE = os.path.join(HERE, "..", os.environ.get("WRIT_DEMO_DIR", ".demo"))
 VKEY = os.environ.get("WRIT_VERIFIER_KEY", os.path.join(_STATE, "verifier_key.json"))
 RECORDS = os.path.join(_STATE, "verifier_records.json")  # LEI 的 salt 只存在驗證者這裡
+POLICY = os.environ.get("WRIT_VERIFIER_POLICY", os.path.join(_STATE, "verifier_policy.json"))  # 驗證端自己釘的信任錨
 
 
 class ChainError(Exception):
@@ -36,18 +40,24 @@ class ChainError(Exception):
 
 def verify_chain():
     """回傳 dict(結果)；任何一步失敗都 raise ChainError。"""
-    trust = read_json(os.path.join(BUNDLE, "trust.json"))
-    schemas = read_json(os.path.join(BUNDLE, "schemas.json"))
+    if not os.path.exists(POLICY):
+        raise ChainError("no pinned trust root: run verify.py pin --le <AID>")
+    le_aid = read_json(POLICY)["le_aid"]
+    shown = read_json(os.path.join(BUNDLE, "presentation.json"))
     with open(os.path.join(BUNDLE, "chain.cesr"), "rb") as f:
         stream = bytearray(f.read())
+    with open(os.path.join(REGISTRAR, "state.cesr"), "rb") as f:
+        live = bytearray(f.read())
 
     with habbing.openHby(name="writ-verifier", temp=True) as hby:
         rgy = credentialing.Regery(hby=hby, name="writ-verifier", temp=True)
         vry = verifying.Verifier(hby=hby, reger=rgy.reger)
-        for said, sed in schemas.items():
-            hby.db.schema.pin(said, scheming.Schemer(sed=sed))
+        # 只接受驗證端自己認得的 schema，不吃持有人帶來的定義
+        for sch in (ECR, AMC):
+            hby.db.schema.pin(sch.said, scheming.Schemer(sed=sch.sed))
         psr = parsing.Parser(kvy=hby.kvy, tvy=rgy.tvy, vry=vry)
         psr.parse(ims=stream)
+        psr.parse(ims=live)
         for _ in range(3):  # 委派、TEL、憑證都可能先進 escrow
             hby.kvy.processEscrows(); rgy.tvy.processEscrows(); vry.processEscrows()
 
@@ -58,14 +68,14 @@ def verify_chain():
             if not cond:
                 raise ChainError(f"{name} — failed: {detail}")
 
-        amc_said = trust["amc_said"]
+        amc_said = shown["amc_said"]
         amc = rgy.reger.creds.get(keys=amc_said)
         # keripy 不收鏈上游已撤銷的憑證：先講清楚真正原因，不要只說「AMC 解析失敗」
-        for said in (trust.get("ecr_said"), amc_said):
+        for said in (shown.get("ecr_said"), amc_said):
             for tever in rgy.tevers.values():
                 st = tever.vcState(said) if said else None
                 if st is not None and st.et == "rev":
-                    name = "ECR" if said == trust.get("ecr_said") else "AMC"
+                    name = "ECR" if said == shown.get("ecr_said") else "AMC"
                     raise ChainError(f"{name} revoked in its TEL ({said})")
         ok("AMC parsed, SAID + schema valid, anchored in TEL", amc is not None, amc_said)
         ecr_said = amc.edge["ecr"]["n"]
@@ -73,9 +83,13 @@ def verify_chain():
         ok("ECR parsed, SAID + schema valid, anchored in TEL", ecr is not None, ecr_said)
 
         human, agent = amc.issuer, amc.attrib["i"]
-        ok("trust anchor: ECR issued by the pinned legal entity AID", ecr.issuer == trust["le_aid"], ecr.issuer)
+        ok("trust anchor: ECR issued by the pinned legal entity AID", ecr.issuer == le_aid, ecr.issuer)
+        ok("ECR registry controlled by its issuer", rgy.tevers[ecr.regi].pre == ecr.issuer, ecr.regi)
+        ok("AMC registry controlled by its issuer", rgy.tevers[amc.regi].pre == amc.issuer, amc.regi)
+        ok("schemas are the ones this verifier accepts", ecr.schema == ECR.said and amc.schema == AMC.said, f"{ecr.schema} {amc.schema}")
+        ok("AMC edge to the ECR: right schema, I2I", amc.edge["ecr"].get("s") == ECR.said and amc.edge["ecr"].get("o") == "I2I", str(amc.edge["ecr"]))
         ok("ECR holder is a natural person who issued the AMC (I2I chain)", ecr.attrib["i"] == human, human)
-        ok("AMC holder is the expected agent AID", agent == trust["agent_aid"], agent)
+        ok("AMC holder is the presented agent AID", agent == shown["agent_aid"], agent)
 
         for name, cred in (("ECR", ecr), ("AMC", amc)):
             st = rgy.tevers[cred.regi].vcState(cred.said)
@@ -121,6 +135,11 @@ def cmd_keygen(a):
     pk, sk = pysodium.crypto_sign_keypair()
     write_json(VKEY, dict(pk_hex=pk.hex(), sk_hex=sk.hex()))
     print(pk.hex())
+
+
+def cmd_pin(a):
+    write_json(POLICY, dict(le_aid=a.le))
+    print("pinned trust root", a.le)
 
 
 def cmd_check(a):
@@ -172,7 +191,8 @@ if __name__ == "__main__":
     sp = p.add_subparsers(dest="cmd", required=True)
     k = sp.add_parser("keygen"); k.add_argument("--force", action="store_true")
     sp.add_parser("check")
+    pn = sp.add_parser("pin"); pn.add_argument("--le", required=True)
     t = sp.add_parser("attest"); t.add_argument("--verifier", required=True); t.add_argument("--contract", required=True)
     rv = sp.add_parser("reveal"); rv.add_argument("--amc", required=True)
     a = p.parse_args()
-    dict(keygen=cmd_keygen, check=cmd_check, attest=cmd_attest, reveal=cmd_reveal)[a.cmd](a)
+    dict(keygen=cmd_keygen, pin=cmd_pin, check=cmd_check, attest=cmd_attest, reveal=cmd_reveal)[a.cmd](a)

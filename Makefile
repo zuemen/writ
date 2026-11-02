@@ -16,9 +16,11 @@ test:
 	@if [ "$$(ulimit -Hn)" != "unlimited" ] && [ "$$(ulimit -Hn)" -lt 65535 ]; then $(MAKE) -C contract test-lowfd; else $(MAKE) -C contract test; fi
 
 keri-check: keri/.venv/bin/python
-	rm -rf keri/.keystore keri/bundle
-	cd keri && .venv/bin/python issuer.py init --scope merchant.test.near --rail acme.test.near >/dev/null
+	rm -rf keri/.keystore keri/bundle keri/registrar
+	cd keri && .venv/bin/python issuer.py init --scope merchant.test.near --rail acme.test.near > /tmp/writ_init.json
+	cd keri && .venv/bin/python verify.py pin --le "$$(.venv/bin/python -c "import json;print(json.load(open('.keystore/state.json'))['le'])")"
 	cd keri && .venv/bin/python verify.py check
+	cd keri && .venv/bin/python test_forgeries.py
 
 demo: setup
 	scripts/sandbox.sh start
@@ -34,7 +36,7 @@ attack-live: setup
 	cd app && npx tsx src/setup.ts && npx tsx src/agent-live.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
 clean:
-	scripts/sandbox.sh stop; rm -rf .demo .sandbox keri/.keystore keri/bundle
+	scripts/sandbox.sh stop; rm -rf .demo .sandbox keri/.keystore keri/bundle keri/registrar
 .PHONY: setup test keri-check demo ui clean testnet attack-live
 
 # 需要本人同意：會在 NEAR testnet 建帳號、部署、簽交易（測試幣，免費）。結果寫進 docs/testnet.md

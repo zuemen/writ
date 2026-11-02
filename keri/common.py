@@ -10,7 +10,8 @@ from keri.core import scheming, coring
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEYSTORE = os.path.join(HERE, ".keystore")          # 發行端的私密資料（.gitignore）
-BUNDLE = os.path.join(HERE, "bundle")                # 發行端匯出給驗證端的公開 CESR（可提交）
+BUNDLE = os.path.join(HERE, "bundle")                # 持有人出示的公開 CESR
+REGISTRAR = os.path.join(HERE, "registrar")          # 發行方公布的 KEL／TEL（驗證端自己去查，不信任持有人給的狀態）
 PRIVATE = os.path.join(KEYSTORE, "private.json")     # demo 用：agent 私鑰、PayWord 種子（.gitignore）
 
 
@@ -27,7 +28,7 @@ def b58(b: bytes) -> str:
 
 def _schema(title: str, attrs: dict, required: list, edges: dict | None):
     """建一份 ACDC JSON Schema，$id 由 keripy 以 Blake3-256 自我定址（SAID）。"""
-    a_props = {"d": {"type": "string"}, "i": {"type": "string"}, "dt": {"type": "string", "format": "date-time"}}
+    a_props = {"d": {"type": "string"}, "u": {"type": "string"}, "i": {"type": "string"}, "dt": {"type": "string", "format": "date-time"}}
     a_props.update(attrs)
     props = {
         "v": {"type": "string"}, "d": {"type": "string"}, "u": {"type": "string"},

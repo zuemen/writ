@@ -117,7 +117,7 @@ async fn now_ns(w: &World) -> anyhow::Result<u64> {
 async fn open_cell(w: &World, o: Opts) -> anyhow::Result<(u64, Account, Payword)> {
     let agent_sk = SecretKey::from_random(KeyType::ED25519);
     let pw = Payword::new(o.n);
-    let lei_commit = hex::encode(Sha256::digest(b"5493001KJTIIGC8Y1R12|salt-demo"));
+    let lei_commit = hex::encode(Sha256::digest(b"WRITDEMO000000000017|salt-demo"));
     let valid_until = now_ns(w).await? + o.valid_secs * 1_000_000_000;
     let mut args = json!({
         "amc_said": o.amc_said, "issuer_pk": o.issuer_pk, "agent_pk": agent_sk.public_key(),
@@ -194,7 +194,7 @@ async fn b00_happy_path_pays_merchant_and_present_hides_lei() -> anyhow::Result<
     println!("present = {}", p);
     assert_eq!(p["lei"], "sealed");
     assert_eq!(p["within_limit"]["used"], 5);
-    assert!(!p.to_string().contains("5493001KJTIIGC8Y1R12"), "LEI never appears on chain");
+    assert!(!p.to_string().contains("WRITDEMO000000000017"), "LEI never appears on chain");
     let by_key: Value = w.writ.view("cell_of").args_json(json!({"agent_pk": agent.secret_key().public_key()})).await?.json()?;
     assert_eq!(by_key, json!(cell.to_string()), "cell_of maps the agent key to its cell");
     let vs: Value = w.writ.view("verifiers").await?.json()?;
@@ -458,7 +458,7 @@ async fn a17_unseal_needs_supervisor_waiting_period_and_matching_commitment() ->
         let v = w.verifier.clone(); let id = w.writ.id().clone(); let c = cell.to_string();
         async move { v.call(&id, "release_unseal").args_json(json!({"cell": c, "lei": lei, "salt": salt})).transact().await.unwrap().into_result() }
     };
-    let e = format!("{:?}", release("5493001KJTIIGC8Y1R12", "salt-demo").await);
+    let e = format!("{:?}", release("WRITDEMO000000000017", "salt-demo").await);
     assert!(e.contains("TOO_EARLY"), "{}", e);
     bench("A18", "verifier discloses before the public waiting period ends", "TOO_EARLY", "TOO_EARLY", 0);
 
@@ -471,10 +471,10 @@ async fn a17_unseal_needs_supervisor_waiting_period_and_matching_commitment() ->
     assert!(e.contains("COMMIT_MISMATCH"), "{}", e);
     bench("A19", "verifier discloses a different LEI than it committed to", "COMMIT_MISMATCH", "COMMIT_MISMATCH", 0);
 
-    let out = release("5493001KJTIIGC8Y1R12", "salt-demo").await?;
+    let out = release("WRITDEMO000000000017", "salt-demo").await?;
     println!("unsealed logs: {:?}", out.logs());
     let p: Value = w.writ.view("present").args_json(json!({"cell": cell.to_string()})).await?.json()?;
-    assert_eq!(p["lei"], "5493001KJTIIGC8Y1R12");
+    assert_eq!(p["lei"], "WRITDEMO000000000017");
     let u: Value = w.writ.view("get_unseal").args_json(json!({"cell": cell.to_string()})).await?.json()?;
     assert_eq!(u["objected"], true);
     bench("B03", "supervisor request → wait → verifier discloses committed LEI (public tx)", "LEI disclosed, objection on record", "disclosed", 0);
@@ -673,7 +673,7 @@ async fn send_register(w: &World, args: &Value) -> anyhow::Result<near_workspace
 }
 
 fn signed_args(w: &World, o: &Opts, agent_pk: &near_workspaces::types::PublicKey, pw: &Payword, valid_until: u64, contract: &AccountId) -> Value {
-    let lei_commit = hex::encode(Sha256::digest(b"5493001KJTIIGC8Y1R12|salt-demo"));
+    let lei_commit = hex::encode(Sha256::digest(b"WRITDEMO000000000017|salt-demo"));
     let mut args = json!({
         "amc_said": o.amc_said, "issuer_pk": o.issuer_pk, "agent_pk": agent_pk,
         "w0": pw.w0(), "n": o.n, "unit": o.unit.to_string(), "scope": o.scope,

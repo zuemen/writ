@@ -44,7 +44,7 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.11+ with l
 5  attacker +0.000 NEAR
 6  regulator.test.near requests disclosure (reason hash of "Taipei District Court order 2026-TPE-001") → public, waiting period starts
 6  verifier tries to disclose immediately → TOO_EARLY
-6  after the waiting period, verifier discloses; contract checks sha256(LEI|salt) == commitment → LEI 5493001KJTIIGC8Y1R12
+6  after the waiting period, verifier discloses; contract checks sha256(LEI|salt) == commitment → LEI WRITDEMO000000000017
 7  treasury officer leaves; HR revokes the officer's ECR in KERI (TEL rev anchored by the legal entity's KEL ixn), off-chain; the officer's key is not needed
 7  merchant.test.near submits the signed ixn (sn=3) and opens the ECR commitment → key deleted
 8  agent tries again → MANDATE REVOKED (AccessKeyNotFound: …)

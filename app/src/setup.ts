@@ -45,9 +45,11 @@ console.log(`  verifier ${accts.verifier.id} whitelisted (pk ${vpk.slice(0, 16)}
 
 rmSync(join(ROOT, "keri/.keystore"), { recursive: true, force: true });
 rmSync(join(ROOT, "keri/bundle"), { recursive: true, force: true });
+rmSync(join(ROOT, "keri/registrar"), { recursive: true, force: true });
 const out = py("issuer.py", "init", "--scope", accts.merchant.id, "--rail", accts.acme.id,
   "--n", "50", "--unit", "1e23", "--daily", "20", "--days", "30");
 const st = JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1));
+py("verify.py", "pin", "--le", st.le); // 信任錨由驗證端釘住，不是持有人出示的
 console.log(`  KERI: LE ${st.le.slice(0, 12)}… → ECR → human ${st.human.slice(0, 12)}… → AMC → agent ${st.agent.slice(0, 12)}… (delegated)`);
 console.log(`  agent KERI key = NEAR key ${st.agent_near_pk}`);
 void provider;
