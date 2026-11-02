@@ -263,7 +263,7 @@ btn("s4").addEventListener("click", async () => {
   }
   $("r4name").textContent = `${cfg.company}, LEI ${sale!.lei}`;
   $("r4").hidden = false;
-  out("o4", { ...u, verdict: "Every agent lost its key. The company is named.", why: `One transaction deleted all three agents' keys. The next one revealed ${cfg.company}: the contract checked the LEI against the commitment made at the start, and the legal entity's signature, so a guarantor cannot name an innocent company. The seller now knows who to pursue; that is a lead, not a court order.` }, "block");
+  out("o4", { ...u, verdict: "Every agent lost its key. The company is named.", why: `One transaction deleted all three agents' keys. The next one revealed ${cfg.company}: the contract checked the LEI against the commitment made at the start, and the legal entity's signature, so a guarantor cannot name a company whose key it does not hold. The seller now knows who to pursue; that is a lead, not a court order.` }, "block");
   setSteps("step", 9);
   await renderCard();
 });
