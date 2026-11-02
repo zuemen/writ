@@ -23,6 +23,8 @@ jobs:
           workspaces: "contract -> target\ncontract/ft-mock -> target"
       - run: make setup
       - run: make test
+      - name: invariant fuzz, random call sequences and failed callbacks
+        run: cd contract && SEEDS=20 THREADS=4 cargo test --lib fuzz
       - run: make demo
       - run: make keri-check
       - run: make credit-demo

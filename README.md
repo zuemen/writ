@@ -40,7 +40,7 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with
 | 4 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
 | 5 | `make keri-check` | the verifier prints 23 ✓ lines (mock root → QVI → legal entity → ECR → AMC: KEL, TEL, ACDC, registry control, schemas, I2I edges, delegation), then refuses 14 forged or stale chains; last line `KERI_FORGERIES\|PASS\|14` |
 | 6 | `make credit-demo` | the whole credit story with real KERI signatures: risk card, paid on time and sealed, unpaid and the guarantor pays, frozen, recourse over, keys deleted, a false company refused, the real one named; ends in `CREDIT_RESULT\|PASS` |
-| 6 | optional: `NEARAI_API_KEY=... make attack-live` (or `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` for any OpenAI-compatible provider) | a real LLM reads both invoices and chooses the tool calls; 5 attacks × `LLM_RUNS` per model in `LLM_MODEL`; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in `docs/attack-live.md` |
+| 7 | optional: `NEARAI_API_KEY=... make attack-live` (or `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` for any OpenAI-compatible provider) | a real LLM reads both invoices and chooses the tool calls; 5 attacks × `LLM_RUNS` per model in `LLM_MODEL`; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in `docs/attack-live.md` |
 
 `make test` runs the bench in a fresh sandbox per test. `make demo` / `make ui` run `scripts/sandbox.sh` (a local `neard` sandbox on :3030; data in `.sandbox/`).
 
@@ -274,7 +274,8 @@ Code reviews after the first bench, done with AI review agents, found problems t
 - **Credit is in NEAR only.** USDC works for `spend`, not for credit.
 - **The guarantor's stake is the real limit.** A guarantor's exposure across cells cannot exceed its stake while orders are open, but it can request an unstake in advance; the risk card shows `guarantor_unstake_at` so a seller can see it.
 - **The delivery proof is a hash.** The contract cannot tell a real delivery from a false one; a dispute handles that, and the arbiter is one account named in the mandate.
-- **Colluding seller and guarantor** can run a false delivery to reach disclosure, if the company does not dispute. The company's defense is the dispute window.
+- **Colluding seller and guarantor** can run a false delivery to reach disclosure, if the company does not dispute. The company's defense is the dispute window. The guarantor and the company cannot be the seller themselves (`A77`), but a separate account they control can.
+- **A guarantor can close the tree early.** As the cell's verifier it can `revoke` at any time, which reveals nothing. The recourse period only guards disclosure.
 - **Hire limits.** The root pays hire fees, so a tree tops out at 16 cells; `hire` is not bound by the per-payment cap, and rates in a tree add up rather than sharing one limit.
 - **The agent in `make demo` and `make ui` is a script.** It issues the malicious call directly, because the point is the gate, not the model, and a script is reproducible. `make attack-live` runs real LLMs instead and needs an API key; the recorded run used Google's Gemini free tier on a local sandbox, not NEAR AI Cloud, so it makes no TEE claim. Writ does not stop an agent from being fooled; it stops the payment.
 - **The agent's KERI key is its NEAR key.** That is the demo's point, but it makes a KERI signing key a hot key, and rotating it means a new function-call key.

@@ -1388,6 +1388,7 @@ async fn credit_world_full(bond_bps: u32, stake: u128, grace: u64, recourse: u64
     let (le_aid, ecr_said) = ("ELE_AID".to_string(), "EECR_SAID".to_string());
     let mut o = default_opts(&w);
     o.amc_said = "EAMC_CREDIT".into();
+    o.scope = vec![w.merchant.id().clone(), w.verifier.id().clone(), w.funder.id().clone()];
     o.ecr_commit = hex::encode(Sha256::digest(format!("{}|{}|{}|{}", le_aid, le_pk, ecr_said, ECR_COMMIT_SALT)));
     o.max_links = 10;
     let agent_sk = SecretKey::from_random(KeyType::ED25519);
@@ -2041,5 +2042,71 @@ async fn b28_guarantor_can_collect_again_and_unblock_a_silent_seller() -> anyhow
     let got: Value = w.writ.view("claimable_of").args_json(json!({"account": w.merchant.id()})).await?.json()?;
     assert_eq!(got.as_str().unwrap().parse::<u128>()?, UNIT, "the seller is still the one paid");
     bench("B28", "released bond repays the guarantor; a silent seller cannot hold exposure open", "collected, unblocked", "collected, unblocked", 0);
+    Ok(())
+}
+
+// ---------------------------------------------------------------- 第十一輪
+
+#[tokio::test]
+async fn a76_a_sub_agent_cannot_pay_a_friend_while_the_company_owes() -> anyhow::Result<()> {
+    let cw = credit_world_with(0, 5, 0, 60, 17 * UNIT, LEI).await?;
+    let w = &cw.w;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    let sk = SecretKey::from_random(KeyType::ED25519);
+    let cpw = Payword::new(5);
+    let v = hire(&cw.agent, w.writ.id(), &cw.pw.link(3), 3, hire_args(&sk.public_key(), &cpw, &[w.merchant.id()], c["valid_until"].as_str().unwrap(), 3, 3)).await;
+    assert!(v.get("Hired").is_some(), "{}", v);
+    let child = Account::from_secret_key(w.writ.id().clone(), sk, &w.worker);
+    let due = now_ns(w).await? + 3_600 * SEC;
+    let v: Value = child.call(w.writ.id(), "open_credit").args_json(json!({"preimage": cpw.link(2), "j": 2, "to": w.merchant.id(), "invoice_hash": hex::encode(Sha256::digest("INV-FRIEND")), "due_at": due.to_string()}))
+        .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
+    let friend = v["CreditOpened"]["credit"].as_str().unwrap_or_else(|| panic!("{}", v)).to_string();
+    cw.seller("accept_credit", json!({"credit": friend})).await.unwrap();
+    let id = cw.delivered(5, 2, 1, "INV-OWED").await;
+    wait_secs(2).await;
+    cw.seller("claim_default", json!({"credit": id})).await.unwrap();
+    assert!(cw.credit(&id).await["debt"].as_str().unwrap().parse::<u128>()? > 0);
+    let e = child.call(w.writ.id(), "settle").args_json(json!({"credit": friend})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result();
+    assert!(format!("{:?}", e).contains("REPAY_GUARANTOR_FIRST"), "{:?}", e);
+    bench("A76", "while the company owes, a sub-agent settles a friendly order from its own vault", "REPAY_GUARANTOR_FIRST", "REPAY_GUARANTOR_FIRST", gain(w).await);
+    // 欠債時一直試不會把 agent 自己弄死，還清後還能工作
+    for i in 0..4 {
+        let v = spend_invoice(&cw.agent, w.writ.id(), &cw.pw.link(6), 1, w.merchant.id(), format!("F{}", i).as_bytes()).await;
+        assert_eq!(v["Rejected"]["reason"], "FROZEN", "{}", v);
+        assert_eq!(v["Rejected"]["tripped"], false, "{}", v);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a77_guarantor_or_company_cannot_be_the_seller() -> anyhow::Result<()> {
+    let cw = credit_world(0, 5, 0, 1).await?;
+    let w = &cw.w;
+    for (link, who, inv) in [(1u32, &w.verifier, "INV-G"), (2u32, &w.funder, "INV-F")] {
+        let due = now_ns(w).await? + 3_600 * SEC;
+        let v: Value = cw.agent.call(w.writ.id(), "open_credit").args_json(json!({"preimage": cw.pw.link(link), "j": 1, "to": who.id(), "invoice_hash": hex::encode(Sha256::digest(inv)), "due_at": due.to_string()}))
+            .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
+        let id = v["CreditOpened"]["credit"].as_str().unwrap_or_else(|| panic!("{}", v)).to_string();
+        let e = who.call(w.writ.id(), "accept_credit").args_json(json!({"credit": id})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result();
+        assert!(format!("{:?}", e).contains("SELLER_NOT_INDEPENDENT"), "{:?}", e);
+    }
+    bench("A77", "guarantor or company sells to the agent to manufacture a default", "SELLER_NOT_INDEPENDENT", "SELLER_NOT_INDEPENDENT", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b29_rotating_the_legal_entity_key_does_not_block_the_reveal() -> anyhow::Result<()> {
+    let cw = credit_world_with(0, 5, 0, 1, 2 * UNIT, LEI).await?;
+    let w = &cw.w;
+    let id = cw.delivered(5, 5, 1, "INV-ROTATE").await;
+    wait_secs(2).await;
+    cw.seller("claim_default", json!({"credit": id})).await.unwrap();
+    wait_secs(2).await;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    cw.guarantor("update_signers", json!({"cell": cw.cell.to_string(), "issuer_aid": c["issuer_aid"], "issuer_pk": c["issuer_pk"], "ecr_commit": hex::encode([3u8; 32])})).await.unwrap();
+    cw.guarantor("enforce_recourse", json!({"credit": id})).await.unwrap();
+    cw.guarantor("credit_unseal", json!({"credit": id, "lei": LEI, "salt": LEI_SALT, "ecr": cw.opening()})).await.unwrap();
+    assert_eq!(cw.card().await["legal_entity"], LEI);
+    bench("B29", "the legal entity rotates its key after signing the terms", "reveal still works", "reveal still works", 0);
     Ok(())
 }

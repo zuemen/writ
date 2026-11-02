@@ -190,6 +190,7 @@ pub struct CreditArgs {
 pub struct CreditTerms {
     pub args: CreditArgs,
     pub guarantor: AccountId,
+    pub terms_ecr_commit: String,
     pub outstanding: U128,      // 未結清總額
     pub bond_locked: U128,      // 已鎖定的保證金（在根格金庫內）
     pub open_debts: u32,        // 欠保證人的筆數；大於 0 就不能再賒
@@ -507,6 +508,7 @@ impl Contract {
             self.terms.insert(id, CreditTerms {
                 args: cr.clone(),
                 guarantor: args.verifier.clone(),
+                terms_ecr_commit: args.ecr_commit.clone(),
                 outstanding: U128(0),
                 bond_locked: U128(0),
                 open_debts: 0,
@@ -816,9 +818,12 @@ impl Contract {
     /// 政策拒絕：計 strike，連續太多次刪鑰匙。回傳 Rejected，交易本身成功。
     fn reject(&mut self, id: u64, mut c: Cell, pk: PublicKey, r: &str) -> Verdict {
         c.rejects += 1;
-        c.strikes += 1;
+        // 凍結是公司的債，不是 agent 被騙：不計 strike，還清後 agent 不必逐格復職
+        if r != "FROZEN" {
+            c.strikes += 1;
+        }
         self.stats.rejected += 1;
-        let tripped = c.max_strikes > 0 && c.strikes >= c.max_strikes;
+        let tripped = r != "FROZEN" && c.max_strikes > 0 && c.strikes >= c.max_strikes;
         if tripped {
             c.status = Status::Tripped;
             self.stats.tripped += 1;
@@ -1427,6 +1432,8 @@ impl Contract {
         require!(t.open_debts == 0, "COMPANY_FROZEN");
         require!(env::block_timestamp() <= cell.valid_until.0, "MANDATE_EXPIRED");
         require!(cr.seller != t.args.arbiter, "ARBITER_NOT_INDEPENDENT");
+        // 保證人或公司自己當賣方，等於自己製造違約：前者可走到揭露，後者把質押領給自己
+        require!(cr.seller != t.guarantor && cr.seller != root.funder, "SELLER_NOT_INDEPENDENT");
         let want = cr.amount.0 * (t.args.bond_bps as u128) / 10_000;
         let free = root.vault.0.saturating_sub(t.bond_locked.0);
         let bond = want.min(free);
@@ -1495,6 +1502,7 @@ impl Contract {
         require!(matches!(cr.status, CreditStatus::Accepted | CreditStatus::Delivered), "NOT_SETTLEABLE");
         let mut c = self.cells.get(&id).cloned().unwrap();
         require!(!self.suspended(&c), "SUSPENDED");
+        require!(!self.owes_guarantor(cr.root.0), "REPAY_GUARANTOR_FIRST");
         // 付這一筆時，這筆自己鎖的保證金可以用
         let usable = if id == cr.root.0 { self.free_vault(id, &c) + cr.bond_locked.0 } else { c.vault.0 };
         require!(usable >= cr.amount.0, "VAULT_SHORT");
@@ -1731,7 +1739,8 @@ impl Contract {
         let digest = hex::encode(env::sha256(format!("{}|{}", lei, salt).as_bytes()));
         require!(digest == root.lei_commit, "COMMIT_MISMATCH");
         let open = hex::encode(env::sha256(format!("{}|{}|{}|{}", ecr.le_aid, ecr.le_pk, ecr.ecr_said, ecr.salt).as_bytes()));
-        require!(open == root.ecr_commit, "BAD_ECR_OPENING");
+        // 條款是開格當時的 LE 鑰匙簽的；之後換鑰（update_signers）不影響這裡
+        require!(open == t.terms_ecr_commit, "BAD_ECR_OPENING");
         let sig: [u8; 64] = hex::decode(&t.args.terms_sig).ok().and_then(|v| v.as_slice().try_into().ok()).unwrap_or_else(|| env::panic_str("BAD_TERMS_SIG"));
         let msg = format!("writ:terms:v1\ncontract={}\namc={}\nterms={}\nlei={}", env::current_account_id(), root.amc_said, t.args.terms_hash, lei);
         require!(env::ed25519_verify(&sig, msg.as_bytes(), &hex32(&ecr.le_pk, "le_pk")), "LE_DID_NOT_SIGN");
@@ -1873,7 +1882,7 @@ mod tests {
 
         // 公司還欠錢：撤銷中轉帳失敗的錢留在根格，不退給公司
         let args = CreditArgs { limit: U128(1), bond_bps: 0, min_tenor: U64(0), max_tenor: U64(1), terms_hash: String::new(), terms_sig: String::new(), entity_tag: String::new(), arbiter: writ.clone() };
-        w.terms.insert(1, CreditTerms { args, guarantor: writ.clone(), outstanding: U128(0), bond_locked: U128(0), open_debts: 1 });
+        w.terms.insert(1, CreditTerms { args, guarantor: writ.clone(), terms_ecr_commit: String::new(), outstanding: U128(0), bond_locked: U128(0), open_debts: 1 });
         ctx(vec![PromiseResult::Failed]);
         assert!(matches!(w.on_transfer(U64(1), U128(5), "00".repeat(32), funder.clone(), 1, 0, Err(PromiseError::Failed)), Verdict::Rejected { .. }));
         assert_eq!(w.cells.get(&1).unwrap().vault.0, 5, "the money stays for the guarantor");
@@ -1881,3 +1890,6 @@ mod tests {
         assert!(!get_created_receipts().iter().any(|r| r.receiver_id == funder), "nothing goes back to a company that owes");
     }
 }
+
+#[cfg(test)]
+include!("fuzz.rs");
