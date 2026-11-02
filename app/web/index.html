@@ -156,8 +156,8 @@ function render(s) {
     pred(true, `counterparty scope: <span class="mono">${p.scope.join(", ")}</span>`),
     pred(p.within_limit.used < p.within_limit.of, `within limit: ${p.within_limit.used} of ${p.within_limit.of} links`),
     p.lei === "sealed"
-      ? `<li><span class="tick sealed">◼</span><span>legal entity: <span class="sealed">sealed</span> <span class="mono muted">commit ${short(p.lei_commit, 12)}</span></span></li>`
-      : `<li><span class="tick sealed">◻</span><span>legal entity: disclosed by public tx <span class="mono">LEI ${p.lei}</span></span></li>`,
+      ? `<li><span class="tick sealed">◼</span><span>LEI: <span class="sealed">sealed</span> <span class="mono muted">commit ${short(p.lei_commit, 12)}</span></span></li>`
+      : `<li><span class="tick sealed">◻</span><span>LEI: disclosed by public tx <span class="mono">LEI ${p.lei}</span></span></li>`,
   ].join("") : `<li class="muted">No mandate opened yet.</li>`;
   const used = p ? p.within_limit.used : 0, of = p ? p.within_limit.of : 1;
   $("lim").style.width = (100 * used / of) + "%";
