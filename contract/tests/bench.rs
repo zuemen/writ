@@ -538,3 +538,59 @@ async fn a21_token_cell_refuses_foreign_deposits_and_asset_swap() -> anyhow::Res
     bench("A22", "funder swaps the settlement asset after the verifier signed", "BAD_ATTESTATION", "BAD_ATTESTATION", 0);
     Ok(())
 }
+
+// ---------------------------------------------------------------- 邊界與帳務（由 cargo-mutants 找出的缺口補上）
+
+#[tokio::test]
+async fn b05_boundaries_accounting_and_events() -> anyhow::Result<()> {
+    let w = world().await?;
+    // 金庫恰好 = 3 節：開格費 0.1 NEAR + 3 × 0.01 NEAR
+    let mut o = default_opts(&w);
+    o.n = 5; o.daily = 5; o.deposit_near = 0; // 下面自己算存款
+    let agent_sk = SecretKey::from_random(KeyType::ED25519);
+    let pw = Payword::new(5);
+    let vu = now_ns(&w).await? + 3_600_000_000_000;
+    let mut args = json!({"amc_said": "EB05", "issuer_pk": hex::encode([7u8;32]), "agent_pk": agent_sk.public_key(), "w0": pw.w0(), "n": 5,
+        "unit": UNIT.to_string(), "scope": [w.merchant.id()], "valid_until": vu.to_string(), "daily_links": 5,
+        "lei_commit": hex::encode([2u8;32]), "verifier": w.verifier.id()});
+    args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id()).as_bytes()).to_bytes()));
+    let deposit = 100_000_000_000_000_000_000_000u128 + 3 * UNIT;
+    let out = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_yoctonear(deposit)).max_gas().transact().await?;
+    assert!(out.logs().iter().any(|l| l.contains("\"event\":\"registered\"")), "registered event emitted");
+    let cell: String = out.into_result()?.json()?;
+    let agent = Account::from_secret_key(w.writ.id().clone(), agent_sk, &w.worker);
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell})).await?.json()?;
+    let today = now_ns(&w).await? / 86_400_000_000_000;
+    assert!(c["day"].as_u64().unwrap() == today || c["day"].as_u64().unwrap() + 1 == today, "day bucket = timestamp / 1 day");
+
+    // 金庫剛好夠 3 節 → 付得出去；再 1 節 → FUNDS
+    let v = spend(&agent, w.writ.id(), &pw.link(3), 3, w.merchant.id()).await.unwrap();
+    assert!(v.get("Paid").is_some(), "vault exactly equal to amount must pay: {}", v);
+    let v = spend(&agent, w.writ.id(), &pw.link(4), 1, w.merchant.id()).await.unwrap();
+    assert_eq!(v["Rejected"]["reason"], "FUNDS");
+    bench("A23", "spend more than the vault holds (valid links, within rate)", "Rejected:FUNDS", "Rejected:FUNDS", 0);
+
+    // 追加入金後，用完整條鏈（idx + j == n）必須成功
+    w.funder.call(w.writ.id(), "top_up").args_json(json!({"cell": cell})).deposit(NearToken::from_yoctonear(2 * UNIT)).transact().await?.into_result()?;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell})).await?.json()?;
+    assert_eq!(c["vault"], (2 * UNIT).to_string(), "top_up adds exactly the deposit");
+    let v = spend(&agent, w.writ.id(), &pw.link(5), 2, w.merchant.id()).await.unwrap();
+    assert_eq!(v["Paid"]["remaining_links"], 0, "the last link of the chain is spendable: {}", v);
+
+    // 計數：這格被拒 1 次；全域 rejected/cells
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell})).await?.json()?;
+    assert_eq!(c["rejects"], 1);
+    assert_eq!(c["spends"], 2);
+    let (cell2, _a2, _p2) = open_cell(&w, default_opts(&w)).await?;
+    assert_ne!(cell2.to_string(), cell, "cell ids are unique");
+    let st: Value = w.writ.view("stats").await?.json()?;
+    assert_eq!(st["cells"], 2);
+    assert_eq!(st["rejected"], 1);
+    assert_eq!(st["paid"], 2);
+    // 償付能力：金庫總和 = 0.9 NEAR（第二格）+ 0（第一格已用完）
+    let sol: Value = w.writ.view("solvency").await?.json()?;
+    assert_eq!(sol["vault_total"], "900000000000000000000000");
+    assert_eq!(sol["solvent"], true);
+    bench("B05", "boundaries: vault == amount pays, last link spendable, top_up, counters, solvency", "all exact", "all exact", 0);
+    Ok(())
+}

@@ -78,6 +78,14 @@ DEMO_RESULT|PASS|paid=true|injection=SCOPE|attacker_gain=0|disclosed=true|revoke
 
 **Disclosure is a public, time-delayed transaction.** At registration the verifier commits to `sha256(LEI‖salt)`; the LEI itself never touches the chain. A whitelisted supervisor calls `request_unseal(cell, sha256(reason))`, so everyone can see who asked and when. After the waiting period (constructor parameter; 10 s in the demo) only that cell's verifier can call `release_unseal(cell, LEI, salt)`, and the contract rejects any LEI that does not match the commitment (bench `A19`). The legal entity can `object_unseal`, which is recorded publicly but is not a veto, in line with the view-key model the paper describes (Box 3, p.28–29).
 
+### Why NEAR
+
+Three protocol features do the work that other chains would need a smart-contract wallet to imitate:
+
+1. **Function-call access keys.** The agent holds a key that the protocol itself restricts to one receiver and one method (`spend`), with no ability to attach deposits or send plain transfers (bench A08–A11). The restriction is enforced before any contract code runs.
+2. **A contract can add and delete keys on its own account.** Registration adds the agent's key; revocation and the tripwire delete it. "Revoked" is not a flag the contract checks; the key no longer exists, so the agent cannot even produce a transaction (`AccessKeyNotFound`).
+3. **Host functions for `ed25519_verify` and `sha256`.** KERI signatures (Ed25519) verify natively, so a KERI revocation event can be checked on-chain without an oracle, and a PayWord check costs about 1.2 Tgas for 100 hashes.
+
 ### Mapping to GLEIF's open questions
 
 GLEIF, *Agentic AI in Payments: Establishing Interoperable Trust and Control* (discussion paper, 2026-08-13): <https://www.gleif.org/organizational-identity/research-publications/2026-08-13_agentic_ai_in_payments_v1.0-1.pdf>

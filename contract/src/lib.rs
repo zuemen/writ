@@ -625,6 +625,13 @@ impl Contract {
         self.stats.clone()
     }
 
+    /// 償付能力：合約餘額必須涵蓋所有 NEAR 格的金庫總和（任何人都能檢查）。
+    pub fn solvency(&self) -> Value {
+        let balance = env::account_balance().as_yoctonear();
+        serde_json::json!({"vault_total": self.vault_total.to_string(), "balance": balance.to_string(),
+                           "solvent": balance >= self.vault_total})
+    }
+
     /// 讓驗證者確認自己要簽的 bytes 跟合約重建的一致。
     pub fn attestation_preview(&self, args: RegisterArgs, funder: AccountId) -> String {
         attestation_message(&args, &funder)
