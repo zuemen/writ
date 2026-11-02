@@ -33,7 +33,7 @@ ui: setup
 # 選用：真 LLM 當 agent（需要 NEARAI_API_KEY）。只碰本機 sandbox。結果寫進 docs/attack-live.md
 attack-live: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
-	cd app && npx tsx src/setup.ts && npx tsx src/agent-live.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
+	cd app && WRIT_N=500 WRIT_DAILY=500 WRIT_MAX_STRIKES=0 npx tsx src/setup.ts && npx tsx src/agent-live.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
 # 用 Circle 的 testnet USDC 跑一筆真實付款（法人要先從 faucet 領幣）。結果寫進 docs/testnet-usdc.md
 testnet-usdc: setup

@@ -12,6 +12,8 @@ The authorization is an Agent Mandate Credential, the credential GLEIF proposes 
 
 **Live on NEAR testnet:** contract [`writ.writmvyy7yqe-owner.testnet`](https://testnet.nearblocks.io/address/writ.writmvyy7yqe-owner.testnet), every step with its transaction in [`docs/testnet.md`](docs/testnet.md). It has no full-access key.
 
+**Real models get fooled; the money still doesn't move.** Two Gemini models read poisoned invoices and followed the injection in 13 of 20 attacks; 0 of those payments went through, attacker gain 0 ([`docs/attack-live.md`](docs/attack-live.md), a small sample, not a benchmark).
+
 **Try to steal from it:** <https://writ-steal.112306007.workers.dev> publishes an agent's private key on purpose and signs real testnet transactions from your browser. The key alone moves nothing. `make bounty` opens such a cell; the key lives only on that page, never in this repo.
 
 This README is written for a machine reviewer: every claim below has a command. The trust assumptions are listed in [Trust model](#trust-model).
@@ -29,7 +31,7 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with
 | 3 | `make demo` | a fresh local sandbox starts (port 3030 must be free); the 8-step story prints (about 1 min, includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
 | 4 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
 | 5 | `make keri-check` | the verifier prints 23 ✓ lines (mock root → QVI → legal entity → ECR → AMC: KEL, TEL, ACDC, registry control, schemas, I2I edges, delegation), then refuses 13 forged or stale chains; last line `KERI_FORGERIES\|PASS\|13` |
-| 6 | optional: `NEARAI_API_KEY=... make attack-live` (or `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` for any OpenAI-compatible provider) | a real LLM reads both invoices and chooses the tool calls; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in `docs/attack-live.md` |
+| 6 | optional: `NEARAI_API_KEY=... make attack-live` (or `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` for any OpenAI-compatible provider) | a real LLM reads both invoices and chooses the tool calls; 5 attacks × `LLM_RUNS` per model in `LLM_MODEL`; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in `docs/attack-live.md` |
 
 `make test` runs the bench in a fresh sandbox per test. `make demo` / `make ui` run `scripts/sandbox.sh` (a local `neard` sandbox on :3030; data in `.sandbox/`).
 
@@ -217,7 +219,7 @@ Independent reviews by reading the code, after the first bench, found problems t
 
 ## Not implemented / limits
 
-- **The agent in `make demo` and `make ui` is a script.** It issues the malicious call directly, because the point is the gate, not the model, and a script is reproducible. `make attack-live` runs a real LLM instead and needs an API key. Writ does not stop an agent from being fooled; it stops the payment.
+- **The agent in `make demo` and `make ui` is a script.** It issues the malicious call directly, because the point is the gate, not the model, and a script is reproducible. `make attack-live` runs real LLMs instead and needs an API key; the recorded run used Google's Gemini free tier on a local sandbox, not NEAR AI Cloud, so it makes no TEE claim. Writ does not stop an agent from being fooled; it stops the payment.
 - **The agent's KERI key is its NEAR key.** That is the demo's point, but it makes a KERI signing key a hot key, and rotating it means a new function-call key.
 - **A prompt-injected amount inside every cap and scope still gets paid** if the invoice is new. Writ limits the damage; it does not judge the invoice.
 - **Mock trust chain.** The verifier pins a mock root (`verify.py pin`), standing in for GLEIF's. The QVI and legal entity credentials follow the vLEI structure (I2I edges, rules section on the ECR) but no real QVI issued them. The LEI `WRITDEMO000000000017` is fictional.
