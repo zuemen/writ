@@ -201,7 +201,7 @@ Rejection reasons: `EXPIRED`, `SCOPE`, `INVOICE`, `DUPLICATE`, `PER_TX`, `LIMIT`
 
 ## Mutation testing
 
-`cargo mutants` (config in `contract/.cargo/mutants.toml`; `WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source) runs in shards from `.github/workflows/mutants.yml`. On the current contract it produced 154 testable mutants: 142 caught and 12 missed on the first pass. The misses became tests B14 and B15. Earlier survivors became attacks A23–A25 and tests B05, B06.
+`cargo mutants` (config in `contract/.cargo/mutants.toml`; `WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source) runs in shards from `.github/workflows/mutants.yml`. On the current contract it produced 154 testable mutants: 142 caught on the first pass; those 12 misses became tests B14 and B15 and some fixes. Re-run: **151 caught, 3 missed.** The three are boundary mutants we consider equivalent: `>` vs `>=` where the excess refund is zero (`register`), at one exact nanosecond of expiry (`spend`), and where a zero refund changes nothing (`close`). Earlier survivors became attacks A23–A25 and tests B05, B06.
 
 ## Security review notes
 

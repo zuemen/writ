@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs \
  && rm -rf /var/lib/apt/lists/*
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.0 -t wasm32-unknown-unknown
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.0 -c rustfmt -c clippy -t wasm32-unknown-unknown
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh  && uv python install 3.12 --install-dir /opt/py  && ln -s "$(ls -d /opt/py/cpython-3.12.*/bin/python3.12 | head -1)" /usr/local/bin/python3
 WORKDIR /writ
 COPY . .
