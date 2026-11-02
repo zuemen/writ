@@ -19,7 +19,7 @@
   python verify.py check                                     # 只驗鏈，不簽
   python verify.py reveal --amc <SAID>                       # 解封：印出當初承諾的 LEI 與 salt
 """
-import argparse, datetime, hashlib, json, os, secrets, sys
+import argparse, datetime, hashlib, hmac, json, os, secrets, sys
 
 import pysodium
 from keri.app import habbing
@@ -128,21 +128,29 @@ def verify_chain():
             le_pk=hby.kevers[ecr.issuer].verfers[0].raw.hex(),
             agent_near_pk="ed25519:" + b58(ak.verfers[0].raw),
             w0=a["paywordRoot"], n=a["paywordLength"], unit=a["unitYocto"], daily=a["dailyLinks"],
+            credit=dict(limit=a["creditLimitYocto"], bond_bps=a["bondBps"], min_tenor=str(a["minTenorSecs"]), max_tenor=str(a["maxTenorSecs"]),
+                        terms_hash=a["termsHash"], arbiter=a["arbiter"]) if a.get("creditLimitYocto") else None,
             max_links=a["maxLinksPerPayment"], max_strikes=a["maxStrikes"], le_aid=ecr.issuer,
             scope=a["counterparties"], funder=a["settlementRail"], asset=a.get("settlementAsset"),
             valid_until_ns=int(valid_until.timestamp()) * 1_000_000_000,
         )
 
 
-def attestation_message(r, lei_commit, ecr_commit, verifier, contract, attested_at):
+def credit_line(c):
+    if not c:
+        return "none"
+    return f"{c['limit']},{c['bond_bps']},{c['min_tenor']},{c['max_tenor']},{c['terms_hash']},{c['terms_sig']},{c['entity_tag']},{c['arbiter']}"
+
+
+def attestation_message(r, lei_commit, ecr_commit, verifier, contract, attested_at, credit=None):
     """必須與合約 attestation_message 逐字一致。"""
     return (
-        "writ:attest:v3\n"
+        "writ:attest:v4\n"
         f"contract={contract}\namc={r['amc_said']}\nissuer_aid={r['issuer_aid']}\nissuer_pk={r['issuer_pk']}\nagent_pk={r['agent_near_pk']}\nw0={r['w0']}\n"
         f"n={r['n']}\nunit={r['unit']}\nscope={','.join(r['scope'])}\nvalid_until={r['valid_until_ns']}\n"
         f"daily_links={r['daily']}\nmax_links={r['max_links']}\nmax_strikes={r['max_strikes']}\nlei_commit={lei_commit}\necr_commit={ecr_commit}\n"
         f"funder={r['funder']}\nverifier={verifier}\nattested_at={attested_at}\n"
-        f"asset={r['asset'] or 'near'}"
+        f"asset={r['asset'] or 'near'}\ncredit={credit_line(credit)}"
     )
 
 
@@ -182,7 +190,13 @@ def cmd_attest(a):
     ecr_salt = secrets.token_hex(16)
     ecr_commit = hashlib.sha256(f"{r['le_aid']}|{r['le_pk']}|{r['ecr_said']}|{ecr_salt}".encode()).hexdigest()
     attested_at = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) * 1_000_000_000
-    msg = attestation_message(r, lei_commit, ecr_commit, a.verifier, a.contract, attested_at).encode()
+    credit = None
+    if r["credit"]:
+        # 固定假名：同一家公司跨格累積紀錄；只有保證人算得出來，別人比對不出 LEI
+        tag = hmac.new(bytes.fromhex(read_json(VKEY)["sk_hex"]), r["lei"].encode(), hashlib.sha256).hexdigest()[:24]
+        terms = read_json(os.path.join(BUNDLE, "terms.json"))
+        credit = dict(r["credit"], terms_sig=terms["terms_sig"], entity_tag=tag)
+    msg = attestation_message(r, lei_commit, ecr_commit, a.verifier, a.contract, attested_at, credit).encode()
     sig = pysodium.crypto_sign_detached(msg, bytes.fromhex(key["sk_hex"]))
     # LEI 與 salt 只留在驗證者這裡（解封時才用）
     recs = read_json(RECORDS) if os.path.exists(RECORDS) else {}
@@ -194,6 +208,8 @@ def cmd_attest(a):
                 daily_links=r["daily"], lei_commit=lei_commit, ecr_commit=ecr_commit, verifier=a.verifier, signature=sig.hex())
     if r["asset"]:
         args["asset"] = r["asset"]
+    if credit:
+        args["credit"] = credit
     opening = dict(le_aid=r["le_aid"], le_pk=r["le_pk"], ecr_said=r["ecr_said"], salt=ecr_salt)
     print(json.dumps(dict(funder=r["funder"], args=args, ecr_opening=opening), indent=1))
 

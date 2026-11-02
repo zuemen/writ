@@ -58,6 +58,18 @@ def payword(seed: bytes, n: int):
     return links
 
 
+# 示範用條款：真實部署要由公司與律師定稿
+TERMS = "Writ demo credit terms. Not reviewed by counsel. Governing law and arbitration are placeholders. The company consents to disclosure of its LEI after an unpaid recourse period."
+TERMS_HASH = hashlib.sha256(TERMS.encode()).hexdigest()
+
+
+def credit_attrs(a):
+    if not a.credit_limit:
+        return {}
+    return dict(creditLimitYocto=str(int(decimal.Decimal(a.credit_limit))), bondBps=a.bond_bps, minTenorSecs=a.min_tenor,
+                maxTenorSecs=a.max_tenor, termsHash=TERMS_HASH, arbiter=a.arbiter)
+
+
 def cmd_init(a):
     if os.path.exists(STATE):
         sys.exit("already initialized (rm -rf keri/.keystore to start over)")
@@ -111,6 +123,7 @@ def cmd_init(a):
         data=dict(actionClass="supplier-payment", counterparties=a.scope.split(","),
                   validUntil=valid_until.isoformat(timespec="seconds"), unitYocto=str(int(decimal.Decimal(a.unit))),
                   paywordRoot=links[0].hex(), paywordLength=a.n, dailyLinks=a.daily, maxLinksPerPayment=a.max_links, maxStrikes=a.max_strikes, settlementRail=a.rail,
+                  **credit_attrs(a),
                   **({"settlementAsset": a.asset} if a.asset else {})),
         source=block(ecr=dict(n=ecr.said, s=ECR.said, o="I2I")),
     )
@@ -123,6 +136,13 @@ def cmd_init(a):
     signer = hby.mgr.ks.pris.get(pub.qb64)
     near_sk = "ed25519:" + b58(signer.raw + pub.raw)
     near_pk = "ed25519:" + b58(pub.raw)
+
+    # LE 同意這份信用條款：簽 (合約, AMC, 條款, LEI)。合約只在違約揭露時才驗，保證人因此栽贓不了別家公司
+    terms_sig = ""
+    if a.credit_limit:
+        msg = f"writ:terms:v1\ncontract={a.contract}\namc={amc.said}\nterms={TERMS_HASH}\nlei={LEI}".encode()
+        terms_sig = le.sign(ser=msg, indexed=False)[0].raw.hex()
+    write_json(os.path.join(KEYSTORE, "terms.json"), dict(terms_sig=terms_sig))
 
     write_json(PRIVATE, dict(agent_near_secret_key=near_sk, payword_seed=seed.hex(), lei_salt_hint="verifier picks its own salt"))
     write_json(STATE, dict(root=root.pre, qvi=qvi.pre, le=le.pre, human=human.pre, agent=agent.pre, agent_near_pk=near_pk,
@@ -167,6 +187,7 @@ def cmd_export(a):
         f.write(stream)
     write_json(os.path.join(BUNDLE, "schemas.json"), {ECR.said: ECR.sed, AMC.said: AMC.sed})
     # 持有人出示「我要驗哪一張」；信任錨不在這裡，驗證端自己釘（verify.py pin）
+    write_json(os.path.join(BUNDLE, "terms.json"), read_json(os.path.join(KEYSTORE, "terms.json")))
     write_json(os.path.join(BUNDLE, "presentation.json"), dict(qvi_said=st["qvc"], lev_said=st["lev"], ecr_said=st["ecr"], amc_said=st["amc"], agent_aid=st["agent"]))
     # 發行方的公開狀態：驗證端直接讀這裡的最新 KEL／TEL，持有人拿舊 bundle 也蓋不掉撤銷
     os.makedirs(REGISTRAR, exist_ok=True)
@@ -249,6 +270,12 @@ if __name__ == "__main__":
     i.add_argument("--daily", type=int, default=20)
     i.add_argument("--days", type=int, default=30)
     i.add_argument("--max-links", type=int, default=10, help="單筆最多幾節")
+    i.add_argument("--credit-limit", default=None, help="可賒總額（yocto）；省略 = 這張 AMC 不能賒帳")
+    i.add_argument("--bond-bps", type=int, default=5000)
+    i.add_argument("--min-tenor", type=int, default=60)
+    i.add_argument("--max-tenor", type=int, default=2592000)
+    i.add_argument("--arbiter", default=None)
+    i.add_argument("--contract", default=None)
     i.add_argument("--max-strikes", type=int, default=3, help="連續拒絕幾次刪鑰匙；0 = 不自動刪")
     i.add_argument("--asset", default=None, help="NEP-141 代幣合約帳號（省略 = NEAR）")
     sp.add_parser("export")

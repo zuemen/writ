@@ -57,13 +57,15 @@ export async function call(
 }
 
 /** 部署 + 初始化 + 刪 full-access key 放同一個 batch：之後沒有任何鑰匙能動合約帳號的錢。 */
-export async function deployLocked(id: string, sk: KeyPairString, wasm: Uint8Array, owner: string, unsealDelaySecs: number) {
+export const DEMO_WINDOWS = (recourse: number) => ({ accept_ttl: "600", grace: "0", recourse: String(recourse), dispute_timeout: "60", unstake_delay: "60" });
+
+export async function deployLocked(id: string, sk: KeyPairString, wasm: Uint8Array, owner: string, unsealDelaySecs: number, recourseSecs = 6) {
   const signer = KeyPair.fromString(sk);
   const r: any = await as(id, sk).signAndSendTransaction({
     receiverId: id,
     actions: [
       actions.deployContract(wasm),
-      actions.functionCall("new", { owner, unseal_delay_secs: unsealDelaySecs }, teraToGas("30"), 0n),
+      actions.functionCall("new", { owner, unseal_delay_secs: unsealDelaySecs, windows: DEMO_WINDOWS(recourseSecs) }, teraToGas("30"), 0n),
       actions.deleteKey(signer.getPublicKey()),
     ],
     waitUntil: "FINAL",

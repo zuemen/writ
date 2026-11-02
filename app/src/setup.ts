@@ -15,7 +15,7 @@ const ROOTACC = "test.near";
 const rootKey = readJson(join(ROOT, ".sandbox", "validator_key.json")).secret_key as KeyPairString;
 const root = as(ROOTACC, rootKey);
 
-const plan: Record<string, string> = { writ: "60", owner: "10", verifier: "10", acme: "100", merchant: "10", attacker: "10", regulator: "10" };
+const plan: Record<string, string> = { writ: "60", owner: "10", verifier: "10", arbiter: "5", acme: "100", merchant: "10", attacker: "10", regulator: "10" };
 const accts: Record<string, { id: string; sk: KeyPairString }> = {};
 
 for (const [name, amt] of Object.entries(plan)) {
@@ -40,6 +40,8 @@ await call(owner, accts.writ.id, "set_supervisor", { account: accts.regulator.id
 const vpk = py("verify.py", "keygen", "--force").trim();
 const r = await call(owner, accts.writ.id, "set_verifier", { account: accts.verifier.id, pk_hex: vpk });
 if (r.error) throw new Error(r.error);
+const st0 = await call(as(accts.verifier.id, accts.verifier.sk), accts.writ.id, "stake", {}, { deposit: NEAR("3") });
+if (st0.error) throw new Error("stake: " + st0.error);
 console.log(`  verifier ${accts.verifier.id} whitelisted (pk ${vpk.slice(0, 16)}…)`);
 
 rmSync(join(ROOT, "keri/.keystore"), { recursive: true, force: true });
@@ -47,7 +49,8 @@ rmSync(join(ROOT, "keri/bundle"), { recursive: true, force: true });
 rmSync(join(ROOT, "keri/registrar"), { recursive: true, force: true });
 const out = py("issuer.py", "init", "--scope", accts.merchant.id, "--rail", accts.acme.id,
   "--n", process.env.WRIT_N ?? "50", "--unit", "1e23", "--daily", process.env.WRIT_DAILY ?? "20", "--days", "30",
-  "--max-strikes", process.env.WRIT_MAX_STRIKES ?? "3");
+  "--max-strikes", process.env.WRIT_MAX_STRIKES ?? "3",
+  "--credit-limit", "1e24", "--bond-bps", "0", "--min-tenor", "0", "--max-tenor", "86400", "--arbiter", accts.arbiter.id, "--contract", accts.writ.id);
 const st = JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1));
 py("verify.py", "pin", "--root", st.root); // 信任錨由驗證端釘住，不是持有人出示的
 console.log(`  KERI: LE ${st.le.slice(0, 12)}… → ECR → human ${st.human.slice(0, 12)}… → AMC → agent ${st.agent.slice(0, 12)}… (delegated)`);
