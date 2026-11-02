@@ -1,5 +1,7 @@
 # Writ: Verifiable, Revocable Payment Mandates for AI Agents
 
+[![reproduce](https://github.com/zuemen/writ/actions/workflows/ci.yml/badge.svg)](https://github.com/zuemen/writ/actions/workflows/ci.yml) — every push runs `make setup`, `make test`, `make demo` and `make keri-check` on a fresh GitHub runner.
+
 **An AI agent can pay only whom it was authorized to pay, only as much as it was authorized to spend, and only until a human takes the authorization back.** The authorization is a GLEIF Agent Mandate Credential (KERI/vLEI); NEAR enforces it on every payment. Verify once, enforce every time, revoke at block speed.
 
 An AI agent pays suppliers on behalf of a company. Writ answers three questions for every payment, on-chain, without putting the company's identity on-chain:
@@ -170,7 +172,7 @@ Rejection reasons: `EXPIRED`, `SCOPE`, `LIMIT`, `CHAIN`, `RATE`, `FUNDS`. Events
 - **Privacy is selective disclosure, not anonymity.** Until a disclosure, only `sha256(LEI‖salt)` is on-chain (salt held by the verifier). Funding accounts, the agent key and payments are public and linkable on-chain. Only tier 1 (the LEI) is disclosable; the employee's identity is out of scope.
 - **Single verifier per cell**; no sub-delegation between agents. The NEP-141 path is tested with a mock token (`contract/ft-mock`), not a live stablecoin.
 - **Not deployed to testnet yet.**
-- **Dockerfile is provided but not yet verified** (no Docker daemon in the build environment). `.github/workflows/ci.yml` runs the README steps on every push.
+- **Dockerfile is provided but not yet verified** (no Docker daemon in the build environment).
 
 ## Repository layout
 
