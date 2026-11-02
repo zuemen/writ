@@ -11,6 +11,8 @@ else
 endif
 	ls -l res/writ.wasm
 	sha256sum res/writ.wasm
+	cd ft-mock && cargo build --target wasm32-unknown-unknown --release
+	cp ft-mock/target/wasm32-unknown-unknown/release/ft_mock.wasm res/ft_mock.wasm
 
 # 跑攻擊台並重產 docs/bench.md；任何測試失敗則 exit 1
 test: build

@@ -19,7 +19,7 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.11+ with l
 | # | Do | See |
 |---|---|---|
 | 1 | `make setup` | contract builds and is shrunk with wasm-opt (≈ 260 KB); size and `sha256sum` of `contract/res/writ.wasm` printed |
-| 2 | `make test` | `test result: ok. 11 passed` and the table in [`docs/bench.md`](docs/bench.md): **19 attacks, 19 blocked as expected, attacker gain 0 yoctoNEAR** |
+| 2 | `make test` | `test result: ok. 13 passed` and the table in [`docs/bench.md`](docs/bench.md): **22 attacks, 22 blocked as expected, attacker gain 0 yoctoNEAR** |
 | 3 | `make demo` | local sandbox starts (port 3030 must be free); the 8-step story prints (about 1 min, includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
 | 4 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → revoke AMC**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
 | 5 | `make keri-check` | the independent verifier prints 10 ✓ lines (KEL, TEL, ACDC, delegation, I2I chain) |
@@ -72,6 +72,8 @@ DEMO_RESULT|PASS|paid=true|injection=SCOPE|attacker_gain=0|disclosed=true|revoke
 
 **Budget is a hash chain** (PayWord, Rivest & Shamir 1996). The AMC carries `paywordRoot = w0 = sha256^n(seed)`. The employee holds the seed and releases links to the agent off-chain; paying `j` links requires the preimage `w_{idx+j}`. The NEAR key decides *who can act*; the preimage decides *how much*. A function-call key's allowance limits gas only, so the money limit has to live somewhere else — here, in the credential.
 
+**Stablecoins too.** A cell can settle in any NEP-141 token: the AMC carries `settlementAsset`, the verifier binds it into the attestation (`asset=` line), the legal entity funds the cell with `ft_transfer_call(msg = <cell id>)`, and `spend` pays with `ft_transfer`. NEP-141 transfers need 1 yoctoNEAR attached, which a function-call key can never attach; the contract attaches it on its own receipt. Foreign tokens pushed into a cell are refunded (bench `A21`, `A22`, `B04`; test token in `contract/ft-mock`).
+
 **Revocation needs no trusted watcher.** `revoke_by_kel` takes the raw `ixn` event and the signature attached to it in the issuer's KEL, verifies it with `env::ed25519_verify` against the issuer key bound at registration, and checks that a seal `{i: <AMC SAID>, s: "1"}` is present (a simple TEL has `iss` at sn 0 and `rev` at sn 1). Anyone can submit it (bench `B01`).
 
 **Disclosure is a public, time-delayed transaction.** At registration the verifier commits to `sha256(LEI‖salt)`; the LEI itself never touches the chain. A whitelisted supervisor calls `request_unseal(cell, sha256(reason))`, so everyone can see who asked and when. After the waiting period (constructor parameter; 10 s in the demo) only that cell's verifier can call `release_unseal(cell, LEI, salt)`, and the contract rejects any LEI that does not match the commitment (bench `A19`). The legal entity can `object_unseal`, which is recorded publicly but is not a veto, in line with the view-key model the paper describes (Box 3, p.28–29).
@@ -101,7 +103,8 @@ GLEIF, *Agentic AI in Payments: Establishing Interoperable Trust and Control* (d
 | `revoke(cell, evidence)` | funder / verifier / owner | delete key, refund vault |
 | `revoke_by_kel(cell, ixn, signature)` | anyone | verify KERI revocation anchor, delete key, refund vault |
 | `refresh_key(cell)` | funder / verifier | re-add the same key with a fresh gas allowance |
-| `top_up(cell)` payable | funder | add to vault |
+| `top_up(cell)` payable | funder | add NEAR to a NEAR cell |
+| `ft_on_transfer(sender_id, amount, msg)` | NEP-141 token (via `ft_transfer_call`) | fund a token cell; `msg` = cell id; anything else is refunded |
 | `set_supervisor(account, enabled)` | owner | whitelist a supervisor |
 | `request_unseal(cell, reason_hash)` | supervisor | public disclosure request; waiting period starts |
 | `object_unseal(cell)` | funder | public objection (not a veto) |
@@ -129,14 +132,14 @@ Rejection reasons: `EXPIRED`, `SCOPE`, `LIMIT`, `CHAIN`, `RATE`, `FUNDS`. Events
 - **Mock schemas.** The ECR schema here mirrors the vLEI ECR attribute block but has its own SAID. GLEIF has not published an AMC schema (paper p.45); `keri/common.py` is a proposal.
 - **Key rotation.** `revoke_by_kel` checks the issuer key bound at registration. If the employee rotates keys, the verifier must re-attest.
 - **Privacy is selective disclosure, not anonymity.** Until a disclosure, only `sha256(LEI‖salt)` is on-chain (salt held by the verifier). Funding accounts, the agent key and payments are public and linkable on-chain. Only tier 1 (the LEI) is disclosable; the employee's identity is out of scope.
-- **Single verifier per cell**, NEAR-native payments only (no NEP-141 path yet), no sub-delegation between agents.
+- **Single verifier per cell**; no sub-delegation between agents. The NEP-141 path is tested with a mock token (`contract/ft-mock`), not a live stablecoin.
 - **Not deployed to testnet yet.**
 - **Dockerfile is provided but not yet verified** (no Docker daemon in the build environment).
 
 ## Repository layout
 
 ```
-contract/        Rust contract (near-sdk 5.30) + tests/bench.rs (attack bench)
+contract/        Rust contract (near-sdk 5.30) + tests/bench.rs (attack bench) + ft-mock/ (test NEP-141 token)
 keri/            issuer.py (mock vLEI ecosystem), verify.py (independent verifier), common.py (schemas)
 app/             TypeScript: setup, demo, UI server (src/), page (web/)
 scripts/         sandbox.sh, bench_table.py

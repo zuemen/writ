@@ -38,6 +38,7 @@ pub const AGENT_METHODS: &str = "spend";
 pub const MAX_SCOPE: usize = 16;
 const NS_PER_DAY: u64 = 86_400_000_000_000;
 const GAS_FOR_CALLBACK: Gas = Gas::from_tgas(5);
+const GAS_FOR_FT: Gas = Gas::from_tgas(10);
 
 #[derive(BorshStorageKey)]
 #[near]
@@ -84,6 +85,8 @@ pub struct Cell {
     pub rejects: u32,              // 累計拒絕
     pub strikes: u32,              // 連續拒絕（成功一筆就歸零）
     pub status: Status,
+    /// None = NEAR 原生代幣；Some(token) = NEP-141（例如穩定幣），金庫以該代幣最小單位計
+    pub asset: Option<AccountId>,
 }
 
 /// spend 的判決。被擋不是錯誤，是正常結果。
@@ -111,6 +114,9 @@ pub struct RegisterArgs {
     pub verifier: AccountId,
     /// 驗證者對 attestation_message 的 Ed25519 簽章（hex，64 bytes）
     pub signature: String,
+    /// 結算資產：省略 = NEAR；NEP-141 合約帳號 = 以該代幣支付（綁在 attestation 裡）
+    #[serde(default)]
+    pub asset: Option<AccountId>,
 }
 
 /// 全域計數（README 首頁總表用）。
@@ -168,7 +174,7 @@ fn event(name: &str, data: Value) {
 pub fn attestation_message(a: &RegisterArgs, funder: &AccountId) -> String {
     let scope: Vec<&str> = a.scope.iter().map(|s| s.as_str()).collect();
     format!(
-        "writ:attest:v1\namc={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nlei_commit={}\nfunder={}\nverifier={}",
+        "writ:attest:v1\namc={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nlei_commit={}\nfunder={}\nverifier={}\nasset={}",
         a.amc_said,
         a.issuer_pk,
         String::from(&a.agent_pk),
@@ -180,7 +186,8 @@ pub fn attestation_message(a: &RegisterArgs, funder: &AccountId) -> String {
         a.daily_links,
         a.lei_commit,
         funder,
-        a.verifier
+        a.verifier,
+        a.asset.as_ref().map(|t| t.as_str()).unwrap_or("near")
     )
 }
 
@@ -245,7 +252,8 @@ impl Contract {
         let msg = attestation_message(&args, &funder);
         require!(env::ed25519_verify(&sig, msg.as_bytes(), &vpk), "BAD_ATTESTATION");
 
-        let vault = deposit.as_yoctonear() - REGISTER_FEE.as_yoctonear();
+        // NEAR 格：附帶的 NEAR 扣掉開格費進金庫。代幣格：附帶的 NEAR 全當開格費／gas 準備，金庫用 ft_transfer_call 入金。
+        let vault = if args.asset.is_none() { deposit.as_yoctonear() - REGISTER_FEE.as_yoctonear() } else { 0 };
         let id = self.next_id;
         self.next_id += 1;
         let cell = Cell {
@@ -269,6 +277,7 @@ impl Contract {
             rejects: 0,
             strikes: 0,
             status: Status::Active,
+            asset: args.asset.clone(),
         };
         self.cells.insert(id, cell);
         self.key_to_cell.insert(args.agent_pk.clone(), id);
@@ -296,6 +305,7 @@ impl Contract {
         let mut c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
         require!(env::predecessor_account_id() == c.funder, "ONLY_FUNDER");
         require!(c.status == Status::Active, "NOT_ACTIVE");
+        require!(c.asset.is_none(), "TOKEN_CELL_USE_FT_TRANSFER_CALL");
         let d = env::attached_deposit().as_yoctonear();
         c.vault = U128(c.vault.0 + d);
         self.vault_total += d;
@@ -364,17 +374,31 @@ impl Contract {
         c.vault = U128(c.vault.0 - amount);
         c.spends += 1;
         c.strikes = 0;
-        self.vault_total -= amount;
+        if c.asset.is_none() {
+            self.vault_total -= amount; // vault_total 只追蹤 NEAR 金庫
+        }
         self.stats.paid += 1;
-        self.stats.paid_yocto = U128(self.stats.paid_yocto.0 + amount);
+        if c.asset.is_none() {
+            self.stats.paid_yocto = U128(self.stats.paid_yocto.0 + amount);
+        }
         let idx = c.idx;
         let remaining = c.n - c.idx;
+        let asset = c.asset.clone();
         self.cells.insert(id, c);
         event("paid", serde_json::json!({"cell": id.to_string(), "to": to, "amount": amount.to_string(), "idx": idx}));
 
         // 跨 receipt 沒有原子回滾：先扣（預留），callback 失敗再退回金庫
-        Promise::new(to.clone())
-            .transfer(NearToken::from_yoctonear(amount))
+        // 代幣格：合約自己發 receipt 附 1 yocto 呼叫 ft_transfer（agent 的 FC key 不能附存款，合約可以）
+        let payout = match &asset {
+            None => Promise::new(to.clone()).transfer(NearToken::from_yoctonear(amount)),
+            Some(token) => Promise::new(token.clone()).function_call(
+                "ft_transfer".to_string(),
+                serde_json::to_vec(&serde_json::json!({"receiver_id": to, "amount": amount.to_string(), "memo": format!("writ cell {}", id)})).unwrap(),
+                NearToken::from_yoctonear(1),
+                GAS_FOR_FT,
+            ),
+        };
+        payout
             .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_CALLBACK).on_transfer(U64(id), U128(amount)))
             .detach();
         Verdict::Paid { cell: U64(id), amount: U128(amount), idx, remaining_links: remaining }
@@ -388,7 +412,9 @@ impl Contract {
         // 轉帳失敗（例如收款帳號不存在）：錢退回金庫；鏈節已消耗不退（防重放）
         if let Some(mut c) = self.cells.get(&cell.0).cloned() {
             c.vault = U128(c.vault.0 + amount.0);
-            self.vault_total += amount.0;
+            if c.asset.is_none() {
+                self.vault_total += amount.0;
+            }
             self.cells.insert(cell.0, c);
         }
         event("refunded", serde_json::json!({"cell": cell.0.to_string(), "amount": amount.0.to_string()}));
@@ -444,7 +470,10 @@ impl Contract {
         let was_active = c.status == Status::Active;
         c.vault = U128(0);
         c.status = status.clone();
-        self.vault_total -= refund;
+        let asset = c.asset.clone();
+        if asset.is_none() {
+            self.vault_total -= refund;
+        }
         self.stats.revoked += 1;
         self.key_to_cell.remove(&c.agent_pk);
         let pk = c.agent_pk.clone();
@@ -456,7 +485,17 @@ impl Contract {
             Promise::new(env::current_account_id()).delete_key(pk).detach();
         }
         if refund > 0 {
-            Promise::new(funder).transfer(NearToken::from_yoctonear(refund)).detach();
+            match asset {
+                None => Promise::new(funder).transfer(NearToken::from_yoctonear(refund)).detach(),
+                Some(token) => Promise::new(token)
+                    .function_call(
+                        "ft_transfer".to_string(),
+                        serde_json::to_vec(&serde_json::json!({"receiver_id": funder, "amount": refund.to_string(), "memo": format!("writ cell {} closed", id)})).unwrap(),
+                        NearToken::from_yoctonear(1),
+                        GAS_FOR_FT,
+                    )
+                    .detach(),
+            }
         }
     }
 
@@ -476,6 +515,22 @@ impl Contract {
             )
             .detach();
         event("refreshed", serde_json::json!({"cell": cell.0.to_string()}));
+    }
+
+    /// NEP-141 入金：法人 ft_transfer_call(writ, amount, msg = "<cell id>")。
+    /// 只收「該格綁定的代幣」且「寄件人是該格的法人」；其他一律退回（回傳 amount），不 panic。
+    pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> U128 {
+        let token = env::predecessor_account_id();
+        let Ok(id) = msg.trim().parse::<u64>() else { return amount };
+        let Some(mut c) = self.cells.get(&id).cloned() else { return amount };
+        if c.asset.as_ref() != Some(&token) || c.funder != sender_id || c.status != Status::Active {
+            event("deposit_refused", serde_json::json!({"cell": id.to_string(), "token": token, "sender": sender_id}));
+            return amount;
+        }
+        c.vault = U128(c.vault.0 + amount.0);
+        self.cells.insert(id, c);
+        event("deposited", serde_json::json!({"cell": id.to_string(), "token": token, "amount": amount.0.to_string()}));
+        U128(0)
     }
 
     // ================= 監理調閱（tier-1：只揭露 LEI） =================

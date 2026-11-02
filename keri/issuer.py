@@ -89,7 +89,8 @@ def cmd_init(a):
         issuer=human.pre, schema=AMC.said, recipient=agent.pre, status=reg_hu.regk,
         data=dict(actionClass="supplier-payment", counterparties=a.scope.split(","),
                   validUntil=valid_until.isoformat(timespec="seconds"), unitYocto=str(int(decimal.Decimal(a.unit))),
-                  paywordRoot=links[0].hex(), paywordLength=a.n, dailyLinks=a.daily, settlementRail=a.rail),
+                  paywordRoot=links[0].hex(), paywordLength=a.n, dailyLinks=a.daily, settlementRail=a.rail,
+                  **({"settlementAsset": a.asset} if a.asset else {})),
         source=dict(d="", ecr=dict(n=ecr.said, s=ECR.said)),
     )
     iss_a = reg_hu.issue(said=amc.said)
@@ -197,6 +198,7 @@ if __name__ == "__main__":
     i.add_argument("--unit", default="1e23", help="每鏈節 yoctoNEAR（預設 0.1 NEAR）")
     i.add_argument("--daily", type=int, default=20)
     i.add_argument("--days", type=int, default=30)
+    i.add_argument("--asset", default=None, help="NEP-141 代幣合約帳號（省略 = NEAR）")
     sp.add_parser("export")
     r = sp.add_parser("release"); r.add_argument("k")
     sp.add_parser("revoke")

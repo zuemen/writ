@@ -58,6 +58,7 @@ ECR = _schema(
 # AMC：GLEIF《Agentic AI in Payments》Annex A p.44 —— 行動類別、交易上限、允許的交易對手、有效時間窗。
 # 討論稿 p.45 明寫 AMC 的正式 ACDC schema 尚未定義；這是本專案的提案版本。
 # paywordRoot / paywordLength / unitYocto 把「額度」本身綁進憑證：鏈上 w0 必須等於憑證裡的值。
+# settlementAsset（選填）：NEP-141 代幣合約帳號；省略 = NEAR。unitYocto 此時為該代幣最小單位。
 AMC = _schema(
     "Agent Mandate Credential",
     {
@@ -69,6 +70,7 @@ AMC = _schema(
         "paywordLength": {"type": "integer"},
         "dailyLinks": {"type": "integer"},
         "settlementRail": {"type": "string"},
+        "settlementAsset": {"type": "string"},
     },
     ["actionClass", "counterparties", "validUntil", "unitYocto", "paywordRoot", "paywordLength", "dailyLinks",
      "settlementRail"],

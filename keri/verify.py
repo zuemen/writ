@@ -91,7 +91,7 @@ def verify_chain():
             issuer_pk=hk.verfers[0].raw.hex(),
             agent_near_pk="ed25519:" + b58(ak.verfers[0].raw),
             w0=a["paywordRoot"], n=a["paywordLength"], unit=a["unitYocto"], daily=a["dailyLinks"],
-            scope=a["counterparties"], funder=a["settlementRail"],
+            scope=a["counterparties"], funder=a["settlementRail"], asset=a.get("settlementAsset"),
             valid_until_ns=int(valid_until.timestamp()) * 1_000_000_000,
         )
 
@@ -102,7 +102,8 @@ def attestation_message(r, lei_commit, verifier):
         "writ:attest:v1\n"
         f"amc={r['amc_said']}\nissuer_pk={r['issuer_pk']}\nagent_pk={r['agent_near_pk']}\nw0={r['w0']}\n"
         f"n={r['n']}\nunit={r['unit']}\nscope={','.join(r['scope'])}\nvalid_until={r['valid_until_ns']}\n"
-        f"daily_links={r['daily']}\nlei_commit={lei_commit}\nfunder={r['funder']}\nverifier={verifier}"
+        f"daily_links={r['daily']}\nlei_commit={lei_commit}\nfunder={r['funder']}\nverifier={verifier}\n"
+        f"asset={r['asset'] or 'near'}"
     )
 
 
@@ -142,6 +143,8 @@ def cmd_attest(a):
     args = dict(amc_said=r["amc_said"], issuer_pk=r["issuer_pk"], agent_pk=r["agent_near_pk"], w0=r["w0"],
                 n=r["n"], unit=r["unit"], scope=r["scope"], valid_until=str(r["valid_until_ns"]),
                 daily_links=r["daily"], lei_commit=lei_commit, verifier=a.verifier, signature=sig.hex())
+    if r["asset"]:
+        args["asset"] = r["asset"]
     print(json.dumps(dict(funder=r["funder"], args=args), indent=1))
 
 

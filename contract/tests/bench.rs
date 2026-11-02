@@ -73,17 +73,20 @@ struct Opts {
     deposit_near: u128,
     amc_said: String,
     issuer_pk: String,
+    asset: Option<AccountId>,
+    unit: u128,
 }
 
 /// 與合約 attestation_message 完全一致的規範字串。
 fn attest_msg(a: &Value, funder: &AccountId) -> String {
     let scope: Vec<String> = a["scope"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect();
     format!(
-        "writ:attest:v1\namc={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nlei_commit={}\nfunder={}\nverifier={}",
+        "writ:attest:v1\namc={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nlei_commit={}\nfunder={}\nverifier={}\nasset={}",
         a["amc_said"].as_str().unwrap(), a["issuer_pk"].as_str().unwrap(), a["agent_pk"].as_str().unwrap(),
         a["w0"].as_str().unwrap(), a["n"], a["unit"].as_str().unwrap(), scope.join(","),
         a["valid_until"].as_str().unwrap(), a["daily_links"], a["lei_commit"].as_str().unwrap(), funder,
-        a["verifier"].as_str().unwrap()
+        a["verifier"].as_str().unwrap(),
+        a.get("asset").and_then(|v| v.as_str()).unwrap_or("near")
     )
 }
 
@@ -99,10 +102,11 @@ async fn open_cell(w: &World, o: Opts) -> anyhow::Result<(u64, Account, Payword)
     let valid_until = now_ns(w).await? + o.valid_secs * 1_000_000_000;
     let mut args = json!({
         "amc_said": o.amc_said, "issuer_pk": o.issuer_pk, "agent_pk": agent_sk.public_key(),
-        "w0": pw.w0(), "n": o.n, "unit": UNIT.to_string(), "scope": o.scope,
+        "w0": pw.w0(), "n": o.n, "unit": o.unit.to_string(), "scope": o.scope,
         "valid_until": valid_until.to_string(), "daily_links": o.daily, "lei_commit": lei_commit,
         "verifier": w.verifier.id(),
     });
+    if let Some(t) = &o.asset { args["asset"] = json!(t); }
     let sig = w.verifier_sk.sign(attest_msg(&args, w.funder.id()).as_bytes());
     args["signature"] = json!(hex::encode(sig.to_bytes()));
     let out = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args}))
@@ -119,6 +123,8 @@ fn default_opts(w: &World) -> Opts {
         deposit_near: 1,
         amc_said: "EAMC_test_said_000000000000000000000000000000".into(),
         issuer_pk: hex::encode([7u8; 32]),
+        asset: None,
+        unit: UNIT,
     }
 }
 
@@ -434,5 +440,86 @@ async fn a17_unseal_needs_supervisor_waiting_period_and_matching_commitment() ->
     let u: Value = w.writ.view("get_unseal").args_json(json!({"cell": cell.to_string()})).await?.json()?;
     assert_eq!(u["objected"], true);
     bench("B03", "supervisor request → wait → verifier discloses committed LEI (public tx)", "LEI disclosed, objection on record", "disclosed", 0);
+    Ok(())
+}
+
+// ---------------------------------------------------------------- NEP-141 穩定幣路徑
+
+const FT_WASM: &str = "res/ft_mock.wasm";
+const T: u128 = 1_000_000; // tUSDC 6 位小數
+
+async fn ft_balance(w: &World, token: &Contract, who: &AccountId) -> u128 {
+    let v: String = token.view("ft_balance_of").args_json(json!({"account_id": who})).await.unwrap().json().unwrap();
+    v.parse().unwrap()
+}
+
+#[tokio::test]
+async fn b04_stablecoin_cell_pays_in_nep141_and_refunds_on_revoke() -> anyhow::Result<()> {
+    let w = world().await?;
+    let token = w.worker.dev_deploy(&std::fs::read(FT_WASM)?).await?;
+    token.call("new").args_json(json!({"owner_id": w.funder.id(), "total_supply": (1_000 * T).to_string()})).transact().await?.into_result()?;
+    for who in [w.writ.id(), w.merchant.id(), w.attacker.id()] {
+        w.funder.call(token.id(), "storage_deposit").args_json(json!({"account_id": who})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
+    }
+    let mut o = default_opts(&w);
+    o.asset = Some(token.id().clone());
+    o.unit = T / 10; // 每節 0.1 tUSDC
+    let (cell, agent, pw) = open_cell(&w, o).await?;
+    // 法人以 ft_transfer_call 入金 5 tUSDC，msg = cell id
+    w.funder.call(token.id(), "ft_transfer_call")
+        .args_json(json!({"receiver_id": w.writ.id(), "amount": (5 * T).to_string(), "msg": cell.to_string()}))
+        .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(c["vault"], (5 * T).to_string());
+
+    // 付 3 節給商家
+    let v = spend(&agent, w.writ.id(), &pw.link(3), 3, w.merchant.id()).await.unwrap();
+    assert!(v.get("Paid").is_some(), "{}", v);
+    assert_eq!(ft_balance(&w, &token, w.merchant.id()).await, 3 * T / 10);
+    bench("B04", "stablecoin cell: agent pays 3 links in NEP-141 (contract attaches the 1 yocto)", "merchant +0.3 tUSDC", "merchant +0.3 tUSDC", 0);
+
+    // 注入攻擊同樣擋下
+    let v = spend(&agent, w.writ.id(), &pw.link(4), 1, w.attacker.id()).await.unwrap();
+    assert_eq!(v["Rejected"]["reason"], "SCOPE");
+    assert_eq!(ft_balance(&w, &token, w.attacker.id()).await, 0);
+    bench("A20", "prompt-injected payment from a stablecoin cell", "Rejected:SCOPE", "Rejected:SCOPE", 0);
+
+    // 法人撤銷 → 剩餘代幣退回法人
+    let before = ft_balance(&w, &token, w.funder.id()).await;
+    w.funder.call(w.writ.id(), "revoke").args_json(json!({"cell": cell.to_string(), "evidence": "manual"})).max_gas().transact().await?.into_result()?;
+    let after = ft_balance(&w, &token, w.funder.id()).await;
+    assert_eq!(after - before, 5 * T - 3 * T / 10, "remaining 4.7 tUSDC refunded");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a21_token_cell_refuses_foreign_deposits_and_asset_swap() -> anyhow::Result<()> {
+    let w = world().await?;
+    let token = w.worker.dev_deploy(&std::fs::read(FT_WASM)?).await?;
+    token.call("new").args_json(json!({"owner_id": w.attacker.id(), "total_supply": (1_000 * T).to_string()})).transact().await?.into_result()?;
+    w.attacker.call(token.id(), "storage_deposit").args_json(json!({"account_id": w.writ.id()})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
+    // 開一個 NEAR 格；攻擊者把垃圾代幣灌進去，想讓格的金庫帳變亂
+    let (cell, _agent, _pw) = open_cell(&w, default_opts(&w)).await?;
+    w.attacker.call(token.id(), "ft_transfer_call")
+        .args_json(json!({"receiver_id": w.writ.id(), "amount": (7 * T).to_string(), "msg": cell.to_string()}))
+        .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+    assert_eq!(ft_balance(&w, &token, w.attacker.id()).await, 1_000 * T, "foreign token refunded in full");
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(c["vault"], "900000000000000000000000");
+    bench("A21", "foreign token pushed into a cell via ft_transfer_call", "refunded, vault unchanged", "refunded", 0);
+
+    // 驗證者簽的是 NEAR 格，法人想改成代幣格
+    let agent_sk = SecretKey::from_random(KeyType::ED25519);
+    let pw = Payword::new(5);
+    let vu = now_ns(&w).await? + 3_600_000_000_000;
+    let mut args = json!({"amc_said": "EY", "issuer_pk": hex::encode([1u8;32]), "agent_pk": agent_sk.public_key(), "w0": pw.w0(), "n": 5,
+        "unit": UNIT.to_string(), "scope": [w.merchant.id()], "valid_until": vu.to_string(), "daily_links": 5,
+        "lei_commit": hex::encode([2u8;32]), "verifier": w.verifier.id()});
+    args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id()).as_bytes()).to_bytes()));
+    args["asset"] = json!(token.id());
+    let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_near(1)).max_gas().transact().await?;
+    let s = format!("{:?}", r.into_result());
+    assert!(s.contains("BAD_ATTESTATION"));
+    bench("A22", "funder swaps the settlement asset after the verifier signed", "BAD_ATTESTATION", "BAD_ATTESTATION", 0);
     Ok(())
 }
