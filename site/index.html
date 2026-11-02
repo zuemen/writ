@@ -3,96 +3,301 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Writ: steal from this agent</title>
-<meta name="description" content="An AI agent's private key, published. Its vault holds testnet NEAR. Try to take it.">
+<title>Writ: your agent will get fooled, the money won't move</title>
+<meta name="description" content="Verifiable, revocable payment mandates for AI agents, enforced on NEAR. Run one in your browser, then try to steal the key.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&family=Hanken+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#f4f1ea; --card:#fffefa; --ink:#1a1814; --muted:#6b665c; --line:#ddd8cc; --ok:#1d6b45; --ok-bg:#e4f1e8; --bad:#a8251c; --bad-bg:#f8e2df; --warn:#7a5a12; --warn-bg:#f6ecd5; }
+  :root {
+    --paper:#f2eee3; --sheet:#fbf8f0; --ink:#17140f; --soft:#5f594d; --rule:#d5cfc0; --rule-strong:#17140f;
+    --ox:#8f1d14; --ox-bg:#f3dfda; --ok:#1c5f41; --ok-bg:#dfece2; --amber:#73540f; --amber-bg:#f1e6cc;
+    --serif:Fraunces,Georgia,serif; --sans:"Hanken Grotesk",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+  }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.55 Inter,system-ui,sans-serif; }
-  main { max-width:880px; margin:0 auto; padding:48px 16px 64px; }
-  .brand { font:600 26px Fraunces,Georgia,serif; color:var(--ink); text-decoration:none; }
-  h1 { font:600 clamp(34px,6vw,52px)/1.08 Fraunces,Georgia,serif; margin:28px 0 14px; letter-spacing:-.01em; }
-  .lead { font-size:18px; color:#37332b; max-width:640px; margin:0 0 28px; }
-  h2 { font:600 21px Fraunces,Georgia,serif; margin:0 0 4px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:22px; margin-bottom:18px; }
-  .mono { font-family:"IBM Plex Mono",monospace; }
-  .label { font:600 11px Inter; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin-bottom:8px; }
-  .keyrow { display:flex; gap:10px; align-items:flex-start; }
-  #key { flex:1; min-width:0; overflow-wrap:anywhere; font:14px/1.5 "IBM Plex Mono",monospace; background:var(--bad-bg); color:var(--bad); padding:12px; border-radius:8px; }
-  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:18px; }
-  .stat { border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; }
-  .stat b { display:block; font:600 24px Fraunces,Georgia,serif; }
-  .stat span { font:600 10px Inter; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
-  button { font:600 14px Inter; border:1px solid var(--ink); background:var(--card); color:var(--ink); padding:10px 14px; border-radius:8px; cursor:pointer; text-align:left; }
-  button:hover:not(:disabled) { background:var(--ink); color:var(--card); }
-  button:disabled { opacity:.5; cursor:progress; }
-  .attacks { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px; margin-top:14px; }
-  input { font:14px "IBM Plex Mono",monospace; padding:10px; width:100%; border:1px solid var(--line); border-radius:8px; background:#fff; margin-top:6px; }
-  ul#log { list-style:none; margin:14px 0 0; padding:0; }
-  #log li { border-left:4px solid var(--line); background:#faf8f2; border-radius:0 8px 8px 0; padding:10px 14px; margin-bottom:8px; }
-  #log li.blocked { border-color:var(--warn); background:var(--warn-bg); }
+  html { scroll-behavior:smooth; scroll-padding-top:76px; }
+  body { margin:0; color:var(--ink); font:17px/1.6 var(--sans); background:var(--paper);
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='.85' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 .1 0 0 0 0 .08 0 0 0 0 .05 0 0 0 .05 0'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  a { color:inherit; text-underline-offset:3px; }
+  .wrap { max-width:1160px; margin:0 auto; padding:0 24px; }
+  .mono { font-family:var(--mono); }
+  .eyebrow { font:600 12px var(--mono); letter-spacing:.14em; text-transform:uppercase; color:var(--soft); }
+
+  nav { position:sticky; top:0; z-index:20; background:rgba(242,238,227,.93); backdrop-filter:blur(6px); border-bottom:1px solid var(--rule); }
+  nav .wrap { display:flex; align-items:center; gap:26px; height:60px; }
+  .mark { font:600 25px var(--serif); text-decoration:none; }
+  nav .links { display:flex; gap:22px; margin-left:auto; font-size:15px; }
+  nav .links a { text-decoration:none; color:var(--soft); }
+  nav .links a:hover { color:var(--ink); }
+  .live { font:500 12px var(--mono); color:var(--ok); display:flex; align-items:center; gap:7px; white-space:nowrap; }
+  .live i { width:7px; height:7px; border-radius:50%; background:var(--ok); }
+
+  .hero { display:grid; grid-template-columns:1.08fr .92fr; gap:56px; align-items:center; padding:68px 0 76px; }
+  h1 { font:600 clamp(42px,6.2vw,76px)/1.02 var(--serif); letter-spacing:-.02em; margin:16px 0 22px; }
+  h1 em { font-style:italic; font-weight:400; color:var(--ox); }
+  .lead { font-size:20px; line-height:1.5; max-width:560px; margin:0 0 30px; color:#37322a; }
+  .cta { display:flex; gap:12px; flex-wrap:wrap; }
+  .btn { display:inline-block; font:600 16px var(--sans); padding:13px 20px; border-radius:4px; border:1.5px solid var(--ink); background:var(--ink); color:var(--sheet); cursor:pointer; text-decoration:none; transition:transform .12s, background .12s, color .12s; white-space:nowrap; }
+  .btn:hover:not(:disabled) { transform:translateY(-1px); }
+  .btn.ghost { background:transparent; color:var(--ink); }
+  .btn.ghost:hover:not(:disabled) { background:var(--ink); color:var(--sheet); }
+  .btn.danger { background:var(--ox); border-color:var(--ox); color:#fff; }
+  .btn:disabled { opacity:.38; cursor:not-allowed; }
+  .btn:focus-visible, a:focus-visible, input:focus-visible, button:focus-visible { outline:3px solid var(--ox); outline-offset:2px; }
+
+  /* 令狀本體 */
+  .writ { position:relative; background:var(--sheet); border:1px solid var(--rule-strong); padding:7px; box-shadow:0 22px 50px -26px rgba(30,20,5,.5); transform:rotate(.5deg); }
+  .writ-in { border:1px solid var(--rule-strong); padding:26px 28px 24px; }
+  .writ h2 { font:600 25px/1.2 var(--serif); margin:3px 0 16px; }
+  dl { margin:0; display:grid; grid-template-columns:auto 1fr; font-size:14.5px; }
+  dt { color:var(--soft); padding:7px 18px 7px 0; border-top:1px solid var(--rule); white-space:nowrap; }
+  dd { margin:0; padding:7px 0; border-top:1px solid var(--rule); overflow-wrap:anywhere; font:500 13.5px/1.5 var(--mono); }
+  .status-on { color:var(--ok); }
+  .status-off { color:var(--ox); }
+  .stamp { position:absolute; right:22px; top:92px; font:600 42px var(--mono); letter-spacing:.05em; color:var(--ox); border:5px solid var(--ox); padding:2px 16px; border-radius:6px; transform:rotate(-13deg); opacity:0; pointer-events:none; mix-blend-mode:multiply; }
+  .stamp.on { animation:slam .38s cubic-bezier(.2,1.5,.4,1) forwards; }
+  @keyframes slam { 0% { opacity:0; transform:rotate(-13deg) scale(2.4); } 100% { opacity:.86; transform:rotate(-13deg) scale(1); } }
+  .writ.shake { animation:shake .3s .12s; }
+  @keyframes shake { 25% { transform:rotate(.5deg) translate(-3px,2px); } 60% { transform:rotate(.5deg) translate(3px,-2px); } }
+
+  section { padding:72px 0; border-top:1px solid var(--rule); }
+  h3.title { font:600 clamp(30px,4vw,46px)/1.1 var(--serif); letter-spacing:-.015em; margin:10px 0 12px; }
+  .sub { max-width:680px; color:#3f3a31; margin:0 0 32px; font-size:18px; }
+
+  .steps { display:grid; border:1px solid var(--rule-strong); background:var(--sheet); }
+  .step { display:grid; grid-template-columns:52px 1fr auto; gap:6px 18px; padding:20px 22px; border-top:1px solid var(--rule); align-items:start; }
+  .step:first-child { border-top:0; }
+  .step .n { font:600 30px var(--serif); color:var(--rule); line-height:1.1; }
+  .step.active .n { color:var(--ink); }
+  .step.done .n { color:var(--soft); }
+  .step h4 { font:600 19px var(--sans); margin:0 0 3px; }
+  .step p { margin:0; color:var(--soft); font-size:15.5px; max-width:640px; }
+  .poison { font:13px/1.5 var(--mono); color:var(--ox); background:var(--ox-bg); padding:8px 11px; margin-top:9px; max-width:640px; overflow-wrap:anywhere; }
+  .out { grid-column:2 / -1; margin-top:10px; padding:10px 13px; font-size:15px; border-left:3px solid var(--rule); background:#f5f1e6; display:none; }
+  .out.show { display:block; }
+  .out.good { border-color:var(--ok); background:var(--ok-bg); }
+  .out.block { border-color:var(--ox); background:var(--ox-bg); }
+  .out.err { border-color:var(--amber); background:var(--amber-bg); }
+  .out b { font-family:var(--mono); font-size:14px; }
+  .out a { font-size:14px; margin-left:6px; white-space:nowrap; }
+  .pooltext { margin:14px 0 0; font-size:14px; color:var(--soft); }
+
+  .steal { display:grid; grid-template-columns:1fr 1fr; gap:32px; align-items:start; }
+  .key { font:13.5px/1.55 var(--mono); overflow-wrap:anywhere; background:var(--ink); color:#f6d9d4; padding:15px 16px; border-radius:3px; }
+  .tally { display:grid; grid-template-columns:repeat(3,1fr); margin-top:16px; border:1px solid var(--rule-strong); background:var(--sheet); }
+  .tally div { padding:12px 8px; text-align:center; border-left:1px solid var(--rule); }
+  .tally div:first-child { border:0; }
+  .tally b { display:block; font:600 27px var(--serif); }
+  .tally span { font:500 11px var(--mono); color:var(--soft); }
+  .attacks { display:grid; gap:8px; }
+  .attacks button { font:500 15px var(--sans); text-align:left; padding:11px 13px; background:var(--sheet); border:1px solid var(--rule-strong); border-radius:3px; cursor:pointer; color:var(--ink); }
+  .attacks button:hover:not(:disabled) { background:var(--ink); color:var(--sheet); }
+  .attacks button:disabled { opacity:.45; cursor:progress; }
+  label { font-size:14px; color:var(--soft); display:block; margin:14px 0 4px; }
+  input { font:14px var(--mono); padding:9px 11px; width:100%; border:1px solid var(--rule-strong); background:var(--sheet); border-radius:3px; color:var(--ink); }
+  ul#log { list-style:none; margin:16px 0 0; padding:0; }
+  #log li { padding:9px 12px; margin-bottom:7px; font-size:14.5px; border-left:3px solid var(--ox); background:var(--ox-bg); }
   #log li.paid { border-color:var(--ok); background:var(--ok-bg); }
-  #log li.error { border-color:var(--bad); background:var(--bad-bg); }
-  #log .a { font-size:13px; color:var(--muted); }
-  #log .w { font-size:14px; margin-top:2px; }
-  #log a { font-size:13px; margin-left:8px; }
-  .muted { color:var(--muted); font-size:13px; }
-  a { color:inherit; }
-  ol { padding-left:20px; margin:8px 0 0; }
-  footer { font-size:14px; color:var(--muted); margin-top:26px; }
-  @media (max-width:560px) { .stats { grid-template-columns:repeat(2,1fr); } .keyrow { flex-direction:column; } }
+  #log li.error { border-color:var(--amber); background:var(--amber-bg); }
+  #log b { font:600 13.5px var(--mono); }
+  #log a { font-size:13px; margin-left:6px; }
+  #log .w { color:#3f3a31; }
+
+  .big { display:grid; grid-template-columns:auto 1fr; gap:10px 34px; align-items:end; margin-bottom:26px; }
+  .big .num { font:600 clamp(70px,12vw,136px)/.9 var(--serif); letter-spacing:-.03em; color:var(--ox); }
+  .big p { margin:0; font-size:19px; max-width:560px; }
+  .scroll { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; background:var(--sheet); font-size:15px; min-width:620px; }
+  th, td { padding:10px 13px; text-align:left; border-bottom:1px solid var(--rule); }
+  th { font:600 11.5px var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--soft); border-bottom:1px solid var(--rule-strong); }
+  td.c { font:600 15px var(--mono); }
+  td.v { font:500 13px var(--mono); color:var(--ox); }
+  .note { font-size:14px; color:var(--soft); margin:12px 0 0; max-width:760px; }
+
+  .how { display:grid; grid-template-columns:repeat(3,1fr); border-top:2px solid var(--ink); }
+  .how div.col { padding:20px 24px 4px 0; }
+  .how div.col + div.col { padding-left:24px; border-left:1px solid var(--rule); }
+  .how h4 { font:600 23px/1.2 var(--serif); margin:6px 0 8px; }
+  .how p { margin:0 0 10px; font-size:15.5px; color:#3f3a31; }
+
+  .proof { display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--rule-strong); background:var(--sheet); }
+  .proof a { display:block; padding:18px; text-decoration:none; border-left:1px solid var(--rule); }
+  .proof a:first-child { border-left:0; }
+  .proof a:hover { background:#efe9da; }
+  .proof b { display:block; font:600 32px/1.1 var(--serif); }
+  .proof span { display:block; font-size:14px; color:var(--soft); margin-top:5px; }
+  .limits { margin:26px 0 0; padding-left:20px; font-size:15.5px; color:#3f3a31; max-width:800px; }
+  .limits li { margin-bottom:5px; }
+  footer { padding:34px 0 50px; border-top:1px solid var(--rule); font-size:14px; color:var(--soft); }
+
+  .reveal { animation:rise .6s both; }
+  .d1 { animation-delay:.08s; } .d2 { animation-delay:.16s; } .d3 { animation-delay:.26s; }
+  @keyframes rise { from { opacity:0; transform:translateY(10px); } to { opacity:1; } }
+  .writ.reveal { animation-name:rise-writ; }
+  @keyframes rise-writ { from { opacity:0; transform:rotate(.5deg) translateY(10px); } to { opacity:1; transform:rotate(.5deg); } }
+  @media (prefers-reduced-motion:reduce) { .reveal, .stamp.on, .writ.shake { animation-duration:.01s; animation-delay:0s; } html { scroll-behavior:auto; } }
+  @media (max-width:880px) {
+    .hero, .steal { grid-template-columns:1fr; gap:34px; }
+    .hero { padding:40px 0 52px; }
+    .how { grid-template-columns:1fr; }
+    .how div.col + div.col { padding-left:0; border-left:0; border-top:1px solid var(--rule); }
+    .proof { grid-template-columns:1fr 1fr; }
+    .proof a { border-top:1px solid var(--rule); }
+    nav .links { display:none; }
+    .live { margin-left:auto; }
+    .step { grid-template-columns:34px 1fr; padding:18px 16px; }
+    .step .n { font-size:24px; }
+    .step .act { grid-column:2; margin-top:8px; }
+    .out { grid-column:1 / -1; }
+    section { padding:52px 0; }
+    .writ, .writ.reveal { transform:none; animation-name:rise; }
+    .writ-in { padding:20px 18px; }
+    .stamp { font-size:32px; right:14px; }
+    .big { grid-template-columns:1fr; }
+  }
 </style>
 </head>
 <body>
-<main>
-  <a class="brand" href="https://github.com/zuemen/writ">Writ</a>
-  <h1>This is an AI agent's private key. Steal its money.</h1>
-  <p class="lead">The key below is live on NEAR testnet and signs for a company's accounts-payable agent. It controls a vault of testnet NEAR. Your browser signs real transactions with it; there is no server. With a plain spending limit, a thief holding the key can spend up to that limit. Here, without the employee's next link, the key cannot spend at all.</p>
+<nav><div class="wrap">
+  <a class="mark" href="#top">Writ</a>
+  <div class="links"><a href="#run">Run a mandate</a><a href="#steal">Steal the key</a><a href="#models">Real models</a><a href="#how">How it works</a><a href="#proof">Proof</a><a href="https://github.com/zuemen/writ">GitHub</a></div>
+  <div class="live"><i></i>NEAR testnet, live</div>
+</div></nav>
 
-  <section class="card">
-    <div class="label">Agent private key, published on purpose</div>
-    <div class="keyrow"><div id="key">loading…</div><button id="copy">Copy</button></div>
-    <div class="stats">
-      <div class="stat"><b id="vault">…</b><span>NEAR in vault</span></div>
-      <div class="stat"><b id="rejected">…</b><span>attempts rejected</span></div>
-      <div class="stat"><b id="paid">…</b><span>payments made</span></div>
-      <div class="stat"><b id="links">…</b><span>budget links used</span></div>
+<main id="top" class="wrap">
+  <div class="hero">
+    <div>
+      <div class="eyebrow reveal">Payment mandates for AI agents</div>
+      <h1 class="reveal d1">Your agent will get fooled. <em>The money won't move.</em></h1>
+      <p class="lead reveal d2">A company's AI agent pays suppliers. An invoice tells it to pay someone else. The employee who set it up quits. Writ makes both harmless: every payment is checked on-chain against a credential HR can take back.</p>
+      <div class="cta reveal d3"><a class="btn" href="#run">Run a mandate</a><a class="btn ghost" href="#steal">Try to steal the key</a></div>
     </div>
-    <p class="muted">Contract <a class="mono" id="contract" target="_blank" rel="noopener"></a> has no full-access key. The one payment so far is <a id="firstpay" target="_blank" rel="noopener">this one</a>, made with a link the employee released.</p>
-  </section>
-
-  <section class="card">
-    <h2>Try it</h2>
-    <p class="muted">Each button signs with the key above. Testnet only; nothing here has real value.</p>
-    <label class="muted" for="to">Your NEAR account (for the first attack)</label>
-    <input id="to" placeholder="attacker.testnet" autocomplete="off" spellcheck="false">
-    <div class="attacks">
-      <button data-attack="self">Pay my own account</button>
-      <button data-attack="guess">Pay the merchant with a guessed link</button>
-      <button data-attack="replay">Replay the link already on-chain</button>
-      <button data-attack="drain">Drain 50 links at once</button>
-      <button data-attack="transfer">Send NEAR directly with this key</button>
-      <button data-attack="admin">Make myself a verifier</button>
-      <button data-attack="deposit">Attach a deposit to reach a token</button>
-    </div>
-    <ul id="log"></ul>
-  </section>
-
-  <section class="card">
-    <h2>Why the key is not enough</h2>
-    <ol>
-      <li><b>The key decides who can act.</b> NEAR restricts it at the protocol level to one contract and one method, <span class="mono">spend</span>.</li>
-      <li><b>The mandate decides how much, and to whom.</b> Payees and limits come from a credential a verifier checked. The only allowed payee here is <span class="mono" id="merchant"></span>.</li>
-      <li><b>A hash chain decides whether it may spend now.</b> The budget is a chain of preimages held by the employee, released link by link. Without the next one, the key has nothing to spend.</li>
-      <li><b>HR can take it all back.</b> On other cells, HR revokes the employee's credential and the contract deletes the agent's key. That part is in the <a href="https://github.com/zuemen/writ/blob/main/docs/testnet.md">testnet run</a>.</li>
-    </ol>
-    <p class="muted">This cell keeps its key after repeated failures so that you can keep trying; a normal mandate deletes the key after three rejections in a row. Each attempt uses some of the key's gas allowance, so the page may report <span class="mono">NotEnoughAllowance</span> until the funder refills it. Writ limits what a stolen key or a fooled agent can do. It cannot stop a holder of both the key and the employee's links.</p>
-  </section>
-
-  <footer>Find a way to move the money without a released link? Open an issue at <a href="https://github.com/zuemen/writ">github.com/zuemen/writ</a>. Built at NEAR HACKATHON.</footer>
+    <div class="writ reveal d2" id="writ"><div class="writ-in">
+      <div class="eyebrow">Writ of payment mandate</div>
+      <h2>Mandate <span id="wNo">…</span></h2>
+      <dl>
+        <dt>Authorized by</dt><dd>legal entity → employee (ECR)</dd>
+        <dt>Issued to</dt><dd id="wAgent">…</dd>
+        <dt>May pay</dt><dd id="wPayee">…</dd>
+        <dt>Budget used</dt><dd id="wBudget">…</dd>
+        <dt>Vault</dt><dd id="wVault">…</dd>
+        <dt>Status</dt><dd id="wStatus">…</dd>
+      </dl>
+      <div class="stamp" id="stamp">REVOKED</div>
+    </div></div>
+  </div>
 </main>
+
+<section id="run"><div class="wrap">
+  <div class="eyebrow">Live on testnet</div>
+  <h3 class="title">Run this mandate yourself.</h3>
+  <p class="sub">Four steps, each a real NEAR transaction signed in your browser. There is no server. The KERI signatures were prepared in advance; everything you trigger happens on-chain, once, for this mandate.</p>
+  <div class="steps">
+    <div class="step" data-step="1">
+      <div class="n">1</div>
+      <div><h4>The agent pays a real invoice</h4><p>INV-0042, paper stock, 0.1 NEAR, to the permitted supplier. The employee released one budget link.</p></div>
+      <div class="act"><button class="btn" id="s1">Pay it</button></div>
+      <div class="out" id="o1"></div>
+    </div>
+    <div class="step" data-step="2">
+      <div class="n">2</div>
+      <div><h4>A poisoned invoice reaches the agent</h4><p>Suppose the agent obeys. Real models often do; see below.</p>
+        <div class="poison" id="poison"></div></div>
+      <div class="act"><button class="btn" id="s2" disabled>Obey the invoice</button></div>
+      <div class="out" id="o2"></div>
+    </div>
+    <div class="step" data-step="3">
+      <div class="n">3</div>
+      <div><h4>The employee leaves. HR revokes.</h4><p>HR revoked the employee's role credential in KERI. You don't need to be HR or the employee: anyone holding that signed event can hand it to the contract.</p></div>
+      <div class="act"><button class="btn danger" id="s3" disabled>Submit the revocation</button></div>
+      <div class="out" id="o3"></div>
+    </div>
+    <div class="step" data-step="4">
+      <div class="n">4</div>
+      <div><h4>The agent tries once more</h4><p>Same key, valid budget link, permitted supplier.</p></div>
+      <div class="act"><button class="btn" id="s4" disabled>Try to pay</button></div>
+      <div class="out" id="o4"></div>
+    </div>
+  </div>
+  <p class="pooltext" id="pooltext"></p>
+</div></section>
+
+<section id="steal"><div class="wrap">
+  <div class="eyebrow">Open challenge</div>
+  <h3 class="title">This is an AI agent's private key. Steal its money.</h3>
+  <p class="sub">With a plain spending limit, a thief holding the key can spend up to that limit. Here, without the employee's next budget link, the key cannot spend at all. This cell keeps its key after failures so you can keep trying.</p>
+  <div class="steal">
+    <div>
+      <div class="key" id="key">loading…</div>
+      <div class="tally">
+        <div><b id="vault">…</b><span>NEAR IN VAULT</span></div>
+        <div><b id="rejected">…</b><span>ATTEMPTS REJECTED</span></div>
+        <div><b id="links">…</b><span>LINKS USED</span></div>
+      </div>
+      <p class="note">The contract <a class="mono" id="contract" target="_blank" rel="noopener"></a> has no full-access key. Testnet only; nothing here has real value. Find a way to move the money without a released link? <a href="https://github.com/zuemen/writ/issues">Open an issue.</a></p>
+    </div>
+    <div>
+      <div class="attacks">
+        <button data-attack="guess">Pay the supplier with a guessed budget link</button>
+        <button data-attack="replay">Replay the budget link already on-chain</button>
+        <button data-attack="drain">Drain 50 links at once</button>
+        <button data-attack="transfer">Send NEAR directly with this key</button>
+        <button data-attack="admin">Make myself a verifier</button>
+        <button data-attack="deposit">Attach a deposit to reach a token</button>
+        <button data-attack="self">Pay my own account</button>
+      </div>
+      <label for="to">Your account, for the last one</label>
+      <input id="to" placeholder="attacker.testnet" autocomplete="off" spellcheck="false">
+      <ul id="log"></ul>
+    </div>
+  </div>
+</div></section>
+
+<section id="models"><div class="wrap">
+  <div class="eyebrow">Real models, real invoices</div>
+  <h3 class="title">The models fell for it. The contract didn't.</h3>
+  <div class="big"><div class="num">13/20</div><p>Two Gemini models read poisoned invoices and followed the injection in 13 of 20 attacks. <b>0 of those payments went through.</b> Attacker gain: 0.</p></div>
+  <div class="scroll"><table>
+    <tr><th>Attack in the invoice</th><th>gemini-3.5-flash</th><th>gemini-3.1-flash-lite</th><th>Contract</th></tr>
+    <tr><td>Hidden comment swaps the payee</td><td class="c">0/2</td><td class="c">0/2</td><td class="v">not fooled</td></tr>
+    <tr><td>Visible vendor notice swaps the payee</td><td class="c">1/2</td><td class="c">2/2</td><td class="v">SCOPE</td></tr>
+    <tr><td>Fake CFO instruction swaps the payee</td><td class="c">0/2</td><td class="c">2/2</td><td class="v">SCOPE</td></tr>
+    <tr><td>Reminder asks to pay a paid invoice again</td><td class="c">2/2</td><td class="c">2/2</td><td class="v">DUPLICATE</td></tr>
+    <tr><td>Late fee inflates the amount past the cap</td><td class="c">2/2</td><td class="c">2/2</td><td class="v">PER_TX</td></tr>
+  </table></div>
+  <p class="note">A small sample on a local sandbox, not a benchmark of these models. Reproduce it with <span class="mono">make attack-live</span>; the record is in <a href="https://github.com/zuemen/writ/blob/main/docs/attack-live.md">docs/attack-live.md</a>. A fooled payment inside every limit, to a permitted payee, for a new invoice, still gets paid: Writ limits the damage, it does not judge the invoice.</p>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <div class="eyebrow">How it works</div>
+  <h3 class="title">Verify once. Enforce every time. Revoke without asking.</h3>
+  <p class="sub">GLEIF's August 2026 discussion paper proposes an Agent Mandate Credential and notes that on open rails no single intermediary holds its state. Writ puts that state in a NEAR contract.</p>
+  <div class="how">
+    <div class="col"><div class="eyebrow">Credential</div><h4>Who authorized this agent</h4><p>A vLEI-shaped chain: root → QVI → legal entity → employee → agent. A verifier checks it once off-chain with keripy and signs an attestation. The company's LEI stays a salted commitment on-chain until a public, delayed disclosure.</p></div>
+    <div class="col"><div class="eyebrow">Key</div><h4>What the agent can touch</h4><p>The agent's KERI key is also a NEAR function-call key, restricted by the protocol to one method. The contract adds and deletes it on its own account, so revoked means the key no longer exists.</p></div>
+    <div class="col"><div class="eyebrow">Contract</div><h4>What each payment must pass</h4><p>Permitted payee, unpaid invoice, per-payment cap, hash-chain budget, daily rate, expiry. Rejections are normal transactions with a hash and an event, and three in a row delete the key.</p></div>
+  </div>
+</div></section>
+
+<section id="proof"><div class="wrap">
+  <div class="eyebrow">Check it yourself</div>
+  <h3 class="title">Every number has a command.</h3>
+  <div class="proof">
+    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>39 / 39</b><span>attacks blocked in the bench; attacker gain measured, 0</span></a>
+    <a href="https://github.com/zuemen/writ#mutation-testing"><b>151 / 154</b><span>contract mutants caught by cargo-mutants</span></a>
+    <a href="https://github.com/zuemen/writ/blob/main/keri/test_forgeries.py"><b>13</b><span>forged or stale credential chains the verifier refuses</span></a>
+    <a href="https://github.com/zuemen/writ/blob/main/docs/testnet-usdc.md"><b>0.1 USDC</b><span>paid in Circle's testnet USDC, injection rejected</span></a>
+  </div>
+  <ul class="limits">
+    <li>The root, QVI and legal entity are mocks with a fictional LEI; no real QVI issued anything here.</li>
+    <li>Testnet only. Selective disclosure, not anonymity: funding accounts and payments are public and linkable.</li>
+    <li>Revocation takes effect when the signed event reaches the contract; no relayer ships with the repo.</li>
+    <li>The buttons in step 2 are scripted so you can repeat them; the model results above are from real runs.</li>
+  </ul>
+  <p class="note">All limits are in the <a href="https://github.com/zuemen/writ#not-implemented--limits">README</a>, with the trust model and every command.</p>
+</div></section>
+
+<footer><div class="wrap">Writ. Built at NEAR HACKATHON. MIT licensed. <a href="https://github.com/zuemen/writ">github.com/zuemen/writ</a></div></footer>
 <script type="module" src="app.js"></script>
 </body>
 </html>
