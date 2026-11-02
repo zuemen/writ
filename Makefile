@@ -7,6 +7,7 @@ PY ?= python3
 
 setup: keri/.venv/bin/python app/node_modules
 	$(MAKE) -C contract build
+	cd contract && cargo test --no-run --quiet
 keri/.venv/bin/python:
 	$(PY) -m venv keri/.venv && keri/.venv/bin/pip install -q -r keri/requirements.txt
 app/node_modules:
@@ -40,6 +41,11 @@ attack-live: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && WRIT_N=500 WRIT_DAILY=500 WRIT_MAX_STRIKES=0 npx tsx src/setup.ts && npx tsx src/agent-live.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
+# 選用：真 LLM 讀採購單並賒帳。結果寫進 docs/attack-credit-live.md
+attack-credit-live: setup
+	scripts/sandbox.sh stop; scripts/sandbox.sh start
+	cd app && WRIT_N=500 WRIT_DAILY=500 WRIT_MAX_STRIKES=0 npx tsx src/setup.ts && npx tsx src/agent-credit.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
+
 # 用 Circle 的 testnet USDC 跑一筆真實付款（法人要先從 faucet 領幣）。結果寫進 docs/testnet-usdc.md
 testnet-usdc: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/usdc-setup.ts
@@ -60,7 +66,7 @@ verify:
 
 clean:
 	scripts/sandbox.sh stop; rm -rf .demo .sandbox keri/.keystore keri/bundle keri/registrar
-.PHONY: setup test keri-check demo ui clean testnet testnet-usdc attack-live bounty pool verify credit-demo credit-testnet
+.PHONY: setup test keri-check demo ui clean testnet testnet-usdc attack-live bounty pool verify credit-demo credit-testnet attack-credit-live
 
 # 需要本人同意：會在 NEAR testnet 建帳號、部署、簽交易（測試幣，免費）。結果寫進 docs/testnet.md
 testnet: setup

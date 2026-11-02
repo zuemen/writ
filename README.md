@@ -1,6 +1,6 @@
 # Writ: Who Pays Is Named Before the Agent Buys
 
-[![reproduce](https://github.com/zuemen/writ/actions/workflows/ci.yml/badge.svg)](https://github.com/zuemen/writ/actions/workflows/ci.yml) — every push runs `make setup`, `make test`, `make demo`, `make credit-demo` and `make keri-check` on a fresh GitHub runner, and a Docker job does the same from a clean image.
+[![reproduce](https://github.com/zuemen/writ/actions/workflows/ci.yml/badge.svg)](https://github.com/zuemen/writ/actions/workflows/ci.yml) — every push runs `make setup`, `make test`, `make demo`, `make credit-demo` and `make keri-check` on a fresh GitHub runner, and a Docker job runs the bench and both stories from a clean image.
 
 Trust isn't proving an AI won't fail. It's knowing who pays when it does.
 
@@ -21,7 +21,9 @@ Each payment is also checked on-chain: counterparty in scope, invoice not alread
 
 **It settles in real stablecoins too:** one payment in Circle's testnet USDC, with an injected payment rejected, in [`docs/testnet-usdc.md`](docs/testnet-usdc.md).
 
-**Real models get fooled; the money still doesn't move.** Two Gemini models read poisoned invoices and followed the injection in 13 of 20 attacks; 0 of those payments went through, attacker gain 0 ([`docs/attack-live.md`](docs/attack-live.md), a small sample, not a benchmark).
+**Real models get fooled; the money still doesn't move.** Two Gemini models read poisoned invoices and followed the injection in 13 of 20 attacks (5 of 12 payee swaps, 8 of 8 duplicates and inflated amounts); 0 of those payments went through, attacker gain 0 ([`docs/attack-live.md`](docs/attack-live.md), a small sample, not a benchmark).
+
+**Models buying on credit, too.** In a separate small run, two Gemini models read poisoned purchase orders and did what the order said in 8 of 12 attacks: 90-day terms, inflated totals, repeated orders. The contract let none of those stand ([`docs/attack-credit-live.md`](docs/attack-credit-live.md), local sandbox; 4 calls were lost to model outages and are not counted).
 
 **Run it in your browser:** <https://writ-near.112306007.workers.dev> has no server. Sell to an AI agent as the supplier and see who pays when the company doesn't; fire an employee and watch every key go; or try to steal from an agent whose private key is published on purpose. `make pool` and `make bounty` prepare those cells; their test keys live only on that page, never in this repo.
 
@@ -31,9 +33,9 @@ Every claim below has a command. The trust assumptions are in [Trust model](#tru
 
 ## Try it (do X → see Y)
 
-Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with libsodium (`apt install libsodium23` / `brew install libsodium`), `make`, `gcc`, `pkg-config`, `libssl-dev`. Network is needed once (crates, npm, pip, sandbox binary). Nothing touches testnet or mainnet. No API keys.
+Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with libsodium (`apt install libsodium23` / `brew install libsodium`), `make`, `gcc`, `pkg-config`, `libssl-dev`. Linux or macOS; on Windows use WSL or Docker. Ubuntu 24.04 ships Python 3.12.3, which is too old: install a newer one (`uv python install 3.12`) and pass it with `make setup PY=/path/to/python3.12`, or use the `Dockerfile`. Network is needed once (crates, npm, pip, sandbox binary). Nothing here sends a transaction to testnet or mainnet; `make verify` only reads one public testnet account. No API keys, except for the optional live-model run.
 
-**Shortest path: `make verify`.** It runs everything below and prints a scorecard ending in `VERIFY_RESULT|PASS` (about 5 minutes after the first build).
+**Shortest path: `make verify`.** It runs the build, the bench, both stories and the credential checks, and prints a scorecard ending in `VERIFY_RESULT|PASS` (about 10 minutes on a laptop after the first build; CI takes about 12 from scratch). It does not run `make ui`, `make attack-live` or anything that writes to testnet.
 
 | # | Do | See |
 |---|---|---|
@@ -47,7 +49,11 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with
 
 `make test` runs the bench in a fresh sandbox per test. `make demo` / `make ui` run `scripts/sandbox.sh` (a local `neard` sandbox on :3030; data in `.sandbox/`).
 
+`make ui` shows the prepaid mandate path only; the credit path is in `make credit-demo` and on the public site.
+
 ### What `make demo` prints (abridged, real output)
+
+This is the prepaid mandate story; `make credit-demo` prints the credit story.
 
 ```
 1  verifier ✓ AMC parsed, SAID + schema valid, anchored in TEL
@@ -122,7 +128,7 @@ The mandate underneath:
            (receiver = contract, five agent methods)                       → pay, or Rejected{reason} + event
                                                                            3 strikes → delete key
  revocation: HR revokes the employee's ECR (or the employee revokes the AMC) in KERI (TEL rev, anchored by KEL ixn)
-             anyone submits the ixn → contract ed25519_verify + seal check → delete key, refund vault
+             anyone submits the ixn → contract ed25519_verify + seal check → delete key, refund vault (kept while credit is open)
 ```
 
 ```mermaid
@@ -157,7 +163,7 @@ sequenceDiagram
 
 **Agents hire agents, and a hire can only narrow.** `hire(preimage, j, child)` spends `j` of the hiring agent's budget links, so a sub-agent can only ever use budget the employee already released. Its payees must be a subset of the parent's; its expiry, rate and per-payment cap cannot exceed the parent's (bench `A40`–`A42`). Trees are limited to 3 levels and 16 agents (`A44`, `A45`). Hiring fees come from the root cell, so the company pays for its own tree. An agent can `dismiss` its own sub-agents, and no one else's (`A43`).
 
-**Firing one person shuts down the tree.** Closing a cell closes everything under it: one batch deletes every key, and all vaults go back to the funding account. A full tree of 16 agents takes 17 Tgas (`B17`). In `B18`, one signed KERI event from HR removes the agent, its sub-agent and its sub-sub-agent.
+**Firing one person shuts down the tree.** Closing a cell closes everything under it: one batch deletes every key, and all vaults go back to the funding account, unless the company has open credit or owes its guarantor: then the money stays in the tree until that is settled (`A51`, `B24`). A full tree of 16 agents takes 17 Tgas (`B17`). In `B18`, one signed KERI event from HR removes the agent, its sub-agent and its sub-sub-agent.
 
 **Invoices are bound to payments.** `spend` carries `invoice_hash`, a sha256 of the invoice. Paying the same invoice twice fails with `DUPLICATE`, and a per-payment cap from the AMC stops an inflated amount with `PER_TX`, even when the payee is in scope (bench `A31`, `A32`). A payment that bounces frees its invoice again. `invoice_paid(cell, hash)` is the reconciliation record. `Paid` appears only after the money arrived; otherwise the result is `TRANSFER_FAILED` and the vault is refunded (bench `B02`).
 
@@ -191,11 +197,11 @@ Three protocol features do the work that other chains would need a smart-contrac
 
 | Who | What you must trust them for | What they cannot do |
 |---|---|---|
-| Guarantor (a verifier with stake) | checked the company's credential chain before signing; pays first when the vault runs short, so it has its own money at risk | take the company's name public before its recourse period ends and the debt stays unpaid (`A49`, `A50`); withdraw stake that covers open orders. **If it also holds the company's legal-entity key it could name that company falsely**: the contract checks the signature; the link between that key and the LEI is checked off-chain |
+| Guarantor (a verifier with stake) | checked the company's credential chain before signing; pays first when the vault runs short, so it has its own money at risk | disclose on-chain before the recourse period ends and while a debt stays unpaid (`A49`, `A50`), although it holds the LEI and salt, so the contract cannot stop it telling someone off-chain; withdraw stake that covers open orders. **If it also holds the company's legal-entity key it could name that company falsely**: the contract checks the signature; the link between that key and the LEI is checked off-chain |
 | Arbiter | ruling a dispute; if it does nothing, the seller wins with a delivery proof and the company otherwise | be the guarantor, the company or the seller (`ARBITER_NOT_INDEPENDENT`) |
 | Seller | filing a truthful delivery proof; a false one is a matter for the dispute | claim before due plus the inspection window (`A46`, `A68`) |
 | Verifier | checked the credential chain before signing; holds the LEI salt; may update signer keys | move money, disclose before the waiting period, disclose an LEI other than the committed one (`A18`, `A19`) |
-| Owner | the verifier and supervisor whitelists | move money or touch a cell's limits |
+| Owner | the verifier and supervisor whitelists; can revoke a cell, which returns its money to the funder | take money or touch a cell's limits |
 | Funder | its own funds; can revoke or reinstate its own cell | raise the limits the verifier signed (`A13`) |
 | Supervisor | requesting disclosure, in public | disclose by itself (`A17`) |
 | Agent | nothing | leave scope or budget, pay twice, reach other methods (`A01`–`A11`, `A31`, `A32`) |
@@ -230,6 +236,7 @@ Nothing here has been priced with a real customer: the 2% in the demo is a place
 
 Nobody uses this in production yet. This is the intended path:
 
+0. **Find a guarantor.** The company agrees limit, bond, fee and terms with a guarantor, which checks its credential chain and stakes. Without one, the mandate still works for prepaid payments, with no credit.
 1. **Identity.** The company already holds a vLEI, or starts without one: the contract only checks that a whitelisted verifier signed the attestation, so a verifier may vouch for a mandate by other means, with less assurance.
 2. **Issue.** An employee with a role credential issues a mandate to the agent. `keri/issuer.py` shows the sequence; a real deployment would use the company's KERI tooling and a real QVI.
 3. **Fund.** The company opens a cell with `register` and funds it in NEAR or a NEP-141 stablecoin.
@@ -246,13 +253,13 @@ const r = await agent.pay({ invoice: "INV-0042", to: "supplier.near", links: 1, 
 // r.outcome: "paid" | "rejected" (r.reason: SCOPE, DUPLICATE, PER_TX, ...) | "revoked" | "out_of_gas" | "error"
 ```
 
-`flow.ts` uses it for every payment in `make demo`, so the demo exercises it.
+`flow.ts` uses it for every payment in `make demo`, so the demo exercises it. The SDK covers prepaid payments. For credit, `app/src/credit-demo.ts` shows every call: `risk_card`, `open_credit`, `accept_credit`, `mark_delivered`, `settle`, `claim_default`, `enforce_recourse`, `credit_unseal`.
 
 ## Contract surface (`contract/src/lib.rs`)
 
 | Method | Caller | Effect |
 |---|---|---|
-| `new(owner, unseal_delay_secs?)` | the contract account itself, in the deploy batch | sets the owner and the disclosure waiting period (default 120 s) |
+| `new(owner, unseal_delay_secs?, windows?)` | the contract account itself, in the deploy batch | sets the owner and the disclosure waiting period (default 120 s) |
 | `set_verifier(account, pk_hex?)` | owner | whitelist or remove a verifier's Ed25519 key |
 | `register(args)` payable | legal entity (funder) | verifies attestation (`ed25519_verify`), opens cell, adds agent function-call key (agent methods only), vault = deposit − fee (token cells: excess NEAR returned); each AMC can register once; attestation must be under 1 hour old |
 | `spend(preimage, j, to, invoice_hash)` | agent key only (`signer == contract`) | checks → `Paid` after the transfer succeeds, or `Rejected{reason}`; `maxStrikes` consecutive rejections delete the key |
@@ -261,8 +268,8 @@ const r = await agent.pay({ invoice: "INV-0042", to: "supplier.near", links: 1, 
 | `reinstate(cell)` payable | funder | attach ≥ 0.25 NEAR; re-adds the key of a tripped cell |
 | `update_signers(cell, issuer_aid, issuer_pk, ecr_commit)` | the cell's verifier | after a key rotation |
 | `claim_refund(cell)` | funder | retry a failed refund |
-| `revoke(cell, evidence)` | funder / verifier / owner | delete key, refund vault |
-| `revoke_by_kel(cell, ixn, signature, ecr?)` | anyone | verify KERI revocation anchor (AMC by the employee, or ECR by the legal entity when `ecr` opens the commitment), delete key, refund vault |
+| `revoke(cell, evidence)` | funder / verifier / owner | delete key, refund vault (kept in the tree while credit is open or a debt remains) |
+| `revoke_by_kel(cell, ixn, signature, ecr?)` | anyone | verify KERI revocation anchor (AMC by the employee, or ECR by the legal entity when `ecr` opens the commitment), delete key, refund vault (same rule) |
 | `refresh_key(cell)` payable | funder / verifier | attach ≥ 0.25 NEAR; re-add the same key with a fresh gas allowance |
 | `top_up(cell)` payable | funder | add NEAR to a NEAR cell |
 | `ft_on_transfer(sender_id, amount, msg)` | NEP-141 token (via `ft_transfer_call`) | fund a token cell; `msg` = cell id; anything else is refunded |
@@ -281,7 +288,7 @@ const r = await agent.pay({ invoice: "INV-0042", to: "supplier.near", links: 1, 
 | `release_unseal(cell, lei, salt)` | the cell's verifier | after the waiting period; must match the registration commitment |
 | `present(cell)`, `get_cell`, `cell_of`, `get_unseal`, `invoice_paid`, `stats`, `solvency`, `verifiers`, `attestation_preview` | view | |
 
-Rejection reasons: `EXPIRED`, `SCOPE`, `INVOICE`, `DUPLICATE`, `PER_TX`, `LIMIT`, `CHAIN`, `RATE`, `FUNDS`, `TRANSFER_FAILED`, `HIRE_SCOPE`, `HIRE_TERMS`, `HIRE_DEPTH`, `HIRE_TREE`, `HIRE_KEY`, `HIRE_TOKEN`, `FROZEN`, `NO_CREDIT`, `TENOR`, `CREDIT_LIMIT`. Events: NEP-297, `standard: "writ"`.
+Rejection reasons: `EXPIRED`, `SCOPE`, `INVOICE`, `DUPLICATE`, `PER_TX`, `LIMIT`, `CHAIN`, `RATE`, `FUNDS`, `TRANSFER_FAILED`, `HIRE_SCOPE`, `HIRE_TERMS`, `HIRE_DEPTH`, `HIRE_TREE`, `HIRE_KEY`, `HIRE_TOKEN`, `SUSPENDED`, `FROZEN`, `NO_CREDIT`, `TENOR`, `CREDIT_LIMIT`. Events: NEP-297, `standard: "writ"`.
 
 ### What the agent's key cannot do (protocol layer, no transaction is created)
 
@@ -310,10 +317,18 @@ Code reviews after the first bench, done with AI review agents, found problems t
 - a holder could show an old bundle to hide a revocation (F7, F8);
 - a token refund that failed left the tokens stuck (`B12`), and `Paid` was reported before the transfer outcome was known (`B02`);
 - the same invoice could be paid twice, and an injected amount to an in-scope payee had no cap (`A31`, `A32`);
-- verifiers and supervisors removed from the whitelist kept their powers (`A38`).
+- verifiers and supervisors removed from the whitelist kept their powers (`A38`);
+- a seller could mark delivery and claim default in one batch, leaving no time to dispute (`A68`);
+- a company could move money to a sub-agent or a friendly seller before its guarantor was repaid (`A70`, `A72`, `A76`);
+- money kept in a closed tree stayed stuck after the company repaid, a bug introduced by an earlier fix (`A71`);
+- the guarantor or the company could be the seller and manufacture its own default (`A77`).
+
+`contract/src/fuzz.rs` also drives random call sequences with random failed callbacks and checks the books after every step. CI runs it on each push.
 
 ## Not implemented / limits
 
+- **The public demo holds the secrets a guarantor would keep.** The site's `config.json` has the fictional company's LEI and salt, so the guarantor's step can run in your browser. A real guarantor keeps them private.
+- **On the site the agents do not think.** The buttons run prepared transactions. The model runs are separate, on a local sandbox, with Gemini: small samples, not NEAR AI, no TEE. `docs/attack-live.md` was generated with the plain prompt only; the current `make attack-live` also runs a hardened prompt, so a rerun prints a longer table.
 - **No real guarantor exists yet.** The demo guarantor is a test account and the 2% fee is a placeholder. Who would underwrite agents, and at what price, is untested. The fee is not refunded if an accepted order is later cancelled.
 - **Disclosure takes the guarantor.** Only it holds the salt, so a guarantor that stays quiet reveals nothing, and a debt repaid from money left in the tree reveals nothing. Closing covers one mandate's tree, not every mandate the company has.
 - **The terms are a placeholder.** `terms_hash` commits to demo text no lawyer has reviewed. Whether an on-chain default and disclosure have legal effect depends on a real agreement and a jurisdiction.
@@ -341,11 +356,11 @@ Code reviews after the first bench, done with AI review agents, found problems t
 ## Repository layout
 
 ```
-contract/        Rust contract (near-sdk 5.30) + tests/bench.rs (attack bench) + ft-mock/ (test NEP-141 token)
+contract/        Rust contract (near-sdk 5.30), src/fuzz.rs (invariants), tests/bench.rs (attack bench), ft-mock/ (test NEP-141 token)
 keri/            issuer.py (mock vLEI ecosystem), verify.py (verifier), test_forgeries.py, common.py (schemas)
 app/             TypeScript: setup, demo, local UI server, live LLM agent, agent SDK (src/), page (web/)
 site/            Public site: static page, signs testnet transactions in the browser
-scripts/         sandbox.sh, bench_table.py
+scripts/         verify_all.sh, sandbox.sh, bench_table.py, build_site.sh
 docs/            bench.md (generated), D1_spike_report.md
 tools/           fakerlimit.c (only for containers with an fd hard limit < 65535)
 ```

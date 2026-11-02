@@ -346,7 +346,7 @@
       <tr><td>Inflate the amount past the cap</td><td>2 of 2</td><td>2 of 2</td><td><code>PER_TX</code></td></tr>
     </tbody>
   </table></div>
-  <p class="note">A small sample with a plain system prompt: 2 Gemini models, 5 attacks, 2 runs each, on a local sandbox. It shows the contract holds whichever way the model goes, not how often models fail. These are not NEAR AI models, and no TEE was involved. <a href="https://github.com/zuemen/writ/blob/main/docs/attack-live.md">Full results and transactions</a>; <span class="mono">make attack-live</span> reruns it with your own key.</p>
+  <p class="note">A small sample with a plain system prompt: 2 Gemini models, 5 attacks, 2 runs each, on a local sandbox. It shows the contract holds whichever way the model goes, not how often models fail. These are not NEAR AI models, and no TEE was involved. <a href="https://github.com/zuemen/writ/blob/main/docs/attack-live.md">Full results and transactions</a>; <span class="mono">make attack-live</span> reruns it with your own key. A separate run put models on poisoned purchase orders: they did what the order said in 8 of 12 attacks, and the contract let none stand (<a href="https://github.com/zuemen/writ/blob/main/docs/attack-credit-live.md">results</a>; 4 calls lost to outages).</p>
 </div></section>
 <section id="how"><div class="wrap">
   <div class="eyebrow">How it works</div>
@@ -364,7 +364,7 @@
   <div class="eyebrow">Check it yourself</div>
   <h3 class="title">Every number has a command.</h3>
   <div class="proof">
-    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>78 / 78</b><span>attacks blocked in the bench; attacker gain measured, 0</span></a>
+    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>78 / 78</b><span>attacks blocked in the bench; 0 gained by the attacker account</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>16 keys, 1 tx</b><span>a full tree closed in one transaction, 17 Tgas</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/keri/test_forgeries.py"><b>14</b><span>forged or stale credential chains the verifier refuses</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/docs/testnet-usdc.md"><b>0.1 USDC</b><span>paid in Circle's testnet USDC, injection rejected</span></a>
@@ -373,6 +373,7 @@
     <li>The vLEI schemas are GLEIF's; the issuers are mocks with a fictional LEI, and no real QVI issued anything. The Agent Mandate Credential schema is a proposal, since GLEIF has not published one.</li>
     <li>Testnet only, no real users, and no real guarantor has underwritten anything. The fee here is a demo number: 2%. Who would guarantee an agent, and at what price, is an open commercial question. Credit is in NEAR only; the terms text is a placeholder no lawyer has reviewed.</li>
     <li>A guarantor that also holds the company's legal-entity key could name that company falsely: the contract checks the signature, and the link between that key and the LEI is checked off-chain.</li>
+    <li>This page's config holds the fictional company's LEI and salt so the guarantor's step runs in your browser; a real guarantor keeps them private.</li>
     <li>The company's LEI stays a commitment until it is disclosed, but funding accounts and payments are public and linkable.</li>
     <li>Revocation takes effect when the signed event reaches the contract; no relayer ships with the repo. A fooled payment inside every limit, to a permitted payee, for a new invoice, still gets paid.</li>
     <li>Disclosure takes the guarantor's action, since it holds the salt, and it does not happen if money left in the tree repays the debt. Closing affects the agents under one mandate, not every mandate the company has.</li>

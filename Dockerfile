@@ -12,4 +12,4 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/b
 WORKDIR /writ
 COPY . .
 RUN make setup
-CMD ["sh", "-c", "make test && make demo"]
+CMD ["sh", "-c", "make test && make demo && make credit-demo"]

@@ -210,7 +210,7 @@ btn("s2").addEventListener("click", async () => {
   await renderCard();
   if (honest) {
     $("h3").textContent = "The company pays on time";
-    $("p3").textContent = "Its agent settles from its vault. You never learn who the company is.";
+    $("p3").textContent = "Its agent settles from its vault. The company's legal name stays sealed from you.";
     btn("s3").textContent = "Agent pays";
     btn("s3").disabled = false;
   } else {
@@ -228,7 +228,7 @@ btn("s3").addEventListener("click", async () => {
     const o = await act(btn("s3"), call(acct(sale!.root), "settle", { credit: creditId }, "50"));
     if (o.kind === "error") return out("o3", o, "err");
     const v = await act(btn("s3"), call(scoped(cfg.seller), "withdraw", {}, "30"));
-    out("o3", { ...o, verdict: "Paid. Identity still sealed.", why: `You were paid and withdrew${v.kind === "paid" ? "" : " (nothing more to withdraw)"}. The company stays anonymous to you, and this payment goes on its record. Reload the page to try the other path.` }, "good");
+    out("o3", { ...o, verdict: "Paid. Identity still sealed.", why: `You were paid and withdrew${v.kind === "paid" ? "" : " (nothing more to withdraw)"}. Its legal name stays sealed from you, and this payment goes on its record. Reload the page to try the other path.` }, "good");
     setSteps("step", 9);
     await renderCard();
     return;
