@@ -69,15 +69,16 @@ if (!pool.seller) {
 for (let i = 0; i < COUNT; i++) {
   for (const d of ["keri/.keystore", "keri/bundle", "keri/registrar"]) rmSync(join(ROOT, d), { recursive: true, force: true });
   // 員工 → 應付帳款 agent（兩個收款對象）
-  const init = py("issuer.py", "init", "--scope", `${a.merchant.id},${a.supplier.id}`, "--rail", a.acme.id, "--n", "10", "--unit", "2e22", "--daily", "10", "--days", "30",
-    "--credit-limit", "1e23", "--bond-bps", "2500", "--min-tenor", "5", "--max-tenor", "86400", "--arbiter", a.owner.id, "--contract", a.writ.id);
+  const init = py("issuer.py", "init", "--scope", `${a.merchant.id},${a.supplier.id}`, "--rail", a.acme.id, "--n", "20", "--unit", "2e22", "--daily", "20", "--days", "30",
+    "--credit-limit", "3e23", "--bond-bps", "2500", "--min-tenor", "5", "--max-tenor", "86400", "--arbiter", a.owner.id, "--contract", a.writ.id);
   py("verify.py", "pin", "--root", JSON.parse(init.slice(init.indexOf("{"), init.lastIndexOf("}") + 1)).root);
-  const reg = await register(process.env.WRIT_POOL_DEPOSIT ?? "0.78");
+  const reg = await register(process.env.WRIT_POOL_DEPOSIT ?? "0.80");
   if (!reg.ok) throw new Error("register failed: " + reg.error);
   const rootSk = keriPrivate().agent_near_secret_key;
   const c: any = await view(a.writ.id, "get_cell", { cell: reg.cell });
   const { lei, salt } = JSON.parse(py("verify.py", "reveal", "--amc", c.amc_said));
-  const orderLinks = { small: releaseLink(7), large: releaseLink(10) };
+  // 大單 10 節（0.2 NEAR）：根格只剩約 0.056，子格收回 0.12，還清前保證人仍有約 0.024 要追，揭露走得到
+  const orderLinks = { small: releaseLink(7), large: releaseLink(16) };
 
   // 應付帳款 agent → 採購 agent（只能付一個對象、6 節）
   const midKey = KeyPair.fromRandom("ed25519");

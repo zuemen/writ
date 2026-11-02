@@ -1,4 +1,4 @@
-**75 attacks, 75 blocked as expected, attacker gain 0 yoctoNEAR.**
+**77 attacks, 77 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -77,6 +77,8 @@
 | A73 | seller files a delivery proof after the arbiter's time ran out | DISPUTE_CLOSED | DISPUTE_CLOSED | 0 |
 | A74 | seller files a proof at the last second and collects before the arbiter can look | ARBITER_STILL_HAS_TIME | ARBITER_STILL_HAS_TIME | 0 |
 | A75 | sub-agent keeps settling after its parent tripped | SUSPENDED | SUSPENDED | 0 |
+| A76 | while the company owes, a sub-agent settles a friendly order from its own vault | REPAY_GUARANTOR_FIRST | REPAY_GUARANTOR_FIRST | 0 |
+| A77 | guarantor or company sells to the agent to manufacture a default | SELLER_NOT_INDEPENDENT | SELLER_NOT_INDEPENDENT | 0 |
 | B00 | legit payment 3+2 links to in-scope merchant | Paid | Paid | 0 |
 | B01 | AMC revoked in KERI TEL, ixn submitted by anyone | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
 | B02 | payment to a non-existent account | Rejected:TRANSFER_FAILED, vault refunded | Rejected:TRANSFER_FAILED, vault refunded | 0 |
@@ -106,3 +108,4 @@
 | B26 | funder reinstates a tripped parent: its sub-agents work again | Paid | Paid | 0 |
 | B27 | undelivered orders release the guarantor; repaying after enforcement stops the reveal | released, stays sealed | released, stays sealed | 0 |
 | B28 | released bond repays the guarantor; a silent seller cannot hold exposure open | collected, unblocked | collected, unblocked | 0 |
+| B29 | the legal entity rotates its key after signing the terms | reveal still works | reveal still works | 0 |

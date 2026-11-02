@@ -604,7 +604,7 @@ impl Contract {
         };
 
         if let Some(r) = reason {
-            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "to": to, "j": j, "strikes": c.strikes + 1}));
+            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "to": to, "j": j, "strikes": c.strikes + u32::from(r != "FROZEN")}));
             return PromiseOrValue::Value(self.reject(id, c, pk, r));
         }
 
@@ -704,7 +704,7 @@ impl Contract {
             None
         };
         if let Some(r) = reason {
-            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "j": j, "strikes": c.strikes + 1}));
+            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "j": j, "strikes": c.strikes + u32::from(r != "FROZEN")}));
             return self.reject(id, c, pk, r);
         }
 
@@ -1372,7 +1372,7 @@ impl Contract {
             None
         };
         if let Some(r) = reason {
-            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "to": to, "j": j, "strikes": c.strikes + 1}));
+            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "to": to, "j": j, "strikes": c.strikes + u32::from(r != "FROZEN")}));
             return self.reject(id, c, pk, r);
         }
         let mut t = terms.unwrap();
@@ -1603,7 +1603,7 @@ impl Contract {
     }
 
     /// 違約：到期加寬限期仍未付，條件全是鏈上狀態，不問買賣糾紛。
-    /// 賠付順序：該格金庫 → 根格可用金庫 → 這筆鎖定的保證金 → 保證人質押。只凍結新賒帳，不斷電。
+    /// 賠付順序：該格金庫 → 根格可用金庫 → 這筆鎖定的保證金 → 保證人質押。之後公司的 agent 全部凍結（不能賒帳、付款、雇用、結清），但鑰匙還在。
     pub fn claim_default(&mut self, credit: U64) {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
         let who = env::predecessor_account_id();

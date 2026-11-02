@@ -184,7 +184,7 @@ async function choose(isHonest: boolean, b: HTMLButtonElement) {
   b.disabled = true;
   b.textContent = "Signing…";
   try {
-    const o = await order(isHonest ? 1 : 4, isHonest ? sale!.root.orders.small : sale!.root.orders.large);
+    const o = await order(isHonest ? 1 : 10, isHonest ? sale!.root.orders.small : sale!.root.orders.large);
     b.textContent = label;
     out("o1", { kind: "paid", verdict: `Order ${creditId}: ${nearStr(o.amount)} on credit`, why: "Budget links spent, no money moved. The agent could only order from a supplier in its mandate.", hash: o.hash }, "good");
     setSteps("step", 2);
@@ -238,7 +238,7 @@ btn("s3").addEventListener("click", async () => {
     return out("o3", o, "err");
   }
   const c: any = await provider.callFunction({ contractId: cfg.contract, method: "credit_of", args: { credit: creditId } });
-  out("o3", { ...o, verdict: "You are paid in full", why: `The contract paid you from the company's money first, then ${nearStr(c.debt)} from the guarantor's stake. Nobody had to agree. The company is frozen from new credit, but still sealed: it can still repay the guarantor.` }, "block");
+  out("o3", { ...o, verdict: "You are paid in full", why: `The contract paid you from the company's money first, then ${nearStr(c.debt)} from the guarantor's stake. Nobody had to agree. The company's agents are frozen: no new credit, no payments, no hires. It is still sealed: it can still repay the guarantor.` }, "block");
   setSteps("step", 4);
   btn("s4").textContent = "Waiting";
   await renderCard();
@@ -255,6 +255,11 @@ btn("s4").addEventListener("click", async () => {
     return out("o4", o, "err");
   }
   const u = await act(btn("s4"), call(g, "credit_unseal", { credit: creditId, lei: sale!.lei, salt: sale!.salt, ecr: sale!.ecr }, "50"));
+  if (u.kind === "error" || u.kind === "blocked") {
+    btn("s4").disabled = false;
+    await renderCard();
+    return out("o4", { ...u, verdict: "Keys deleted, but the name was not revealed", why: "The contract refused the disclosure. See the transaction." }, "err");
+  }
   out("o4", { ...u, verdict: "Every agent lost its key. The company is named.", why: `One transaction deleted all three agents' keys. The next one revealed ${cfg.company}: the contract checked the LEI against the commitment made at the start, and the legal entity's signature, so a guarantor cannot name an innocent company. The seller now knows who to pursue; that is a lead, not a court order.` }, "block");
   setSteps("step", 9);
   $("org").scrollIntoView({ behavior: "smooth", block: "center" });

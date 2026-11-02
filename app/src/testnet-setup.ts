@@ -41,7 +41,7 @@ for (const n of names) {
 }
 
 const wasm = readFileSync(join(ROOT, "contract/res/writ.wasm"));
-const hash = await deployLocked(accts.writ.id, accts.writ.sk, wasm, accts.owner.id, Number(process.env.WRIT_UNSEAL_SECS ?? 60));
+const hash = await deployLocked(accts.writ.id, accts.writ.sk, wasm, accts.owner.id, Number(process.env.WRIT_UNSEAL_SECS ?? 60), Number(process.env.WRIT_RECOURSE_SECS ?? 20));
 console.log(`  deployed ${accts.writ.id}, full-access key deleted, tx ${hash}`);
 const owner = as(accts.owner.id, accts.owner.sk);
 for (const [m, args] of [

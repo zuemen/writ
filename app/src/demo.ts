@@ -27,7 +27,7 @@ for (const c of reg.checks) say("1", `verifier ${c}`);
 if (!reg.ok) throw new Error("register failed: " + reg.error);
 const cell = reg.cell;
 say("2", `${a.acme.id} registers cell #${cell} with 5 NEAR; attestation verified on-chain (ed25519_verify)`, { hash: reg.hash });
-say("2", `agent key ${reg.agent_pk} is now a function-call key on ${a.writ.id} (method: spend)`);
+say("2", `agent key ${reg.agent_pk} is now a function-call key on ${a.writ.id} (agent methods only)`);
 
 const p: any = await present(cell);
 say("3", `merchant sees: not_revoked=${p.not_revoked} not_expired=${p.not_expired} used=${p.within_limit.used}/${p.within_limit.of} scope=${p.scope} lei=${p.lei}`);
