@@ -1,6 +1,6 @@
 # Architecture
 
-Writ is a conditional payment guarantee for AI agents' orders, in one NEAR contract (`contract/src/lib.rs`). It is not a standby letter of credit: payment depends on delivery. See [THREAT_MODEL.md](THREAT_MODEL.md#legal) for why that word is wrong.
+Writ names who pays when an AI agent is fooled, in one NEAR contract (`contract/src/lib.rs`). A guarantor locks money against a mandate, and an arbiter decides claims. The same stake also backs orders on credit, as a conditional payment guarantee. That is not a standby letter of credit, because payment depends on delivery. See [THREAT_MODEL.md](THREAT_MODEL.md#legal).
 
 Test numbers such as `A79` and `B21` refer to `contract/tests/bench.rs` and its generated table, [bench.md](bench.md).
 
@@ -8,6 +8,9 @@ Test numbers such as `A79` and `B21` refer to `contract/tests/bench.rs` and its 
 
 | Term | Meaning |
 |---|---|
+| Cover | A guarantor's locked promise to repay fooled payments under one mandate, up to `limit`. |
+| Arbiter | The account named in the mandate that rules on claims. On cover it can't be the company, the guarantor or the owner. |
+| Your share | The company's share of each loss, `deductible_bps` in the API. |
 | Seller | Sells to the agent. An account in the mandate's scope. |
 | Company | The legal entity behind the agent. It funds the mandate from one account, which the API calls the **funder**. |
 | Guarantor | A **verifier** with stake. A verifier is an account on the contract's whitelist that checks the credential chain off-chain and signs the attestation. Without stake or credit terms a verifier only vouches for a prepaid mandate. |
@@ -17,6 +20,19 @@ Test numbers such as `A79` and `B21` refer to `contract/tests/bench.rs` and its 
 | Sealed | The company's name is hidden from the public ledger, not from your seller. A seller who needs the name for an invoice gets it off-chain. |
 | Named | The company's name is public on-chain, checked against its commitment and the legal entity's signature. |
 | Stop-ship | While the company owes its guarantor, the agents under that mandate cannot order, pay or hire, and no seller can accept their open orders. |
+
+## The cover path
+
+The contract can't tell whether an agent was fooled. It records each payment, and a named arbiter decides.
+
+1. **Named.** The guarantor signs `CoverArgs` with the attestation. `register` opens the cover as `Offered`, and the company pays 0.004 NEAR a link for the records.
+2. **Locked.** `activate_cover` moves the fee from the root's vault to the guarantor and adds `limit` to its exposure. Orders and cover share one exposure, so one dollar can't back both (`A109`, `A110`).
+3. **Recorded.** Each payment whose money arrived while cover was `Active` keeps `{cell, to, amount, paid_at, context_hash, claim}`. Other payments can't be claimed (`A118`).
+4. **Stopped.** `file_claim` opens one claim for the tree (`A101`). `spend`, `hire` and `open_credit` return `UNDER_CLAIM` with no strike (`A107`), everywhere in the tree (`A97`). `settle` still works, because stopping it would manufacture a default.
+5. **Ruled.** `resolve_claim` inside `dispute_timeout` (`A104`). Uphold pays `loss × (1 − share)`, at most what is locked, from the stake to the company's `claimable`, or to the root's vault if there is open credit or a debt (`A100`). The tree then returns `NOT_CLEARED` until `clear_agent`. Deny moves nothing. No ruling: `claim_timeout`, nothing moves, and it can be filed again.
+6. **Ended.** `release_cover` after `valid_until` + `claim_window`; revoking doesn't bring that forward (`A99`). `void_cover` ends it early after a denied claim, if the arbiter finds fraud.
+
+Limits of this path are in [THREAT_MODEL.md](THREAT_MODEL.md#cover).
 
 ## The credit path
 
@@ -233,7 +249,7 @@ GLEIF, *Agentic AI in Payments: Establishing Interoperable Trust and Control* (d
 ## Repository layout
 
 ```
-worker/          the one server function: asks a model about an invoice; no keys, caches answers for a day
+worker/          the one server function: a model reads an invoice against a ledger and decides; no keys, caches only answers that pay
 contract/        Rust contract (near-sdk 5.30), src/fuzz.rs (invariants), src/exact.rs (exact values), tests/bench.rs (attack bench), ft-mock/ (test NEP-141 token)
 keri/            issuer.py (mock vLEI ecosystem), verify.py (verifier), test_forgeries.py, common.py (schemas)
 app/             TypeScript: setup, demo, local UI server, live LLM agent, agent SDK (src/), page (web/)

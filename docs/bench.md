@@ -1,4 +1,4 @@
-**96 attacks, 96 blocked as expected, attacker gain 0 yoctoNEAR.**
+**119 attacks, 119 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -12,7 +12,27 @@
 | A08 | agent key calls admin method set_verifier | MethodNameMismatch | MethodNameMismatch | 0 |
 | A09 | agent attaches deposit (e.g. ft_transfer 1 yocto) | DepositWithFunctionCall | DepositWithFunctionCall | 0 |
 | A10 | agent sends a plain Transfer from the contract account | RequiresFullAccess | RequiresFullAccess | 0 |
+| A100 | company in default gets a claim upheld and withdraws the money past its debt | payout stays in the vault | payout stays in the vault | 0 |
+| A101 | company files twenty claims before the arbiter rules on the first | CLAIM_OPEN | CLAIM_OPEN | 0 |
+| A102 | company files again on a payment the arbiter denied | ALREADY_CLAIMED | ALREADY_CLAIMED | 0 |
+| A103 | company claims on an old payment after the window | WINDOW_CLOSED | WINDOW_CLOSED | 0 |
+| A104 | arbiter rules after its time ran out | RULING_TOO_LATE | RULING_TOO_LATE | 0 |
+| A105 | arbiter ends a company's cover with no denied claim to point at | NOT_DENIED | NOT_DENIED | 0 |
+| A106 | company keeps claiming after the arbiter found fraud | COVER_NOT_ACTIVE | COVER_NOT_ACTIVE | 0 |
+| A107 | retrying during its company's claim gets the agent's key deleted | no strike, key stays | no strike, key stays | 0 |
+| A108 | seller takes on the guarantor's money while the agent is under a claim | UNDER_CLAIM | UNDER_CLAIM | 0 |
+| A109 | cover locks the whole stake, then a seller's order or a withdrawal draws on it again | GUARANTOR_CAPACITY, STAKE_EXPOSED | GUARANTOR_CAPACITY, STAKE_EXPOSED | 0 |
 | A11 | agent key used against another contract | ReceiverMismatch | ReceiverMismatch | 0 |
+| A110 | an order holds the stake, then the guarantor locks the same stake for cover | GUARANTOR_CAPACITY | GUARANTOR_CAPACITY | 0 |
+| A111 | cancelled order and payment on one invoice make two claims; a paid invoice is reopened as an order | one record, DUPLICATE | one record, DUPLICATE | 0 |
+| A112 | guarantor activates against a vault that can only pay from a seller's bond | PREMIUM_SHORT | PREMIUM_SHORT | 0 |
+| A113 | company changes any cover term after the guarantor signed | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
+| A114 | cover signed over a scope with the arbiter or the company, a thin limit, or under 10% share | COVER_SCOPE, COVER_LIMIT_THIN, COVER_DEDUCTIBLE | COVER_SCOPE, COVER_LIMIT_THIN, COVER_DEDUCTIBLE | 0 |
+| A115 | the arbiter is the owner, the guarantor or the company | COVER_ARBITER | COVER_ARBITER | 0 |
+| A116 | a mandate with cover opens without paying for its payment records | DEPOSIT_BELOW_FEE | DEPOSIT_BELOW_FEE | 0 |
+| A117 | a stranger files, rules on, voids, clears or releases a cover; the company rules on its own claim | ONLY_FUNDER, ONLY_ARBITER, ONLY_GUARANTOR | ONLY_FUNDER, ONLY_ARBITER, ONLY_GUARANTOR | 0 |
+| A118 | company claims on a payment made before the cover was active | NO_PAYMENT | NO_PAYMENT | 0 |
+| A119 | agent pays with a context hash nobody can check later | Rejected:INVOICE | Rejected:INVOICE | 0 |
 | A12 | self-signed attestation (not a whitelisted verifier) | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
 | A13 | funder widens the scope after the verifier signed | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
 | A14 | attacker replays someone else's attestation | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
@@ -98,6 +118,9 @@
 | A94 | an order in a scaled or fake asset, with a fee that empties it or a friendly arbiter, passes the seller's rule | ASSET_NOT_APPROVED, FEE_TOO_HIGH, ARBITER_NOT_APPROVED | ASSET_NOT_APPROVED, FEE_TOO_HIGH, ARBITER_NOT_APPROVED | 0 |
 | A95 | throwaway accounts make the contract store a row for one yocto each | no row, excess returned | no row, excess returned | 0 |
 | A96 | a seller's order is accepted on a guarantor the owner has delisted | GUARANTOR_DELISTED | GUARANTOR_DELISTED | 0 |
+| A97 | agent hires a sub-agent, it pays, it is dismissed, the company claims: the stop lands on a closed cell | whole tree UNDER_CLAIM | whole tree UNDER_CLAIM | 0 |
+| A98 | the arbiter awards more than the payment | BAD_LOSS | BAD_LOSS | 0 |
+| A99 | guarantor collects the fee, revokes and takes its lock back | TOO_EARLY | TOO_EARLY | 0 |
 | B00 | legit payment 3+2 links to in-scope merchant | Paid | Paid | 0 |
 | B01 | AMC revoked in KERI TEL, ixn submitted by anyone | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
 | B02 | payment to a non-existent account | Rejected:TRANSFER_FAILED, vault refunded | Rejected:TRANSFER_FAILED, vault refunded | 0 |
@@ -111,7 +134,7 @@
 | B10 | deploy + init + delete full-access key in one batch; owner still manages the whitelist | 0 keys on the contract account | 0 keys on the contract account | 0 |
 | B11 | token cell: NEAR above the fee is returned | excess returned | excess returned | 0 |
 | B12 | refund fails because the funder left the token; funder re-registers and claims | tokens recovered | tokens recovered | 0 |
-| B13 | gas burnt by a payment, whole transaction | under 30 Tgas | 1 link 6 Tgas, 100 links 7 Tgas | 0 |
+| B13 | gas burnt by a payment, whole transaction | under 30 Tgas | 1 link 6 Tgas, 100 links 8 Tgas | 0 |
 | B14 | boundaries: j == cap pays, unpaid invoice not on record, maxStrikes 0 never trips, solvency counts storage | all exact | all exact | 0 |
 | B15 | NEAR refund fails because the funder account is gone; it is kept, and claimable after the account returns | refund recovered | refund recovered | 0 |
 | B16 | agent hires a sub-agent with a narrower mandate; it pays inside it | Paid, parent's links spent | Paid, parent's links spent | 0 |
@@ -138,3 +161,10 @@
 | B37 | token tree: hire, sub-agent pays, disputes in escrow, retention and release per asset | books match the token balance | books match the token balance | 0 |
 | B38 | an order's storage, including the per-seller record, is paid by the order | cost <= fee | 776 bytes | 0 |
 | B39 | NEP-330 source metadata; check_order gives amount, asset, tenor, bond, exposure, fee, payer | all present | all present | 0 |
+| B40 | partial loss: paid 3, lost 1, 20% share: the guarantor pays 0.8, no more | 0.8 of a link | 0.8 of a link | 0 |
+| B41 | after valid_until + claim_window the lock comes back; the fee stays | Released | Released | 0 |
+| B42 | mandate with cover only, in NEAR: fee, lock, payment, claim, repayment, clear, pay again | works end to end | works end to end | 0 |
+| B43 | mandate with cover only, in a token, no NEAR reserve: same story, paid in the token | works end to end | works end to end | 0 |
+| B44 | storage per payment: longest account, context hash, upheld claim | fee covers it | 355 bytes per record, 4000000000000000000000 yocto per link | 0 |
+| B45 | arbiter runs out of time: no payment, no denial, the company can file again, the count is public | filed again | filed again | 0 |
+| B46 | a claim on the tree does not stop settling an order | settled | settled | 0 |

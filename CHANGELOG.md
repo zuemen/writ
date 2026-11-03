@@ -2,7 +2,15 @@
 
 The contract cannot be upgraded, so each change to it is a new deployment on a new testnet account. Newest first. Taken from the git log.
 
-## writ-net30.testnet (current)
+## {CONTRACT} (cover; not yet deployed from this branch)
+
+Attestation format `writ:attest:v7`. The direction changes: from net-30 for sellers to who pays when an agent is fooled. Net-30 stays as a second use of the same stake.
+
+- **Fooled-agent cover** (`3e346d2`). `CoverArgs` signed with the mandate; `activate_cover`, `file_claim`, `resolve_claim`, `void_cover`, `claim_timeout`, `clear_agent`, `release_cover`; views `cover_of`, `payment_of`. `spend` takes an optional `context_hash`, kept with the payment under active cover. New rejections `UNDER_CLAIM` and `NOT_CLEARED`, with no strike.
+- **Site and setup.** The site's main demo runs on one covered mandate: the visitor fools a real model, files, and rules as the arbiter. `make live-agent` sets up that mandate in USDC with restricted company and arbiter keys. The calculator now prices cover. The worker gives the model `pay_invoice` and `reject_invoice` and a ledger, and caches only answers that pay.
+- CI run 41617290940: 119 attacks, 97 integration and 101 unit tests, 32 credential forgeries, `COVER_RESULT|PASS`. A contract audit followed that run; see the git log for what it changed.
+
+## writ-net30.testnet
 
 Commits `1bf20c8` to `95875b3`; CI for the stablecoin story in `41991ac`. Attestation format `writ:attest:v6`. Source metadata version `0.2.0`.
 

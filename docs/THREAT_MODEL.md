@@ -10,7 +10,8 @@ Terms are defined in [ARCHITECTURE.md](ARCHITECTURE.md#terms). `A..` and `B..` a
 |---|---|---|
 | Company's money | Mandate vaults; `near_reserve` in token trees; `unclaimed` | The company, inside the limits it agreed |
 | Bond | Locked per order inside the root vault | Released to the order it backs |
-| Guarantor's stake | `stakes`, per guarantor and per asset | The guarantor, except what covers open exposure |
+| Guarantor's stake | `stakes`, per guarantor and per asset | The guarantor, except what covers open exposure, which counts orders and locked cover together |
+| Payment records | One per invoice under active cover, with `context_hash` and the claim's state | The contract; the arbiter's ruling changes the claim |
 | Seller's claim | `claimable`, per account and per asset | The seller |
 | Budget | Hash-chain seed held by the employee; links released to the agent | The employee |
 | Company's name | LEI and salt, off-chain with the guarantor; only `sha256(LEI\|salt)` on-chain | The company, until the conditions for naming are met |
@@ -26,7 +27,9 @@ Terms are defined in [ARCHITECTURE.md](ARCHITECTURE.md#terms). `A..` and `B..` a
 | A stranger | Revoke, claim or disclose what is not theirs, or burn shared storage and gas |
 | A dishonest seller | Claim without delivering, claim early, bill more, drain another seller's bond |
 | A dishonest company | Default and keep its money, stall, promise a bond it cannot fund, walk away by revoking |
-| A company and a straw seller together | Take the guarantor's stake with false orders |
+| A company and a straw seller together | Take the guarantor's stake with false orders, or with a fooled payment that wasn't |
+| A company making a false claim | Be repaid for a real purchase |
+| An arbiter bought by either side | Pay a false claim, or deny a true one and end the cover |
 | A dishonest guarantor | Name the wrong company, name early, rule on its own dispute, pull stake that backs orders |
 | A fake token contract | Credit itself, or pay in a token it was not asked for |
 | Owner, verifier or supervisor acting beyond their role | Move money, or disclose by themselves |
@@ -45,7 +48,7 @@ Terms are defined in [ARCHITECTURE.md](ARCHITECTURE.md#terms). `A..` and `B..` a
 | Who | What you must trust them for | What they cannot do |
 |---|---|---|
 | Guarantor (a verifier with stake) | checked the company's credential chain before signing; pays first when the vault runs short, so it has its own money at risk | disclose on-chain before the recourse period ends and while a debt stays unpaid (`A49`, `A50`), although it holds the LEI and salt, so the contract cannot stop it telling someone off-chain; withdraw stake that covers open orders (`A60`). **If it also holds the company's legal-entity key it could name that company falsely**: the contract checks the signature; the link between that key and the LEI is checked off-chain |
-| Arbiter | ruling a dispute; if it does nothing, the seller wins with a delivery proof and the company otherwise | be the guarantor, the company or the seller (`ARBITER_NOT_INDEPENDENT`) |
+| Arbiter | ruling a dispute; if it does nothing, the seller wins with a delivery proof and the company otherwise. **On cover, deciding whether the agent was fooled: the contract can't.** If it doesn't rule in time, nothing moves | on credit, be the guarantor, the company or the seller (`ARBITER_NOT_INDEPENDENT`); on cover, be the company, the guarantor or the owner (`A115`); award more than the payment (`A98`); rule late (`A104`) |
 | Seller | filing a truthful delivery proof; a false one is a matter for the dispute | claim before due plus the inspection window (`A46`, `A68`); claim without filing a proof (`A52`); bill more than the order (`A82`) |
 | Verifier | checked the credential chain before signing; holds the LEI salt; may update signer keys | move money, disclose before the waiting period, disclose an LEI other than the committed one (`A18`, `A19`) |
 | Owner | the verifier and supervisor whitelists; can revoke a mandate, which returns its money to the company unless credit is open or a debt remains; can delist a guarantor, which stops new acceptances on it (`A96`) but not orders already accepted | take money or touch a mandate's limits |
@@ -60,6 +63,8 @@ The contract does not replay KELs. It trusts the verifier's binding of AID to ke
 
 | Threat | Defense | Tests |
 |---|---|---|
+| False or endless claims | One open claim per tree; one claim per payment; claim window; no claim on a payment before activation; loss at most the amount paid | `A98`, `A101`–`A104`, `A118` |
+| Cover taken back, or stake locked twice | Fee never refunded and lock not released early; orders and cover share one exposure; terms signed | `A99`, `A109`, `A110`, `A112`, `A113` |
 | Injected payee, amount, repeat or terms | Scope, invoice hash, per-payment cap, tenor range | `A01`, `A20`, `A31`, `A32`, `A57`, `A58`, `A63` |
 | Budget invented, replayed, or drained fast | Hash chain, chain length, daily rate, vault check | `A02`–`A05`, `A23`, `A42` |
 | Stolen or expired agent key | Protocol limits on the key; expiry; three strikes delete it | `A06`–`A11`, `B01` |
@@ -121,12 +126,26 @@ Code reviews after the first bench, done with AI review agents, found problems t
 
 All of these hold for the current contract.
 
+### Cover
+
+- **The contract can't tell if an agent was fooled.** A named arbiter decides, on evidence the contract only hashes. `context_hash` binds the text to the payment, not the text to the truth, and it can be omitted.
+- **A bought arbiter hurts both ways, and the limit protects only the guarantor.** Bought by the company, it pays false claims and costs the guarantor up to the limit. Bought by the guarantor, it denies true claims, and after any denial `void_cover` can end the cover at any later time: the lock comes back, the fee stays, and later payments have no cover. The company has no remedy on-chain.
+- **Moral hazard is capped, not stopped.** A company that fools its own agent, with a seller it controls, gets the loss minus its share, if the arbiter upholds. The share and the limit are the only brakes; there is no fraud check.
+- **Seller refunds are invisible.** If a seller refunds a fooled payment, the contract can't see it, so a company could be repaid twice. The terms ask for a statement; nothing on-chain checks it.
+- **No company-wide total.** Each mandate has its own limit. Nothing adds up a company's mandates, or stops it buying cover from several guarantors for one loss.
+- **A guarantor can revoke right after activating and keep the fee.** Its lock isn't released early (`A99`), but the agent is stopped and the company has paid for nothing it can use.
+- **The fee is charged once, can reach the limit, and the guarantor chooses when.** It is taken at activation for every started 30-day period to `valid_until`, capped only at the limit. A company can't refuse an activation it has signed for, except by revoking the mandate. Check [CONTRACT.md](CONTRACT.md#cover-methods) for the deployed contract's limits on this.
+- **Cover has no loss data behind it.** Full locking is the floor on price, and nobody can compute the rest. See [ECONOMICS.md](ECONOMICS.md).
+- **Clearing is a record, not a control.** `clear_agent` says the company dealt with its agent; nothing checks that. The guarantor's control is `revoke`.
+- **The demo's windows are short.** Its arbiter has 60 seconds and a payment can be claimed for 10 minutes. The 14 days in [CONTRACT.md](CONTRACT.md#windows) is the contract's default.
+- **The public demo hands out the company's and the arbiter's restricted keys.** Anyone can file, rule and clear on the demo's mandate. Money can only go to the company's account and the seller in the mandate; `withdraw`, `revoke` and `void_cover` are not on those keys. Anyone can also burn the keys' gas allowance, or stop the tree for a while by cycling claims; the page closes stale claims itself, and says so when an allowance runs out. A low daily rate keeps one script from spending every link at once.
+
 ### Legal
 
 - **This is not a standby letter of credit.** ISP98 Rule 1.07 makes the issuer's obligation independent of the underlying transaction ([ISP98](https://library.iccwbo.org/content/tfb/RULES/tfb-isp98-rules.htm)). Writ's payment depends on delivery, the inspection window and any dispute, and the company can suspend it by escrowing the full amount. It is a conditional payment guarantee. Earlier versions of this project used the wrong term.
 - **Naming recovers no money.** A real guarantee has a reimbursement agreement and security behind it. Here `terms_hash` is a placeholder, so disclosure is only the effect of a public default record, and it does nothing against a shell company.
 - **The terms are a placeholder.** `terms_hash` commits to demo text no lawyer has reviewed. Whether an on-chain default and disclosure have legal effect depends on a real agreement and a jurisdiction.
-- **Charging for guarantees is probably regulated.** We have not found a specific statute and no lawyer has reviewed this. A guarantor would need its own licence or legal opinion; Writ is software.
+- **Whether this is insurance is unknown.** We don't claim to be a licensed product. It takes a fee for a future event and pays a loss, and that depends on the jurisdiction; no lawyer has reviewed it. So it stays on testnet, with no real users. A guarantor would need its own licence or legal opinion; Writ is software.
 - **Sealed is not anonymous to your seller.** A seller who must issue an invoice generally needs the customer's name: EU VAT invoices must carry the customer's full name and address, with exceptions for simplified invoices that vary by country ([Art. 226(5)](https://www.legislation.gov.uk/eudr/2006/112/article/226)). The name is sealed from the public ledger, not from your seller; a seller gets it off-chain, and Writ has no method for that exchange. What the seal protects is the company's purchasing record on a public ledger. A seller's sanctions and know-your-customer duties are unchanged, and Writ does nothing to meet them; we have no legal opinion on what they require here.
 
 ### Collusion and fraud
@@ -156,14 +175,14 @@ All of these hold for the current contract.
 - **Delisting a guarantor stops new acceptances only.** Accepting then panics `GUARANTOR_DELISTED` (`A96`). Orders already accepted continue, and claims still draw on its stake.
 - **The windows differ by deployment and no view returns them.** `new` sets them. Demo deployments use seconds and minutes (`DEMO_WINDOWS` in `app/src/near.ts`), not the defaults in [CONTRACT.md](CONTRACT.md#windows).
 - **An invoice id belongs to the mandate, not to one seller.** A hijacked agent that opens credit on a hash to another in-scope seller blocks that hash until the order ends. The company can reissue under a new id.
-- **What the demo uses for credit.** The site's selling story runs in Circle's testnet USDC. `make credit-usdc-demo` runs the same flows on a local mock 6-decimal token (`B35`–`B37`), and `make credit-demo` and `docs/testnet-credit.md` run in NEAR. The public-key challenge and the live-model agent hold NEAR budgets.
+- **What the demo uses for credit.** The site's selling story runs in Circle's testnet USDC. `make credit-usdc-demo` runs the same flows on a local mock 6-decimal token (`B35`–`B37`), and `make credit-demo` and `docs/testnet-credit.md` run in NEAR. The public-key challenge holds a NEAR budget; the live-model mandate is in USDC.
 - **The attack table's gain column reads one test account.** It is `w.attacker`. Where the adversary is the seller (`A46`, `A52`, `A82`, `A85`) that 0 proves nothing; the refusal does. `A85` shows a straw seller is refused above its cap, and can still take value up to it.
 - **A token tree's NEAR reserve goes back to the company on close,** even while a debt remains, because it is not an asset that pays claims. It is what remains after storage and hire fees.
 
 ### Agents and hire
 
-- **The agent in `make demo` and `make ui` is a script.** It issues the malicious call directly, because the point is the gate, not the model, and a script is reproducible. `make attack-live` runs real LLMs instead and needs an API key; the recorded run used Google's Gemini free tier on a local sandbox, not NEAR AI Cloud, so it makes no TEE claim. Writ does not stop an agent from being fooled; it stops the payment.
-- **A prompt-injected amount inside every cap and scope still gets paid** if the invoice is new. Writ limits the damage; it does not judge the invoice.
+- **The agent in `make demo` and `make ui` is a script.** It issues the malicious call directly, because the point is the gate, not the model, and a script is reproducible. `make attack-live` runs real LLMs instead and needs an API key; the recorded run used Google's Gemini free tier on a local sandbox, not NEAR AI Cloud, so it makes no TEE claim. Writ does not stop an agent from being fooled. It refuses what breaks the mandate, and cover deals with what doesn't.
+- **A prompt-injected payment inside every cap and scope still gets paid** if the invoice is new. The contract doesn't judge the invoice. On a mandate with cover, the company can claim it afterwards, and an arbiter decides.
 - **Hire limits.** The root pays hire fees, so a tree tops out at 16 mandates; `hire` is not bound by the per-payment cap, and rates in a tree add up rather than sharing one limit.
 - **Sub-agents are enforced by the contract, not by KERI.** A hire is not a credential the verifier checks; the contract enforces that it only narrows. A tripped parent suspends its sub-agents' spending, but their keys stay until someone revokes it. A token mandate with no credit terms cannot hire (`A92`).
 - **A compromised agent key can hire**, within the links it holds and the parent's limits. It cannot create budget; hiring moves what the employee released.
@@ -187,7 +206,7 @@ All of these hold for the current contract.
 ### The demo and the deployment
 
 - **The public demo holds the secrets a guarantor would keep.** The site's `config.json` has the fictional company's LEI and salt, so the guarantor's step can run in your browser. A real guarantor keeps them private.
-- **On the site, only "Fool a live model" uses a model.** That section sends your invoice to Llama 3.3 on Cloudflare Workers AI's free tier and signs what it decides from an agent with a small real budget (`make live-agent`), whose next budget links are public on the page: anyone can spend them, but only to the permitted seller, 3 links at a time. The free quota can run out, and the site then says so. Identical invoices reuse a cached answer for a day, and the page says when. The selling and firing stories run prepared transactions. The numbers in the table come from separate runs on a local sandbox, with Gemini: small samples, not NEAR AI, no TEE. `docs/attack-live.md` was generated with the plain prompt only; the current `make attack-live` also runs a hardened prompt, so a rerun prints a longer table.
+- **On the site, only "Fool a real model" uses a model.** That section sends your invoice to Llama 3.3 on Cloudflare Workers AI's free tier and signs what it decides from a covered mandate (`make live-agent`), whose next budget links are public on the page: anyone can spend them, but only to the permitted seller, 3 links at a time, at a low daily rate. The free quota can run out, and the site then says so. Answers that pay are cached for a day by invoice text, and the page says when. The other stories on the site are scripted.
 - **The contract cannot be upgraded.** There is no full-access key, so a bug means a new deployment on a new account (see [CHANGELOG.md](../CHANGELOG.md)).
 - **Testnet only.** `make testnet` deployed this story; not on mainnet. It needs the faucet, which rate-limits per IP; on a 429 it falls back to sub-accounts of an already funded account.
 - **No audit.** The contract was reviewed by AI review agents, an attack bench, a fuzz test of the books and mutation testing, not by an audit firm.

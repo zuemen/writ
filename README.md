@@ -1,64 +1,58 @@
-# Writ: net-30 for AI agents you've never met
+# Writ: who pays when your AI agent gets fooled
 
 [![reproduce](https://github.com/zuemen/writ/actions/workflows/ci.yml/badge.svg)](https://github.com/zuemen/writ/actions/workflows/ci.yml)
 
-Writ lets a seller give net-30 terms to an AI agent's order without trusting the buyer: an on-chain rule checks that a guarantor has locked money for that order, and if the buyer doesn't pay, the seller claims it. Testnet only; no real guarantor or customer yet. Not audited.
+Writ lets a company recover money its AI agent was fooled into paying inside its limits: a named guarantor locks funds on NEAR, the agent's payments are recorded, and a claim upheld by a named arbiter, who can't be the company or the guarantor, is repaid from the stake, minus the company's share. Testnet only; no real guarantor or customer yet. Not audited.
 
 Trust isn't proving an AI won't fail. It's knowing who pays when it does.
 
-**Demo:** <https://writ-near.112306007.workers.dev> signs testnet transactions in your browser.
+**Demo:** <https://writ-near.112306007.workers.dev> Fool a real model, then rule on the claim yourself. Your browser signs testnet transactions.
 
-## How credit works
+## How cover works
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as Company (name sealed)
+    participant C as Company
     participant G as Guarantor (named, staked)
     participant W as Writ contract (NEAR)
     participant A as Agent
-    participant S as Seller
-    G->>G: checks the company's vLEI chain off-chain
-    G-->>C: attestation (limit, bond, fee, arbiter, LEI commitment)
+    participant R as Arbiter (named)
+    G-->>C: signs the mandate: limit, company's share, fee, arbiter
     C->>W: register + vault
-    G->>W: stake
-    S->>W: set_seller_policy: the seller's one rule
-    A->>W: open_credit (budget links, no money moves)
-    S->>W: check_order: passes the rule, or every reason it fails
-    S->>W: accept_credit: fee, bond and guarantor's exposure locked
-    S->>W: mark_delivered
-    alt company pays
-        A->>W: settle: seller paid, name stays sealed
-    else not paid after due date and inspection
-        S->>W: claim_default: vault, then bond, then stake pays the seller
-        W-->>C: if the stake paid, agents frozen (stop-ship), recourse starts
-        alt repays
-            C->>W: reimburse: unfrozen, name stays sealed
-        else never repays
-            G->>W: enforce_recourse: every key in the tree deleted
-            G->>W: credit_unseal: company named, checked against its signature
-        end
+    G->>W: activate_cover: takes the fee, locks the limit in its stake
+    A->>W: spend, with a hash of what it read and decided
+    W->>W: payee, new invoice, cap, budget link, rate, expiry: all pass. Paid
+    C->>W: file_claim: the whole tree stops
+    alt arbiter upholds
+        R->>W: resolve_claim: the stake repays the loss, minus the company's share
+        C->>W: clear_agent: the tree works again
+    else arbiter denies, or doesn't rule in time
+        R->>W: nothing moves, the tree works again
     end
 ```
 
-It is a conditional payment guarantee, not a standby letter of credit: payment depends on delivery. **Sealed** means from the public ledger, not from your seller: a seller who needs the name for an invoice gets it off-chain. **Stop-ship** means that while the company owes its guarantor, the agents under that mandate cannot buy from any seller. Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+The contract can't tell whether an agent was fooled. Someone has to decide, and the limit caps what a wrong or bought ruling costs the guarantor. Anything outside the mandate never gets this far: `SCOPE`, `PER_TX` and `DUPLICATE` refuse it. Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+**Second use: net-30 for sellers.** The same stake can back an order on credit: a seller sets a rule, ships if a guarantor has locked money for that order, and claims if the buyer doesn't pay. [`docs/INTEGRATE.md`](docs/INTEGRATE.md#second-use-net-30-for-sellers).
 
 ## Try it
 
-Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with libsodium (`apt install libsodium23` / `brew install libsodium`), `make`, `gcc`, `pkg-config`, `libssl-dev`. Linux or macOS; on Windows use WSL or Docker. Ubuntu 24.04 ships Python 3.12.3, which is too old: install a newer one (`uv python install 3.12`) and pass it with `make setup PY=/path/to/python3.12`, or use the `Dockerfile`. Network is needed once (crates, npm, pip, sandbox binary). Nothing here sends a transaction to testnet or mainnet; `make verify` only reads one public testnet account. No API keys, except for the optional live-model run.
+Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with libsodium (`apt install libsodium23` / `brew install libsodium`), `make`, `gcc`, `pkg-config`, `libssl-dev`. Linux or macOS; on Windows use WSL or Docker. Ubuntu 24.04 ships Python 3.12.3, which is too old: install a newer one (`uv python install 3.12`) and pass it with `make setup PY=/path/to/python3.12`, or use the `Dockerfile`. Network is needed once. Nothing here sends a transaction to testnet or mainnet. No API keys, except for the optional live-model runs.
 
-**Shortest path: `make verify`.** It runs the build, the bench, both stories and the credential checks, and prints a scorecard ending in `VERIFY_RESULT|PASS`.
+**Shortest path: `make verify`.** It runs the build, the bench, the stories and the credential checks, and prints a scorecard ending in `VERIFY_RESULT|PASS`.
 
 | # | Do | See |
 |---|---|---|
 | 1 | `make setup` | contract builds; size and `sha256sum` of `contract/res/writ.wasm` printed |
-| 2 | `make test` | `test result: ok. 75 passed`, then `test result: ok. 80 passed` and [`docs/bench.md`](docs/bench.md): 96 attacks, all blocked |
-| 3 | `make credit-demo` | the credit story with real KERI signatures: rule refuses then ships, paid and sealed, unpaid and the guarantor pays, frozen, keys deleted, a false company refused, the real one named; ends in `CREDIT_RESULT\|PASS` |
-| 4 | `make credit-usdc-demo` | the same in a mock 6-decimal stablecoin on a local sandbox, seller pays the fee; ends in `CREDIT_USDC_RESULT\|PASS` |
-| 5 | `make demo` | a local sandbox starts (port 3030 must be free) and the prepaid story runs; last line starts `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0`; exit code 0 |
-| 6 | `make keri-check` | the credential chain is checked, then forged or stale chains are refused; last line `KERI_FORGERIES\|PASS\|14` |
-| 7 | `make ui` → open http://localhost:8787 | three views (HR / agent / seller, labelled Merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays**: each row in *Chain log* shows a tx hash or the protocol error. Prepaid path only |
-| 8 | optional: `NEARAI_API_KEY=... make attack-live` (or `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` for any OpenAI-compatible provider) | a real LLM reads invoices and chooses the tool calls; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in `docs/attack-live.md` |
+| 2 | `make cover-demo` | an agent fooled inside its limits: `DUPLICATE` on the same number, paid under a new one, a false claim denied, the real one upheld, the guarantor repays the loss less the company's share, then the same in a token; ends in `COVER_RESULT\|PASS` |
+| 3 | `make test` | `test result: ok. 101 passed`, then `test result: ok. 97 passed` and [`docs/bench.md`](docs/bench.md): 119 attacks, all blocked |
+| 4 | `make keri-check` | the credential chain is checked, then forged or stale chains are refused; last line `KERI_FORGERIES\|PASS\|32` |
+| 5 | `make credit-demo` | the net-30 story with real KERI signatures; ends in `CREDIT_RESULT\|PASS` |
+| 6 | `make credit-usdc-demo` | the same in a mock 6-decimal stablecoin; ends in `CREDIT_USDC_RESULT\|PASS` |
+| 7 | `make demo` | a local sandbox starts (port 3030 must be free) and the prepaid story runs; last line starts `DEMO_RESULT\|PASS` |
+| 8 | `make ui` → open http://localhost:8787 | three views (HR / agent / seller, labelled Merchant); prepaid path only |
+| 9 | optional: `NEARAI_API_KEY=... make attack-live` (or `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`) | a real LLM reads invoices; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in `docs/attack-live.md` |
 
 Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 
@@ -66,26 +60,29 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 
 | What | Result | Where |
 |---|---|---|
-| Attack bench | 96 attacks blocked, each ending in the expected refusal; 75 unit, exact-value and fuzz tests; 80 sandbox tests | [`docs/bench.md`](docs/bench.md) |
-| Mutation testing | {MUTANTS}, and why the bench alone was not enough | [`docs/TESTING.md`](docs/TESTING.md#mutation-testing) |
-| Live on NEAR testnet | contract [`writ-net30.testnet`](https://testnet.nearblocks.io/address/writ-net30.testnet), no full-access key; every step of both stories with its transaction; one payment in Circle's testnet USDC | [`docs/testnet-credit.md`](docs/testnet-credit.md), [`docs/testnet.md`](docs/testnet.md), [`docs/testnet-usdc.md`](docs/testnet-usdc.md) |
-| Real models get fooled; the money doesn't move | two Gemini models followed injections in 13 of 20 payment attacks and 8 of 12 credit-order attacks; none of those went through. Small samples on a local sandbox, not a benchmark | [`docs/attack-live.md`](docs/attack-live.md), [`docs/attack-credit-live.md`](docs/attack-credit-live.md) |
-| Forged credentials | 14 forged or stale chains refused by the off-chain verifier | [`keri/test_forgeries.py`](keri/test_forgeries.py) |
+| Attack bench, CI run [41617290940](https://github.com/zuemen/writ/actions/runs/41617290940) | 119 attacks blocked, each ending in the expected refusal; 101 unit, exact-value and fuzz tests; 97 sandbox tests | [`docs/bench.md`](docs/bench.md) |
+| Cover story, same run | `COVER_RESULT\|PASS`, in NEAR and in a token | [`app/src/cover-demo.ts`](app/src/cover-demo.ts) |
+| Forged credentials, same run | 32 forged or stale chains refused by the off-chain verifier | [`keri/test_forgeries.py`](keri/test_forgeries.py) |
+| Mutation testing | {MUTANTS} | [`docs/TESTING.md`](docs/TESTING.md#mutation-testing) |
+| The live model | Llama 3.3, 4 runs each: refused a plain re-bill of a paid order 4 of 4, paid it with a fake controller note 4 of 4, with a fake ledger sync 4 of 4. A small sample | [`docs/TESTING.md`](docs/TESTING.md#the-live-model) |
+| On NEAR testnet | contract `{CONTRACT}`, no full-access key | [`docs/testnet.md`](docs/testnet.md) |
 
 ## Economics
 
-- The lowest fee that does not lose money is 1.90–3.63% of the order at a 1% loss rate, a 20% bond, 37 days and 60% of stake in use. That overlaps B2B BNPL.
-- At a 2.25% fee, per $1M staked for a year: 6.6–10.9% return at a 1% loss rate, −23.0% at 6%.
-- This is a model, not a market: nobody has underwritten anything on Writ, and Writ takes no protocol fee. [`docs/ECONOMICS.md`](docs/ECONOMICS.md)
+- The cost floor is the locked money: 4.6–14.2% of the limit a year, before any claim or running cost. Fully locked money is why this is expensive.
+- **Nobody has data on how often agents get fooled.** We can't compute a loss rate, so we can't compute a price.
+- The demo's 2% per 30 days is about 24% of the limit a year. It is a placeholder, not a price. [`docs/ECONOMICS.md`](docs/ECONOMICS.md)
 
-## Not implemented / limits
+## Limits
 
-- **"Never met" has a condition.** You don't need to know the buyer. The guarantor does, and it must have approved your account in that company's mandate first, up to 16 sellers per mandate; adding one means a new mandate.
-- **Collusion is capped, not stopped.** A company and a straw seller inside the mandate can take an order's value minus the bond and fee from the guarantor's stake, up to `seller_cap_bps` per seller account.
-- **The delivery proof is a hash.** The contract cannot tell a real delivery from a false one; a dispute handles that, and the arbiter is one account.
-- **Naming recovers no money.** Disclosure is only a public default record, and `terms_hash` commits to demo text no lawyer has reviewed.
-- **Charging for guarantees is probably regulated.** A guarantor would need its own licence or legal opinion.
-- **A prompt-injected amount inside every cap and scope still gets paid** if the invoice is new. Writ limits the damage; it does not judge the invoice.
+- **The arbiter is a person you must trust.** Bought by the company, it costs the guarantor up to the limit; the limit protects only the guarantor. Bought by the guarantor, it can deny claims and end the company's cover after a denial.
+- **Moral hazard is capped, not stopped.** A company that fools its own agent with a seller it controls can take the loss minus its share, up to the limit, if the arbiter upholds.
+- **Seller refunds are invisible**, and nothing adds up a company's mandates into a total.
+- **A guarantor can revoke right after activating and keep the fee.** Its lock isn't released early. The fee is charged once, can reach the limit on a long mandate, and the guarantor chooses when to activate.
+- **The demo's windows are short:** the arbiter has 60 seconds and a payment can be claimed for 10 minutes. The 14 days in the docs is the contract's default.
+- **A fooled payment inside every limit still gets paid.** Cover repays it afterwards, if the arbiter upholds; it doesn't stop it.
+
+Testnet only. No real guarantor, no real customers, not audited, no actuarial basis. Offering this for real money may be regulated insurance or guarantee business depending on the jurisdiction; no lawyer has reviewed it. A guarantor would need its own licence or legal opinion. Writ is software.
 
 All limits, with the threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md#limits).
 
@@ -93,12 +90,12 @@ All limits, with the threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md
 
 | Read | For |
 |---|---|
-| [`docs/INTEGRATE.md`](docs/INTEGRATE.md) | sellers first, then companies and guarantors, with exact JSON |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | how it works: order states, KERI and vLEI, budget hash chain, tree and hire |
+| [`docs/INTEGRATE.md`](docs/INTEGRATE.md) | a company and a guarantor using cover, then sellers, with exact JSON |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | how it works: claims, order states, KERI and vLEI, budget hash chain, tree and hire |
 | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | assets, attackers, what is defended, every limit |
 | [`docs/CONTRACT.md`](docs/CONTRACT.md) · [`docs/ERRORS.md`](docs/ERRORS.md) · [`docs/EVENTS.md`](docs/EVENTS.md) | every method, panic code, Rejected reason and event |
 | [`docs/ECONOMICS.md`](docs/ECONOMICS.md) | the guarantor's numbers |
-| [`docs/TESTING.md`](docs/TESTING.md) | commands, expected output, mutation testing, build notes |
+| [`docs/TESTING.md`](docs/TESTING.md) | commands, expected output, the live model, mutation testing |
 | [`SECURITY.md`](SECURITY.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`CHANGELOG.md`](CHANGELOG.md) | reporting, contributing, contract generations |
 
 ## Baseline disclosure

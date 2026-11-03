@@ -1,8 +1,78 @@
 # Integrate
 
-For a seller first, then a company and its agents, then a guarantor. Nobody uses this in production yet: it runs on testnet at `writ-net30.testnet`, and this guide has not been timed with an outside developer.
+For a company and a guarantor using cover first, then sellers. Nobody uses this in production yet: it runs on testnet at `{CONTRACT}`, and this guide has not been timed with an outside developer.
 
 The commands use [NEAR CLI](https://github.com/near/near-cli-rs). Numbers and amounts in the JSON are examples. `U64` and `U128` values are strings; amounts are in the order's asset (yoctoNEAR, 1 NEAR = 10^24, or the token's smallest unit). Terms are in [ARCHITECTURE.md](ARCHITECTURE.md#terms); every method is in [CONTRACT.md](CONTRACT.md), every error in [ERRORS.md](ERRORS.md).
+
+## Cover: a company and a guarantor
+
+You run an agent that pays invoices. You want a named party to repay what it gets fooled into paying inside its limits. Exact methods are in [CONTRACT.md](CONTRACT.md#cover-methods); `make cover-demo` runs all of this on a sandbox, and `app/src/cover-demo.ts` is the shortest worked example.
+
+### Guarantor: agree terms and sign
+
+Check the company's credential chain off-chain, then sign the attestation with `CoverArgs`. `keri/issuer.py init --cover-limit … --cover-arbiter …` has the legal entity sign the terms, and `keri/verify.py attest` refuses terms it didn't sign or the contract would refuse.
+
+| Term | What it does |
+|---|---|
+| `limit` | The most you pay in total under this mandate. At least 10 maximum payments, at most `n` × `unit`. It stays fully locked in your stake. |
+| `deductible_bps` | The company's share of each loss, 10% to 90%. |
+| `premium_bps` | Fee on the limit per 30 days. Charged once, at activation, for the whole term. |
+| `claim_window` | Seconds after a payment during which it can be claimed. |
+| `arbiter` | Who rules. Not the company, you or the contract owner. |
+| `terms_hash` | Hash of the terms the arbiter rules on: what is covered and excluded, the seller's chance to respond, the company's statement that it wasn't refunded, transfer of rights. **The repo's text is a placeholder no lawyer has reviewed.** |
+
+Nothing prices this for you: see [ECONOMICS.md](ECONOMICS.md). Offering it for real money may be regulated; get your own licence or legal opinion.
+
+### Company: register and fund
+
+`register` with the signed `args`, attaching more than 0.35 NEAR + 0.005 NEAR × `n`. A token mandate with no credit terms gets the excess back. Then fund the vault with enough for the fee as well:
+
+```json
+{"receiver_id":"{CONTRACT}","amount":"1560000","msg":"fund:25"}
+```
+
+on `ft_transfer_call`.
+
+### Guarantor: activate
+
+Stake first if you need to: `ft_transfer_call` with msg `stake`. Then, with `{"root":"25"}` on `activate_cover`, the fee moves from the company's vault to you and the limit locks. Payments before this aren't recorded and can't be claimed.
+
+### Agent: pay with context
+
+```json
+{"preimage":"<64 hex>","j":1,"to":"seller.testnet","invoice_hash":"<64 hex>","context_hash":"<64 hex>"}
+```
+
+on `spend`. `context_hash` is `sha256(invoice text + "\n" + model + "\n" + JSON of the call)`, as `contextHash` in `app/src/sdk.ts`. Keep the three inputs: the arbiter needs them, and the hash shows they weren't changed after the payment.
+
+### Company: claim
+
+| You want to | Call | Args |
+|---|---|---|
+| Claim on a payment | `file_claim` | `{"root":"25","invoice_hash":"<64 hex>","evidence_hash":"<64 hex>"}` |
+| Close a claim the arbiter let lapse | `claim_timeout` | `{"root":"25"}` |
+| Say you dealt with your agent, after an upheld claim | `clear_agent` | `{"root":"25"}` |
+| Collect what you were paid | `withdraw` | `{"asset":"usdc.testnet"}` |
+
+Filing stops the whole tree with `UNDER_CLAIM`, with no strike. None of these takes a deposit, so a restricted function-call key can hold just these methods.
+
+### Arbiter: rule
+
+`resolve_claim` with `{"root":"25","invoice_hash":"<64 hex>","ruling":{"Uphold":{"loss":"10000"}},"ruling_hash":"<64 hex>"}`, or `"ruling":"Deny"`. Read `payment_of` first: it has the amount, the payee and `context_hash`. `invoice_paid` shows whether an earlier invoice was already paid. Rule inside `dispute_timeout`, or it times out and nothing moves.
+
+### Read who pays
+
+```
+near contract call-function as-read-only {CONTRACT} cover_of json-args '{"cell":"25"}' network-config testnet now
+```
+
+`risk_card` is null on a mandate with cover and no credit terms; use `cover_of`.
+
+What cover doesn't do is in the [threat model](THREAT_MODEL.md#cover).
+
+# Second use: net-30 for sellers
+
+The same stake can back orders on credit. The rest of this guide is that path.
 
 ## Seller
 
@@ -11,13 +81,13 @@ You sell to an AI agent you have never met. You set a rule, check each order aga
 ### 1. Read a risk card (nothing from this repo needed)
 
 ```
-near contract call-function as-read-only writ-net30.testnet risk_card json-args '{"cell":"<id>"}' network-config testnet now
+near contract call-function as-read-only {CONTRACT} risk_card json-args '{"cell":"<id>"}' network-config testnet now
 ```
 
 `<id>` is the mandate id the agent gives you, or the `cell` in its order. The site shows one. If you have only `curl`, this is the same call for mandate 4; the result is an array of bytes holding JSON:
 
 ```
-curl -s https://test.rpc.fastnear.com -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":"1","method":"query","params":{"request_type":"call_function","finality":"final","account_id":"writ-net30.testnet","method_name":"risk_card","args_base64":"eyJjZWxsIjoiNCJ9"}}'
+curl -s https://test.rpc.fastnear.com -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":"1","method":"query","params":{"request_type":"call_function","finality":"final","account_id":"{CONTRACT}","method_name":"risk_card","args_base64":"eyJjZWxsIjoiNCJ9"}}'
 ```
 
 What to read:
@@ -50,7 +120,7 @@ The rule is optional. Without one, only the contract's own checks apply, and not
 Watch for the `credit_opened` event ([EVENTS.md](EVENTS.md)), or take the credit id from the agent.
 
 ```
-near contract call-function as-read-only writ-net30.testnet check_order json-args '{"credit":"7"}' network-config testnet now
+near contract call-function as-read-only {CONTRACT} check_order json-args '{"credit":"7"}' network-config testnet now
 ```
 
 ```json
@@ -70,7 +140,7 @@ The `order` above is abridged. `would_accept` means `accept_credit` would succee
 ```
 
 ```
-near contract call-function as-transaction writ-net30.testnet accept_credit json-args '{"credit":"7"}' prepaid-gas '100.0 Tgas' attached-deposit '0 NEAR' sign-as seller.testnet network-config testnet sign-with-keychain send
+near contract call-function as-transaction {CONTRACT} accept_credit json-args '{"credit":"7"}' prepaid-gas '100.0 Tgas' attached-deposit '0 NEAR' sign-as seller.testnet network-config testnet sign-with-keychain send
 ```
 
 The contract locks the bond and the guarantor's exposure. It panics `POLICY:<reason>` if your stored rule fails, and otherwise on the first failure `check_order` would report. A rule passed to `check_order` has no effect here. A buyer-paid fee moves now and is not refunded.
@@ -185,7 +255,7 @@ The guarantor signs; the company must submit from the account named in the signa
 Attach more than 0.35 NEAR + 0.001 NEAR × `n`. In a NEAR mandate the rest becomes the vault. For a token mandate add `"asset":"usdc.testnet"` both at the top and in `credit`; the NEAR above the fee becomes `near_reserve`, which pays 0.007 NEAR storage per order and hire fees. Then fund with `ft_transfer_call` on the token, 1 yocto attached:
 
 ```json
-{"receiver_id":"writ-net30.testnet","amount":"5000000","msg":"fund:25"}
+{"receiver_id":"{CONTRACT}","amount":"5000000","msg":"fund:25"}
 ```
 
 To add a seller later you need a new attestation and a new mandate: the scope cannot change.
@@ -243,7 +313,7 @@ You check the company's credential chain off-chain, then sign the attestation in
 ### Watch your book: `guarantor_book`
 
 ```
-near contract call-function as-read-only writ-net30.testnet guarantor_book json-args '{"account":"guarantor.testnet"}' network-config testnet now
+near contract call-function as-read-only {CONTRACT} guarantor_book json-args '{"account":"guarantor.testnet"}' network-config testnet now
 ```
 
 Returns `stake`, `exposure`, `utilisation_bps`, `earned`, `claims_paid`, `recovered`, `net_loss`, `loss_ratio_bps` (null before any fee) and `top_sellers` (at most 5). Add `"asset":"usdc.testnet"` for a token book. `top_sellers` is drawn from a list of at most 8, so it is not complete.

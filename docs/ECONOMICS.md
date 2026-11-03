@@ -1,8 +1,49 @@
 # The guarantor's numbers
 
-A model, not a market. Nobody has underwritten anything on Writ, and no source gives a default rate for AI-agent buyers. Figures marked *assumption* have no source. The site has the same model as a calculator.
+A model, not a market. Nobody has underwritten anything on Writ. Figures marked *assumption* have no source.
 
-## Formula
+## Cover: what a guarantor would have to charge
+
+**Nobody has data on how often agents get fooled.** We can't compute a loss rate, so we can't compute a price. We only know the floor.
+
+The guarantor locks the whole limit for as long as cover runs, and can't lend or reuse it. Per 1 of limit, per year:
+
+```
+F = (c + p × (1 − s)) / (1 − e)      lowest yearly fee that does not lose money
+```
+
+| Symbol | Meaning | Value | Basis |
+|---|---|---|---|
+| c | cost of locked money | 4.6% to 14.2% a year | USDC lending, 2026-10-05 ([DeFi Rate](https://defirate.com/lend/snapshot/2026-10-05T0151/), moves a lot); Atradius 2025 ROE ([report](https://atradius.nl/kennisbank/news/atradius-2025-strong-performance-in-a-complex-environment)) |
+| p | loss rate, share of the limit lost to fooled payments a year | scenario | assumption; **no data exists** |
+| s | the company's share of each loss | 20% | the demo's terms; the contract allows 10% to 90% |
+| e | running cost, share of the fee | 25% | assumption; credit insurers run 32.8% ([Coface FY2025](https://www.coface.com/news-economy-and-insights/2025-results-coface-closes-another-strong-year-with-net-income-at-222.0m)) |
+
+| Loss rate p (assumption) | F at c=4.6% | F at c=14.2% | Fee on a $100,000 limit |
+|---|---|---|---|
+| 0% | 6.13% | 18.93% | $6,133–18,933 |
+| 1% | 7.20% | 20.00% | $7,200–20,000 |
+| 2% | 8.27% | 21.07% | $8,267–21,067 |
+| 5% | 11.47% | 24.27% | $11,467–24,267 |
+| 10% | 16.80% | 29.60% | $16,800–29,600 |
+
+**The cost floor is c itself, 4.6–14.2% of the limit a year, before any claim or running cost.** Fully locked money is why this is expensive. An insurer pools risk and reuses capital; a guarantor here doesn't. That is what makes the payment certain, and what makes it cost more.
+
+**The demo's fee is a placeholder.** It charges 2% per 30 days, about 24% of the limit a year (24.33%). No one priced that. It would absorb a loss rate of about 17% at c=4.6% and about 5% at c=14.2%, with the assumptions above.
+
+How the fee works in the contract:
+
+- It is charged once, at activation, for every started 30-day period to `valid_until`. It is never refunded.
+- It is capped only at the limit, so a long mandate can pay up to the whole limit. The guarantor chooses when to activate.
+- A guarantor can revoke right after activating and keep the fee. Its lock isn't released early, so this doesn't free its money.
+
+Whether anyone would pay this is untested. Nobody has been asked. Offering it for real money may be regulated insurance or guarantee business, depending on the jurisdiction; no lawyer has reviewed it.
+
+## Second use: net-30 for sellers
+
+The same stake can back orders on credit. No source gives a default rate for AI-agent buyers either. The rest of this page is that model. `exposure` counts orders and locked cover together, so one dollar can't back both.
+
+### Formula
 
 Per 1 of order value:
 
@@ -25,7 +66,7 @@ c* = F × 365 / (D × (1 − b))     buyer's cost of cash above which a buyer-pa
 
 For scale on p: claims of €3.39B against about €9.25T of supported trade give 0.037% on insured books (derived from [ICISA](https://icisa.org/?p=21395) figures; the two populations may differ, so treat it as a floor). Self-reported bad debt in Western Europe is about 6% ([Atradius survey](https://group.atradius.com/knowledge-and-research/news/what-did-a-year-of-b2b-payment-disruption-teach-us)). The definitions differ. The roughly 160× gap is what screening and policy terms are worth, and nothing tells us where a new book of agent buyers would sit.
 
-## A $10,000 order
+### A $10,000 order
 
 At 60% of stake in use. The top of the range overlaps B2B BNPL.
 
@@ -40,7 +81,7 @@ At low loss rates most of the cost is locked money, not losses. A fully reserved
 
 A flat 2% fee absorbs a loss rate of up to 1.10% at c=4.6%, and none at c=14.2%. Without screening, a guarantor at that price loses money.
 
-## Suggested price tiers
+### Suggested price tiers
 
 | Tier | Bond | Assumed p | Cost range | Fee |
 |---|---|---|---|---|
@@ -49,7 +90,7 @@ A flat 2% fee absorbs a loss rate of up to 1.10% at c=4.6%, and none at c=14.2%.
 | C: higher risk | 20% | 3% | 4.03–5.76% | 4.50% |
 | Decline | | about 4% and up | above B2B BNPL's range | |
 
-## Guarantor's return, per $1M staked, one year
+### Guarantor's return, per $1M staked, one year
 
 2.25% fee, 20% bond, 25% running cost, 37-day cycle, fully reserved.
 
@@ -61,11 +102,11 @@ A flat 2% fee absorbs a loss rate of up to 1.10% at c=4.6%, and none at c=14.2%.
 
 The 2.25% fee covers the cost of locked money only near the bottom of the range: at c=14.2% it loses money against that hurdle. Compare 4.6% for lending with no buyer risk, and 14.2% for Atradius's ROE. A purely financial guarantor earns less than an insurer here. So the first guarantor is more likely a party that already knows the buyer and gains from the sale, such as a platform hosting the buyer's agents. That is a hypothesis; nobody has been asked.
 
-## Why a buyer would use it
+### Why a buyer would use it
 
 A buyer-paid fee beats escrow only above c* of about 25% a year (2% fee, 37 days, 20% bond). That attracts buyers who cannot borrow cheaply, which is adverse selection. Two things help: the seller pays the fee to close the sale (`fee_payer`), and usage-priced orders, where the amount is unknown until delivery and escrow must over-lock.
 
-## What this does not show
+### What this does not show
 
 - Agent payment volume today is tiny: about $5,000–11,000 a month through x402 by [TRM Labs' estimate](https://www.trmlabs.com/trm-tech-blog/whos-actually-paying-measuring-ai-agent-payments-onchain). Do not use it as a market size.
 - Writ takes no protocol fee. A business would need a share of the fee or tools sold to guarantors.
