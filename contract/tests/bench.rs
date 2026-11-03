@@ -1,9 +1,9 @@
-//! Writ 攻擊台（attack bench）＋ 正常流程。全部在本機 sandbox 上跑，不碰 testnet。
+//! Writ attack bench + normal flow. Everything runs on the local sandbox, never touches testnet.
 //!
-//! 跑法：`make -C contract test`（第一次會下載 near-sandbox，需要網路一次）
+//! How to run: `make -C contract test` (the first run downloads near-sandbox, needs network once)
 //!
-//! 每個測試最後印一行 `WRIT_BENCH|<id>|<attack>|<expected>|<observed>|<attacker_gain_yocto>`，
-//! README 首頁總表直接由這些行產生（scripts/bench_table.py）。
+//! Each test prints one last line `WRIT_BENCH|<id>|<attack>|<expected>|<observed>|<attacker_gain_yocto>`,
+//! the README summary table is generated directly from these lines (scripts/bench_table.py).
 
 use ed25519_dalek::{Signer, SigningKey};
 use near_workspaces::network::Sandbox;
@@ -13,14 +13,14 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 const WASM: &str = "res/writ.wasm";
-const UNIT: u128 = 10_000_000_000_000_000_000_000; // 0.01 NEAR / 鏈節
-// 開格費 = 0.35 NEAR（>= agent 鑰匙的 gas allowance）+ 每節 0.001 NEAR（發票紀錄的儲存）
+const UNIT: u128 = 10_000_000_000_000_000_000_000; // 0.01 NEAR per chain link
+// Opening fee = 0.35 NEAR (>= the agent key's gas allowance) + 0.001 NEAR per link (storage for the invoice record)
 fn fee(n: u32) -> u128 { 350_000_000_000_000_000_000_000 + (n as u128) * 1_000_000_000_000_000_000_000 }
 const AMC_ISSUER: &str = "EISSUER_AID";
 
-// ---------------------------------------------------------------- 工具
+// ---------------------------------------------------------------- helpers
 
-/// PayWord 鏈：links[k] = H^(n-k)(seed)，links[0] = w0。付 j 節時交出 links[idx+j]。
+/// PayWord chain: links[k] = H^(n-k)(seed), links[0] = w0. Paying j links hands over links[idx+j].
 struct Payword {
     links: Vec<[u8; 32]>,
 }
@@ -54,12 +54,12 @@ struct World {
     attacker_start: u128,
 }
 
-/// 攻擊者 NEAR 餘額相對開始時的淨增加（攻擊者自己付 gas，所以沒賺錢時是 0）。
+/// Attacker's net NEAR gain relative to the start (the attacker pays its own gas, so it is 0 when no profit was made).
 async fn gain(w: &World) -> i128 {
     balance(&w.attacker).await.saturating_sub(w.attacker_start) as i128
 }
 
-/// cargo-mutants 用：WRIT_REBUILD=1 時每次測試先從（被突變的）原始碼重建 wasm，否則用 make build 的產物。
+/// For cargo-mutants: with WRIT_REBUILD=1 every test first rebuilds the wasm from the (mutated) source, otherwise it uses the output of make build.
 fn wasm_bytes() -> anyhow::Result<Vec<u8>> {
     static BUILT: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
     if std::env::var("WRIT_REBUILD").is_err() {
@@ -107,10 +107,10 @@ struct Opts {
 }
 
 const ECR_COMMIT_SALT: &str = "salt-ecr";
-/// 測試裡的 attestation 一律用「遠在未來」的時間，表示剛簽完；A33 另外測過期。
+/// Attestations in tests always use a time "far in the future", meaning just signed; A33 tests expiry separately.
 const ATTESTED_NOW: u64 = u64::MAX / 2;
 
-/// 與合約 attestation_message 完全一致的規範字串。
+/// Canonical string identical to the contract's attestation_message.
 fn attest_msg(a: &Value, funder: &AccountId, contract: &AccountId) -> String {
     let scope: Vec<String> = a["scope"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect();
     format!(
@@ -130,7 +130,7 @@ async fn now_ns(w: &World) -> anyhow::Result<u64> {
     Ok(w.worker.view_block().await?.timestamp())
 }
 
-/// 開一格：回傳 (cell id, agent 以合約帳號身分的 Account, PayWord 鏈)
+/// Open a cell: returns (cell id, the agent's Account acting as the contract account, PayWord chain)
 async fn open_cell(w: &World, o: Opts) -> anyhow::Result<(u64, Account, Payword)> {
     let agent_sk = SecretKey::from_random(KeyType::ED25519);
     let pw = Payword::new(o.n);
@@ -196,7 +196,7 @@ fn proto_tag(e: &str) -> &'static str {
     else { "OTHER" }
 }
 
-// ---------------------------------------------------------------- 正常流程
+// ---------------------------------------------------------------- normal flow
 
 #[tokio::test]
 async fn b00_happy_path_pays_merchant_and_present_hides_lei() -> anyhow::Result<()> {
@@ -207,7 +207,7 @@ async fn b00_happy_path_pays_merchant_and_present_hides_lei() -> anyhow::Result<
     assert_eq!(v["Paid"]["idx"], 3);
     let after = balance(&w.merchant).await;
     assert_eq!(after - before, 3 * UNIT, "merchant receives exactly 3 links");
-    // 第二筆接續鏈頭
+    // second payment continues from the chain head
     let v = spend(&agent, w.writ.id(), &pw.link(5), 2, w.merchant.id()).await.unwrap();
     assert_eq!(v["Paid"]["remaining_links"], 15);
     let p: Value = w.writ.view("present").args_json(json!({"cell": cell.to_string()})).await?.json()?;
@@ -223,7 +223,7 @@ async fn b00_happy_path_pays_merchant_and_present_hides_lei() -> anyhow::Result<
     Ok(())
 }
 
-// ---------------------------------------------------------------- 政策層攻擊（合約回 Rejected，有 tx hash）
+// ---------------------------------------------------------------- policy-layer attacks (contract returns Rejected, with a tx hash)
 
 #[tokio::test]
 async fn a01_prompt_injected_payment_to_attacker_is_rejected() -> anyhow::Result<()> {
@@ -245,15 +245,15 @@ async fn a02_over_limit_and_forged_and_replayed_links() -> anyhow::Result<()> {
     o.n = 5;
     o.daily = 5;
     let (_c, agent, pw) = open_cell(&w, o).await?;
-    // 超過鏈長
+    // beyond the chain length
     let v = spend(&agent, w.writ.id(), &pw.link(5), 6, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "LIMIT");
     bench("A02", "spend more links than the mandate holds", "Rejected:LIMIT", "Rejected:LIMIT", gain(&w).await);
-    // 偽造鏈節（agent 自己編一個 preimage）
+    // forged chain link (the agent makes up a preimage)
     let v = spend(&agent, w.writ.id(), &"ab".repeat(32), 1, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "CHAIN");
     bench("A03", "forged hash-chain link (agent invents budget)", "Rejected:CHAIN", "Rejected:CHAIN", gain(&w).await);
-    // 合法一筆後重放同一個鏈節
+    // replay the same chain link after one legitimate payment
     let v = spend(&agent, w.writ.id(), &pw.link(1), 1, w.merchant.id()).await.unwrap();
     assert!(v.get("Paid").is_some());
     let v = spend(&agent, w.writ.id(), &pw.link(1), 1, w.merchant.id()).await.unwrap();
@@ -269,7 +269,7 @@ async fn a05_daily_rate_limit() -> anyhow::Result<()> {
     o.daily = 4;
     let (_c, agent, pw) = open_cell(&w, o).await?;
     assert!(spend(&agent, w.writ.id(), &pw.link(4), 4, w.merchant.id()).await.unwrap().get("Paid").is_some());
-    // 人已撥出更多鏈節，但今日速率用完
+    // the human released more links, but today's rate is used up
     let v = spend(&agent, w.writ.id(), &pw.link(5), 1, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "RATE");
     bench("A05", "drain faster than the daily rate (valid links)", "Rejected:RATE", "Rejected:RATE", gain(&w).await);
@@ -309,7 +309,7 @@ async fn a07_tripwire_deletes_key_after_three_strikes() -> anyhow::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------- 協定層攻擊（RPC 直接拒絕，沒有 tx hash）
+// ---------------------------------------------------------------- protocol-layer attacks (RPC rejects directly, no tx hash)
 
 #[tokio::test]
 async fn a08_agent_key_cannot_escape_its_method() -> anyhow::Result<()> {
@@ -317,24 +317,24 @@ async fn a08_agent_key_cannot_escape_its_method() -> anyhow::Result<()> {
     let (cell, agent, _pw) = open_cell(&w, default_opts(&w)).await?;
     let before = balance(&w.attacker).await;
 
-    // 呼叫 revoke／refresh_key／top_up 以外的寫入方法
+    // call a write method other than revoke / refresh_key / top_up
     let e = agent.call(w.writ.id(), "set_verifier").args_json(json!({"account": agent.id(), "pk_hex": "00"})).transact().await.unwrap_err();
     assert_eq!(proto_tag(&format!("{:?}", e)), "MethodNameMismatch");
     bench("A08", "agent key calls admin method set_verifier", "MethodNameMismatch", "MethodNameMismatch", gain(&w).await);
 
-    // 附帶存款（標準 ft_transfer 需要 1 yocto）
+    // attach a deposit (standard ft_transfer needs 1 yocto)
     let e = agent.call(w.writ.id(), "spend").args_json(json!({"preimage": "00", "j": 1, "to": w.attacker.id()}))
         .deposit(NearToken::from_yoctonear(1)).transact().await.unwrap_err();
     assert_eq!(proto_tag(&format!("{:?}", e)), "DepositWithFunctionCall");
     bench("A09", "agent attaches deposit (e.g. ft_transfer 1 yocto)", "DepositWithFunctionCall", "DepositWithFunctionCall", gain(&w).await);
 
-    // 直接把合約帳號的 NEAR 轉走
+    // transfer the contract account's NEAR away directly
     let e = agent.transfer_near(w.attacker.id(), NearToken::from_millinear(1)).await;
     let s = format!("{:?}", e);
     assert!(s.contains("RequiresFullAccess"), "plain transfer must be impossible: {}", s);
     bench("A10", "agent sends a plain Transfer from the contract account", "RequiresFullAccess", proto_tag(&s), gain(&w).await);
 
-    // 用 agent 的鑰匙呼叫別的合約
+    // call another contract with the agent's key
     let e = agent.call(w.attacker.id(), "anything").transact().await.unwrap_err();
     let s = format!("{:?}", e);
     assert!(s.contains("ReceiverMismatch") || s.contains("MethodNameMismatch") || s.contains("CodeDoesNotExist"), "{}", s);
@@ -347,7 +347,7 @@ async fn a08_agent_key_cannot_escape_its_method() -> anyhow::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------- 憑證層
+// ---------------------------------------------------------------- credential layer
 
 #[tokio::test]
 async fn a12_forged_or_tampered_attestation_is_refused() -> anyhow::Result<()> {
@@ -360,19 +360,19 @@ async fn a12_forged_or_tampered_attestation_is_refused() -> anyhow::Result<()> {
         "unit": UNIT.to_string(), "scope": [w.merchant.id()], "valid_until": vu.to_string(), "daily_links": 10,
         "lei_commit": hex::encode([2u8;32]), "ecr_commit": hex::encode([3u8;32]), "issuer_aid": AMC_ISSUER, "max_links": 1000, "max_strikes": 3, "attested_at": ATTESTED_NOW.to_string(), "verifier": w.verifier.id(),
     });
-    // (a) 非白名單的人自己簽
+    // (a) a non-allowlisted party signs by itself
     let rogue = SigningKey::generate(&mut rand::thread_rng());
     args["signature"] = json!(hex::encode(rogue.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
     let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args.clone()})).deposit(NearToken::from_near(1)).max_gas().transact().await?;
     let s = format!("{:?}", r.into_result()); assert!(s.contains("BAD_ATTESTATION"), "{}", { std::fs::write("/tmp/a12.txt", &s).ok(); "see /tmp/a12.txt" });
     bench("A12", "self-signed attestation (not a whitelisted verifier)", "BAD_ATTESTATION", "BAD_ATTESTATION", gain(&w).await);
-    // (b) 驗證者簽了，但出資者把 scope 改成攻擊者
+    // (b) the verifier signed, but the funder changed scope to the attacker
     args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
     args["scope"] = json!([w.attacker.id()]);
     let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args.clone()})).deposit(NearToken::from_near(1)).max_gas().transact().await?;
     let s = format!("{:?}", r.into_result()); assert!(s.contains("BAD_ATTESTATION"), "{}", { std::fs::write("/tmp/a12.txt", &s).ok(); "see /tmp/a12.txt" });
     bench("A13", "funder widens the scope after the verifier signed", "BAD_ATTESTATION", "BAD_ATTESTATION", gain(&w).await);
-    // (c) 另一個帳號拿走別人的 attestation 來開格（funder 綁在簽章裡）
+    // (c) another account takes someone else's attestation to open a cell (funder is bound into the signature)
     args["scope"] = json!([w.merchant.id()]);
     let r = w.attacker.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_near(1)).max_gas().transact().await?;
     let s = format!("{:?}", r.into_result()); assert!(s.contains("BAD_ATTESTATION"), "{}", { std::fs::write("/tmp/a12.txt", &s).ok(); "see /tmp/a12.txt" });
@@ -395,7 +395,7 @@ async fn a15_revoke_by_kel_real_keri_event_is_permissionless() -> anyhow::Result
     let ixn = v["ixn"]["raw_hex"].as_str().unwrap();
     let sig = v["ixn"]["sig_hex"].as_str().unwrap();
 
-    // 竄改 ixn 一個 byte → 簽章不過
+    // tamper with one byte of the ixn: signature fails
     let mut bad = hex::decode(ixn)?;
     let last = bad.len() - 3;
     bad[last] ^= 1;
@@ -404,7 +404,7 @@ async fn a15_revoke_by_kel_real_keri_event_is_permissionless() -> anyhow::Result
     assert!(format!("{:?}", r.into_result()).contains("BAD_KEL_SIGNATURE"));
     bench("A15", "forged KERI revocation event", "BAD_KEL_SIGNATURE", "BAD_KEL_SIGNATURE", gain(&w).await);
 
-    // 真簽章、真 ixn，但它錨定的是 AMC 的「發行」（seal s="0"），不是撤銷
+    // real signature, real ixn, but it anchors the AMC's "issuance" (seal s="0"), not the revocation
     let iss = &v["iss_ixn"];
     let r = w.attacker.call(w.writ.id(), "revoke_by_kel")
         .args_json(json!({"cell": cell.to_string(), "ixn": b64(iss["raw_hex"].as_str().unwrap()), "signature": b64(iss["sig_hex"].as_str().unwrap()), "ecr": null}))
@@ -412,7 +412,7 @@ async fn a15_revoke_by_kel_real_keri_event_is_permissionless() -> anyhow::Result
     assert!(format!("{:?}", r.into_result()).contains("NO_REVOCATION_SEAL"));
     bench("A24", "genuine signed KERI event that anchors the AMC issuance, not a revocation", "NO_REVOCATION_SEAL", "NO_REVOCATION_SEAL", gain(&w).await);
 
-    // 真的 ixn：任何人（這裡用 attacker 帳號）都能提交，不需要信任 watcher
+    // real ixn: anyone (here the attacker account) can submit it, no need to trust a watcher
     let funder_before = balance(&w.funder).await;
     let out = w.attacker.call(w.writ.id(), "revoke_by_kel")
         .args_json(json!({"cell": cell.to_string(), "ixn": b64(ixn), "signature": b64(sig), "ecr": null})).max_gas().transact().await?;
@@ -447,7 +447,7 @@ async fn a16_failed_transfer_refunds_vault_and_others_cannot_revoke() -> anyhow:
     assert!(format!("{:?}", r.into_result()).contains("NOT_AUTHORIZED"));
     bench("A16", "stranger tries to revoke (griefing)", "NOT_AUTHORIZED", "NOT_AUTHORIZED", gain(&w).await);
 
-    // 法人自己撤銷
+    // the legal entity revokes by itself
     w.funder.call(w.writ.id(), "revoke").args_json(json!({"cell": cell.to_string(), "evidence": "manual"})).transact().await?.into_result()?;
     let e = spend(&agent, w.writ.id(), &pw.link(2), 1, w.merchant.id()).await.unwrap_err();
     assert_eq!(proto_tag(&e), "AccessKeyNotFound");
@@ -458,7 +458,7 @@ async fn a16_failed_transfer_refunds_vault_and_others_cannot_revoke() -> anyhow:
     Ok(())
 }
 
-// ---------------------------------------------------------------- 監理調閱（tier-1）
+// ---------------------------------------------------------------- regulator disclosure (tier-1)
 
 #[tokio::test]
 async fn a17_unseal_needs_supervisor_waiting_period_and_matching_commitment() -> anyhow::Result<()> {
@@ -467,7 +467,7 @@ async fn a17_unseal_needs_supervisor_waiting_period_and_matching_commitment() ->
     let supervisor = w.worker.dev_create_account().await?;
     let reason = hex::encode(Sha256::digest(b"court order 2026-TPE-001"));
 
-    // 非監理方不能提出調閱
+    // a non-regulator cannot request disclosure
     let r = w.attacker.call(w.writ.id(), "request_unseal").args_json(json!({"cell": cell.to_string(), "reason_hash": reason})).transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("NOT_SUPERVISOR"));
     bench("A17", "non-supervisor requests disclosure of the legal entity", "NOT_SUPERVISOR", "NOT_SUPERVISOR", gain(&w).await);
@@ -475,7 +475,7 @@ async fn a17_unseal_needs_supervisor_waiting_period_and_matching_commitment() ->
     w.writ.call("set_supervisor").args_json(json!({"account": supervisor.id(), "enabled": true})).transact().await?.into_result()?;
     supervisor.call(w.writ.id(), "request_unseal").args_json(json!({"cell": cell.to_string(), "reason_hash": reason})).transact().await?.into_result()?;
 
-    // 等待期內不能揭露
+    // cannot disclose during the waiting period
     let release = |lei: &str, salt: &str| {
         let (lei, salt) = (lei.to_string(), salt.to_string());
         let v = w.verifier.clone(); let id = w.writ.id().clone(); let c = cell.to_string();
@@ -485,11 +485,11 @@ async fn a17_unseal_needs_supervisor_waiting_period_and_matching_commitment() ->
     assert!(e.contains("TOO_EARLY"), "{}", e);
     bench("A18", "verifier discloses before the public waiting period ends", "TOO_EARLY", "TOO_EARLY", gain(&w).await);
 
-    // 法人提出異議（公開留痕，不阻擋）
+    // the legal entity objects (public trace, does not block)
     w.funder.call(w.writ.id(), "object_unseal").args_json(json!({"cell": cell.to_string()})).transact().await?.into_result()?;
     w.worker.fast_forward(200).await?;
 
-    // 驗證者想揭露一個不同的 LEI（栽贓給別家公司）
+    // the verifier tries to disclose a different LEI (framing another company)
     let e = format!("{:?}", release("529900T8BM49AURSDO55", "salt-demo").await);
     assert!(e.contains("COMMIT_MISMATCH"), "{}", e);
     bench("A19", "verifier discloses a different LEI than it committed to", "COMMIT_MISMATCH", "COMMIT_MISMATCH", gain(&w).await);
@@ -504,10 +504,10 @@ async fn a17_unseal_needs_supervisor_waiting_period_and_matching_commitment() ->
     Ok(())
 }
 
-// ---------------------------------------------------------------- NEP-141 穩定幣路徑
+// ---------------------------------------------------------------- NEP-141 stablecoin path
 
 const FT_WASM: &str = "res/ft_mock.wasm";
-const T: u128 = 1_000_000; // tUSDC 6 位小數
+const T: u128 = 1_000_000; // tUSDC, 6 decimals
 
 async fn ft_balance(w: &World, token: &Contract, who: &AccountId) -> u128 {
     let v: String = token.view("ft_balance_of").args_json(json!({"account_id": who})).await.unwrap().json().unwrap();
@@ -524,28 +524,28 @@ async fn b04_stablecoin_cell_pays_in_nep141_and_refunds_on_revoke() -> anyhow::R
     }
     let mut o = default_opts(&w);
     o.asset = Some(token.id().clone());
-    o.unit = T / 10; // 每節 0.1 tUSDC
+    o.unit = T / 10; // 0.1 tUSDC per link
     let (cell, agent, pw) = open_cell(&w, o).await?;
-    // 法人以 ft_transfer_call 入金 5 tUSDC，msg = cell id
+    // the legal entity deposits 5 tUSDC with ft_transfer_call, msg = cell id
     w.funder.call(token.id(), "ft_transfer_call")
         .args_json(json!({"receiver_id": w.writ.id(), "amount": (5 * T).to_string(), "msg": cell.to_string()}))
         .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
     assert_eq!(c["vault"], (5 * T).to_string());
 
-    // 付 3 節給商家
+    // pay 3 links to the merchant
     let v = spend(&agent, w.writ.id(), &pw.link(3), 3, w.merchant.id()).await.unwrap();
     assert!(v.get("Paid").is_some(), "{}", v);
     assert_eq!(ft_balance(&w, &token, w.merchant.id()).await, 3 * T / 10);
     bench("B04", "stablecoin cell: agent pays 3 links in NEP-141 (contract attaches the 1 yocto)", "merchant +0.3 tUSDC", "merchant +0.3 tUSDC", 0);
 
-    // 注入攻擊同樣擋下
+    // the injection attack is blocked the same way
     let v = spend(&agent, w.writ.id(), &pw.link(4), 1, w.attacker.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "SCOPE");
     assert_eq!(ft_balance(&w, &token, w.attacker.id()).await, 0);
     bench("A20", "prompt-injected payment from a stablecoin cell", "Rejected:SCOPE", "Rejected:SCOPE", gain(&w).await);
 
-    // 攻擊者持有同一種代幣，硬塞進這格（想污染帳）→ 退回
+    // the attacker holds the same token and forces it into this cell (trying to pollute the books): refunded
     w.funder.call(token.id(), "ft_transfer").args_json(json!({"receiver_id": w.attacker.id(), "amount": T.to_string()}))
         .deposit(NearToken::from_yoctonear(1)).transact().await?.into_result()?;
     w.attacker.call(token.id(), "ft_transfer_call")
@@ -556,12 +556,12 @@ async fn b04_stablecoin_cell_pays_in_nep141_and_refunds_on_revoke() -> anyhow::R
     assert_eq!(c["vault"], (5 * T - 3 * T / 10).to_string());
     bench("A25", "non-funder pushes the cell's own stablecoin into it", "refunded, vault unchanged", "refunded", gain(&w).await);
 
-    // 法人撤銷 → 剩餘代幣退回法人
+    // the legal entity revokes: remaining tokens are refunded to the legal entity
     let before = ft_balance(&w, &token, w.funder.id()).await;
     w.funder.call(w.writ.id(), "revoke").args_json(json!({"cell": cell.to_string(), "evidence": "manual"})).max_gas().transact().await?.into_result()?;
     let after = ft_balance(&w, &token, w.funder.id()).await;
     assert_eq!(after - before, 5 * T - 3 * T / 10, "remaining 4.7 tUSDC refunded");
-    // 撤銷後法人再入金 → 退回（格已關閉）
+    // the legal entity deposits again after revocation: refunded (the cell is closed)
     w.funder.call(token.id(), "ft_transfer_call")
         .args_json(json!({"receiver_id": w.writ.id(), "amount": T.to_string(), "msg": cell.to_string()}))
         .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
@@ -575,7 +575,7 @@ async fn a21_token_cell_refuses_foreign_deposits_and_asset_swap() -> anyhow::Res
     let token = w.worker.dev_deploy(&std::fs::read(FT_WASM)?).await?;
     token.call("new").args_json(json!({"owner_id": w.attacker.id(), "total_supply": (1_000 * T).to_string()})).transact().await?.into_result()?;
     w.attacker.call(token.id(), "storage_deposit").args_json(json!({"account_id": w.writ.id()})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
-    // 開一個 NEAR 格；攻擊者把垃圾代幣灌進去，想讓格的金庫帳變亂
+    // open a NEAR cell; the attacker pours junk tokens in, trying to confuse the cell's vault books
     let (cell, _agent, _pw) = open_cell(&w, default_opts(&w)).await?;
     w.attacker.call(token.id(), "ft_transfer_call")
         .args_json(json!({"receiver_id": w.writ.id(), "amount": (7 * T).to_string(), "msg": cell.to_string()}))
@@ -585,7 +585,7 @@ async fn a21_token_cell_refuses_foreign_deposits_and_asset_swap() -> anyhow::Res
     assert_eq!(c["vault"], (1_000_000_000_000_000_000_000_000 - fee(20)).to_string());
     bench("A21", "foreign token pushed into a cell via ft_transfer_call", "refunded, vault unchanged", "refunded", gain(&w).await);
 
-    // 驗證者簽的是 NEAR 格，法人想改成代幣格
+    // the verifier signed a NEAR cell, the legal entity tries to turn it into a token cell
     let agent_sk = SecretKey::from_random(KeyType::ED25519);
     let pw = Payword::new(5);
     let vu = now_ns(&w).await? + 3_600_000_000_000;
@@ -601,14 +601,14 @@ async fn a21_token_cell_refuses_foreign_deposits_and_asset_swap() -> anyhow::Res
     Ok(())
 }
 
-// ---------------------------------------------------------------- 邊界與帳務（由 cargo-mutants 找出的缺口補上）
+// ---------------------------------------------------------------- edges and accounting (gaps found by cargo-mutants, now filled)
 
 #[tokio::test]
 async fn b05_boundaries_accounting_and_events() -> anyhow::Result<()> {
     let w = world().await?;
-    // 金庫恰好 = 3 節：開格費 + 3 × 0.01 NEAR
+    // vault is exactly 3 links: opening fee + 3 × 0.01 NEAR
     let mut o = default_opts(&w);
-    o.n = 5; o.daily = 5; o.deposit_near = 0; // 下面自己算存款
+    o.n = 5; o.daily = 5; o.deposit_near = 0; // compute the deposit below by hand
     let agent_sk = SecretKey::from_random(KeyType::ED25519);
     let pw = Payword::new(5);
     let vu = now_ns(&w).await? + 3_600_000_000_000;
@@ -625,24 +625,24 @@ async fn b05_boundaries_accounting_and_events() -> anyhow::Result<()> {
     let today = now_ns(&w).await? / 86_400_000_000_000;
     assert!(c["day"].as_u64().unwrap() == today || c["day"].as_u64().unwrap() + 1 == today, "day bucket = timestamp / 1 day");
 
-    // 金庫只夠 3 節，要 4 節 → FUNDS（金額 = j × unit，不是 j + unit）
+    // the vault covers only 3 links, 4 are wanted -> FUNDS (amount = j × unit, not j + unit)
     let v = spend(&agent, w.writ.id(), &pw.link(4), 4, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "FUNDS", "{}", v);
-    // 金庫剛好夠 3 節 → 付得出去；再 1 節 → FUNDS
+    // the vault covers exactly 3 links -> payable; one more link -> FUNDS
     let v = spend(&agent, w.writ.id(), &pw.link(3), 3, w.merchant.id()).await.unwrap();
     assert!(v.get("Paid").is_some(), "vault exactly equal to amount must pay: {}", v);
     let v = spend(&agent, w.writ.id(), &pw.link(4), 1, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "FUNDS");
     bench("A23", "spend more than the vault holds (valid links, within rate)", "Rejected:FUNDS", "Rejected:FUNDS", gain(&w).await);
 
-    // 追加入金後，用完整條鏈（idx + j == n）必須成功
+    // after topping up, using the whole chain (idx + j == n) must succeed
     w.funder.call(w.writ.id(), "top_up").args_json(json!({"cell": cell})).deposit(NearToken::from_yoctonear(2 * UNIT)).transact().await?.into_result()?;
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell})).await?.json()?;
     assert_eq!(c["vault"], (2 * UNIT).to_string(), "top_up adds exactly the deposit");
     let v = spend(&agent, w.writ.id(), &pw.link(5), 2, w.merchant.id()).await.unwrap();
     assert_eq!(v["Paid"]["remaining_links"], 0, "the last link of the chain is spendable: {}", v);
 
-    // 計數：這格被拒 1 次；全域 rejected/cells
+    // counters: this cell rejected once; global rejected/cells
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell})).await?.json()?;
     assert_eq!(c["rejects"], 2);
     assert_eq!(c["spends"], 2);
@@ -653,7 +653,7 @@ async fn b05_boundaries_accounting_and_events() -> anyhow::Result<()> {
     assert_eq!(st["rejected"], 2);
     assert_eq!(st["paid"], 2);
     assert_eq!(st["paid_yocto"], (5 * UNIT).to_string());
-    // 償付能力：金庫總和 = 0.9 NEAR（第二格）+ 0（第一格已用完）
+    // solvency: vault total = 0.9 NEAR (second cell) + 0 (first cell used up)
     let sol: Value = w.writ.view("solvency").await?.json()?;
     assert_eq!(sol["vault_total"], (1_000_000_000_000_000_000_000_000 - fee(20)).to_string());
     assert_eq!(sol["solvent"], true);
@@ -689,7 +689,7 @@ async fn b06_refresh_key_restores_gas_allowance() -> anyhow::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------- 第二輪：讀碼審查找到的洞（A26–A30、B07）
+// ---------------------------------------------------------------- round 2: holes found in code review (A26-A30, B07)
 
 async fn send_register(w: &World, args: &Value) -> anyhow::Result<near_workspaces::result::ExecutionFinalResult> {
     Ok(w.funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_near(1)).max_gas().transact().await?)
@@ -754,13 +754,13 @@ async fn a28_gas_burn_cannot_reach_another_cells_vault() -> anyhow::Result<()> {
             b - v
         }
     };
-    // 受害格
+    // victim cell
     let mut victim = default_opts(&w);
     victim.amc_said = "EVICTIM".into();
     open_cell(&w, victim).await?;
     let before = surplus(&w).await;
 
-    // 串通的法人與 agent：開一格，用格式錯誤的參數燒 gas（panic 不算 strike）
+    // colluding legal entity and agent: open a cell and burn gas with malformed arguments (a panic does not count as a strike)
     let (cell, agent, _pw) = open_cell(&w, default_opts(&w)).await?;
     for _ in 0..20 {
         let r = agent.call(w.writ.id(), "spend").args_json(json!({"preimage": 1, "j": "x", "to": "!!"}))
@@ -770,7 +770,7 @@ async fn a28_gas_burn_cannot_reach_another_cells_vault() -> anyhow::Result<()> {
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
     assert_eq!(c["strikes"], 0, "malformed calls burn gas without reaching the policy checks");
 
-    // 免費續命被拒
+    // free refresh rejected
     let r = w.funder.call(w.writ.id(), "refresh_key").args_json(json!({"cell": cell.to_string()})).transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("REFRESH_UNPAID"));
     assert!(surplus(&w).await >= before, "this cell's fee covers everything its key burned");
@@ -778,7 +778,7 @@ async fn a28_gas_burn_cannot_reach_another_cells_vault() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// HR 路徑：LE 撤銷員工的 ECR。fixtures 由 keri/make_test_vectors.py 以真 keripy 產生。
+/// HR path: the LE revokes the employee's ECR. Fixtures are generated with real keripy by keri/make_test_vectors.py.
 #[tokio::test]
 async fn b07_hr_revokes_the_ecr_without_the_departing_employee() -> anyhow::Result<()> {
     let w = world().await?;
@@ -795,13 +795,13 @@ async fn b07_hr_revokes_the_ecr_without_the_departing_employee() -> anyhow::Resu
     let b64 = |h: &str| near_sdk::base64::Engine::encode(&near_sdk::base64::prelude::BASE64_STANDARD, hex::decode(h).unwrap());
     let (ixn, sig) = (b64(e["raw_hex"].as_str().unwrap()), b64(e["sig_hex"].as_str().unwrap()));
 
-    // 鹽值錯 → 打不開承諾，無法冒充法人
+    // wrong salt: the commitment cannot be opened, so the legal entity cannot be impersonated
     let r = w.attacker.call(w.writ.id(), "revoke_by_kel")
         .args_json(json!({"cell": cell.to_string(), "ixn": ixn, "signature": sig, "ecr": {"le_aid": le_aid, "le_pk": le_pk, "ecr_said": ecr_said, "salt": "wrong"}})).max_gas().transact().await?;
     assert!(format!("{:?}", r.into_result()).contains("BAD_ECR_OPENING"));
     bench("A29", "attacker presents its own key as the legal entity to revoke the mandate", "BAD_ECR_OPENING", "BAD_ECR_OPENING", gain(&w).await);
 
-    // 承諾打得開，但事件被竄改 → 簽章不過
+    // commitment opens, but the event was tampered with: signature fails
     let mut tampered = hex::decode(e["raw_hex"].as_str().unwrap())?;
     let last = tampered.len() - 3;
     tampered[last] ^= 1;
@@ -810,7 +810,7 @@ async fn b07_hr_revokes_the_ecr_without_the_departing_employee() -> anyhow::Resu
     assert!(format!("{:?}", r.into_result()).contains("BAD_KEL_SIGNATURE"));
     bench("A30", "forged ECR revocation event with a valid commitment opening", "BAD_KEL_SIGNATURE", "BAD_KEL_SIGNATURE", gain(&w).await);
 
-    // 真事件：任何人交都可以
+    // real event: anyone may submit
     w.merchant.call(w.writ.id(), "revoke_by_kel")
         .args_json(json!({"cell": cell.to_string(), "ixn": ixn, "signature": sig, "ecr": {"le_aid": le_aid, "le_pk": le_pk, "ecr_said": ecr_said, "salt": ECR_COMMIT_SALT}})).max_gas().transact().await?.into_result()?;
     let err = spend(&agent, w.writ.id(), &pw.link(2), 1, w.merchant.id()).await.unwrap_err();
@@ -819,7 +819,7 @@ async fn b07_hr_revokes_the_ecr_without_the_departing_employee() -> anyhow::Resu
     Ok(())
 }
 
-// ---------------------------------------------------------------- 第三輪：發票、單筆上限、恢復、鎖定、輪替
+// ---------------------------------------------------------------- round 3: invoice, per-payment cap, recovery, lock, rotation
 
 async fn spend_invoice(agent: &Account, writ: &AccountId, preimage: &str, j: u32, to: &AccountId, invoice: &[u8]) -> Value {
     let inv = hex::encode(Sha256::digest(invoice));
@@ -870,7 +870,7 @@ async fn a33_stale_attestation_and_wrong_aid() -> anyhow::Result<()> {
     assert!(format!("{:?}", r.into_result()).contains("STALE_ATTESTATION"));
     bench("A33", "attestation signed before a revocation is used long afterwards", "STALE_ATTESTATION", "STALE_ATTESTATION", gain(&w).await);
 
-    // 同一把鑰匙替別的 AID 簽的錨定事件，不能拿來撤銷這一格
+    // an anchoring event signed by the same key for a different AID cannot be used to revoke this cell
     let sk = SigningKey::generate(&mut rand::thread_rng());
     let mut o = default_opts(&w);
     o.issuer_pk = hex::encode(sk.verifying_key().to_bytes());
@@ -956,7 +956,7 @@ async fn b10_locked_deployment_has_no_full_access_key() -> anyhow::Result<()> {
         .transact().await?.into_result()?;
     let keys = worker.view_access_keys(acc.id()).await?;
     assert!(keys.is_empty(), "no key can move the vaults: {:?}", keys.len());
-    // owner 從外部帳號管理白名單
+    // the owner manages the allowlist from an external account
     owner.call(acc.id(), "set_verifier").args_json(json!({"account": owner.id(), "pk_hex": hex::encode([1u8; 32])})).transact().await?.into_result()?;
     let got: String = worker.view(acc.id(), "owner").await?.json::<Value>()?.as_str().unwrap().to_string();
     assert_eq!(got, owner.id().as_str());
@@ -964,7 +964,7 @@ async fn b10_locked_deployment_has_no_full_access_key() -> anyhow::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------- 第四輪：獨立審計找到的問題
+// ---------------------------------------------------------------- round 4: problems found by an independent audit
 
 #[tokio::test]
 async fn b11_refund_failure_is_claimable_and_excess_near_returned() -> anyhow::Result<()> {
@@ -985,7 +985,7 @@ async fn b11_refund_failure_is_claimable_and_excess_near_returned() -> anyhow::R
 
     w.funder.call(token.id(), "ft_transfer_call").args_json(json!({"receiver_id": w.writ.id(), "amount": (5 * T).to_string(), "msg": cell.to_string()}))
         .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
-    // 法人把代幣餘額清掉並退出代幣，之後撤銷：退款一定失敗
+    // the legal entity empties its token balance and leaves the token, then revokes: the refund must fail
     w.funder.call(token.id(), "ft_transfer").args_json(json!({"receiver_id": w.writ.id(), "amount": (9_995 * T).to_string()}))
         .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
     w.funder.call(token.id(), "storage_unregister").args_json(json!({})).deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
@@ -1028,7 +1028,7 @@ async fn a38_removed_verifier_and_supervisor_lose_their_powers() -> anyhow::Resu
     Ok(())
 }
 
-/// 每筆付款的實際 gas（README 引用這個數字）。
+/// actual gas per payment (the README quotes this number).
 #[tokio::test]
 async fn b13_gas_cost_of_a_payment() -> anyhow::Result<()> {
     let w = world().await?;
@@ -1052,12 +1052,12 @@ async fn b13_gas_cost_of_a_payment() -> anyhow::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------- 第五輪：cargo-mutants 存活者
+// ---------------------------------------------------------------- round 5: cargo-mutants survivors
 
 #[tokio::test]
 async fn b14_boundaries_from_mutation_survivors() -> anyhow::Result<()> {
     let w = world().await?;
-    // 單筆上限：剛好等於上限可以付
+    // per-payment cap: exactly the cap can be paid
     let mut o = default_opts(&w);
     o.max_links = 3;
     o.amc_said = "EB14A".into();
@@ -1068,7 +1068,7 @@ async fn b14_boundaries_from_mutation_survivors() -> anyhow::Result<()> {
     let paid: bool = w.writ.view("invoice_paid").args_json(json!({"cell": cell.to_string(), "invoice_hash": unpaid})).await?.json()?;
     assert!(!paid, "an invoice never paid is not on record");
 
-    // maxStrikes = 0：一直被拒也不刪鑰匙
+    // maxStrikes = 0: repeated rejections do not delete the key
     let mut o = default_opts(&w);
     o.max_strikes = 0;
     o.amc_said = "EB14B".into();
@@ -1081,7 +1081,7 @@ async fn b14_boundaries_from_mutation_survivors() -> anyhow::Result<()> {
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
     assert_eq!(c["status"], "Active");
 
-    // solvency 的 storage = 用量 × 每 byte 成本
+    // solvency storage = usage × cost per byte
     let sol: Value = w.writ.view("solvency").await?.json()?;
     let usage = w.writ.view_account().await?.storage_usage as u128;
     assert_eq!(sol["storage"], (usage * 10_000_000_000_000_000_000u128).to_string());
@@ -1100,7 +1100,7 @@ async fn b15_near_refund_failure_is_kept_and_claimable() -> anyhow::Result<()> {
             sol["vault_total"].as_str().unwrap().parse::<u128>().unwrap()
         }
     };
-    // 法人是可以刪掉再重建的子帳號
+    // the legal entity is a sub-account that can be deleted and recreated
     let root = w.worker.root_account()?;
     let funder_sk = SecretKey::from_random(KeyType::ED25519);
     let funder = root.create_subaccount("corp").initial_balance(NearToken::from_near(10)).keys(funder_sk.clone()).transact().await?.into_result()?;
@@ -1117,14 +1117,14 @@ async fn b15_near_refund_failure_is_kept_and_claimable() -> anyhow::Result<()> {
     let id: String = funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_near(1)).max_gas().transact().await?.into_result()?.json()?;
     let vault = 1_000_000_000_000_000_000_000_000 - fee(20);
 
-    // 法人帳號消失，撤銷的退款一定失敗
+    // the legal entity account is gone, the revocation refund must fail
     funder.clone().delete_account(w.merchant.id()).await?.into_result()?;
     w.verifier.call(w.writ.id(), "revoke").args_json(json!({"cell": id, "evidence": "manual"})).max_gas().transact().await?.into_result()?;
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": id})).await?.json()?;
     assert_eq!(c["unclaimed"], vault.to_string());
     assert_eq!(vault_total(&w).await, vault, "a kept refund still counts against the balance");
 
-    // 法人重建帳號後領回
+    // the legal entity claims it back after recreating the account
     let funder = root.create_subaccount("corp").initial_balance(NearToken::from_near(3)).keys(funder_sk).transact().await?.into_result()?;
     let before = balance(&funder).await;
     funder.call(w.writ.id(), "claim_refund").args_json(json!({"cell": id})).gas(near_workspaces::types::Gas::from_tgas(60)).transact().await?.into_result()?;
@@ -1134,7 +1134,7 @@ async fn b15_near_refund_failure_is_kept_and_claimable() -> anyhow::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------- 第六輪：agent 雇 agent，開除一人整棵樹斷電
+// ---------------------------------------------------------------- round 6: agents hiring agents, firing one person powers off the whole tree
 
 fn hire_args(agent_pk: &near_workspaces::types::PublicKey, pw: &Payword, scope: &[&AccountId], valid_until: &str, daily: u32, max_links: u32) -> Value {
     json!({"agent_pk": agent_pk, "w0": pw.w0(), "scope": scope, "valid_until": valid_until, "daily_links": daily, "max_links": max_links})
@@ -1145,7 +1145,7 @@ async fn hire(agent: &Account, writ: &AccountId, preimage: &str, j: u32, child: 
         .gas(near_workspaces::types::Gas::from_tgas(60)).transact().await.unwrap().into_result().unwrap().json().unwrap()
 }
 
-/// 開根格，再雇一個子 agent。回傳 (根 cell, 根 agent, 根鏈, 子 cell, 子 agent, 子鏈, valid_until)
+/// Open a root cell, then hire a child agent. Returns (root cell, root agent, root chain, child cell, child agent, child chain, valid_until)
 async fn tree(w: &World, links: u32) -> anyhow::Result<(u64, Account, Payword, u64, Account, Payword, String)> {
     let mut o = default_opts(w);
     o.scope = vec![w.merchant.id().clone(), w.verifier.id().clone()];
@@ -1183,7 +1183,7 @@ async fn b16_agent_hires_a_narrower_agent_that_pays() -> anyhow::Result<()> {
     assert!(v.get("Paid").is_some(), "{}", v);
     assert_eq!(balance(&w.merchant).await - before, 2 * UNIT);
 
-    // 子 agent 付不到上層才有的對手；上層的鏈節對它也沒用
+    // the child agent cannot pay counterparties that exist only at the upper level; the upper level's chain links are useless to it
     let v = spend(&cagent, w.writ.id(), &cpw.link(3), 1, w.verifier.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "SCOPE");
     let v = spend(&cagent, w.writ.id(), &pw.link(6), 1, w.merchant.id()).await.unwrap();
@@ -1202,12 +1202,12 @@ async fn a40_a_hire_can_only_narrow() -> anyhow::Result<()> {
     let fresh = || SecretKey::from_random(KeyType::ED25519).public_key();
     let np = Payword::new(3);
 
-    // 子 agent 想給孫 agent 自己都沒有的對手
+    // the child agent wants to give the grandchild agent a counterparty it does not have itself
     let v = hire(&cagent, w.writ.id(), &cpw.link(1), 1, hire_args(&fresh(), &Payword::new(1), &[w.verifier.id()], &until, 5, 1)).await;
     assert_eq!(v["Rejected"]["reason"], "HIRE_SCOPE");
     bench("A40", "sub-agent grants a counterparty it does not have itself", "Rejected:HIRE_SCOPE", "Rejected:HIRE_SCOPE", gain(&w).await);
 
-    // 期限、速率、單筆上限放寬
+    // deadline, rate and per-payment cap are loosened
     let later = (until.parse::<u64>()? + 1).to_string();
     let v = hire(&agent, w.writ.id(), &pw.link(6), 1, hire_args(&fresh(), &np, &[w.merchant.id()], &later, 5, 1)).await;
     assert_eq!(v["Rejected"]["reason"], "HIRE_TERMS");
@@ -1215,13 +1215,13 @@ async fn a40_a_hire_can_only_narrow() -> anyhow::Result<()> {
     assert_eq!(v["Rejected"]["reason"], "HIRE_TERMS");
     bench("A41", "hire with a later expiry or a higher rate than the parent", "Rejected:HIRE_TERMS", "Rejected:HIRE_TERMS", gain(&w).await);
 
-    // 沒有員工撥的鏈節，雇不到預算
+    // without links released by the employee, no budget can be hired
     let forged = hex::encode([9u8; 32]);
     let v = hire(&agent, w.writ.id(), &forged, 3, hire_args(&fresh(), &np, &[w.merchant.id()], &until, 5, 1)).await;
     assert_eq!(v["Rejected"]["reason"], "CHAIN");
     bench("A42", "agent hires with budget the employee never released", "Rejected:CHAIN", "Rejected:CHAIN", gain(&w).await);
 
-    // 陌生格解僱別人的子 agent
+    // a stranger cell dismisses someone else's child agent
     let other = SecretKey::from_random(KeyType::ED25519);
     let mut o = default_opts(&w);
     o.amc_said = "EOTHER".into();
@@ -1231,7 +1231,7 @@ async fn a40_a_hire_can_only_narrow() -> anyhow::Result<()> {
     assert!(format!("{:?}", r.into_result()).contains("NOT_PARENT"));
     bench("A43", "an agent dismisses someone else's sub-agent", "NOT_PARENT", "NOT_PARENT", gain(&w).await);
 
-    // 上層可以解僱自己雇的
+    // the upper level can dismiss the ones it hired
     agent.call(w.writ.id(), "dismiss").args_json(json!({"child": child.to_string()})).gas(near_workspaces::types::Gas::from_tgas(60)).transact().await?.into_result()?;
     let keys = w.worker.view_access_keys(w.writ.id()).await?;
     assert!(keys.iter().all(|k| k.public_key != cagent.secret_key().public_key()));
@@ -1242,7 +1242,7 @@ async fn a40_a_hire_can_only_narrow() -> anyhow::Result<()> {
 async fn a44_the_tree_has_a_depth_and_size_limit() -> anyhow::Result<()> {
     let w = world().await?;
     let (cell, agent, pw, _child, c1, cpw1, until) = tree(&w, 8).await?;
-    // 第 2、3 層
+    // levels 2 and 3
     let sk2 = SecretKey::from_random(KeyType::ED25519);
     let pw2 = Payword::new(3);
     let v = hire(&c1, w.writ.id(), &cpw1.link(3), 3, hire_args(&sk2.public_key(), &pw2, &[w.merchant.id()], &until, 5, 2)).await;
@@ -1257,7 +1257,7 @@ async fn a44_the_tree_has_a_depth_and_size_limit() -> anyhow::Result<()> {
     assert_eq!(v["Rejected"]["reason"], "HIRE_DEPTH");
     bench("A44", "chain of hires past the depth limit", "Rejected:HIRE_DEPTH", "Rejected:HIRE_DEPTH", gain(&w).await);
 
-    // 根格一直雇到上限（目前 4 格）
+    // the root cell keeps hiring up to the limit (currently 4 cells)
     let mut k = 9;
     let mut last = Value::Null;
     for _ in 0..13 {
@@ -1270,7 +1270,7 @@ async fn a44_the_tree_has_a_depth_and_size_limit() -> anyhow::Result<()> {
     assert_eq!(root["tree_size"], 16);
     bench("A45", "hires past the tree size limit", "Rejected:HIRE_TREE", "Rejected:HIRE_TREE", gain(&w).await);
 
-    // 滿編的樹一筆交易全部關掉
+    // a full tree is shut down in one transaction
     let keys_before = w.worker.view_access_keys(w.writ.id()).await?.len();
     let funder_before = balance(&w.funder).await;
     let out = w.funder.call(w.writ.id(), "revoke").args_json(json!({"cell": cell.to_string(), "evidence": "employee left"}))
@@ -1289,7 +1289,7 @@ async fn a44_the_tree_has_a_depth_and_size_limit() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 主秀：HR 撤銷員工的 ECR，整棵樹斷電。fixtures 是真 keripy 事件。
+/// Main show: HR revokes the employee's ECR and the whole tree is powered off. Fixtures are real keripy events.
 #[tokio::test]
 async fn b18_hr_fires_one_employee_and_the_whole_tree_goes_dark() -> anyhow::Result<()> {
     let w = world().await?;
@@ -1337,7 +1337,7 @@ async fn b18_hr_fires_one_employee_and_the_whole_tree_goes_dark() -> anyhow::Res
     Ok(())
 }
 
-// ---------------------------------------------------------------- 第七輪：Who pays is named before the agent buys
+// ---------------------------------------------------------------- round 7: Who pays is named before the agent buys
 
 const LEI: &str = "WRITDEMO000000000017";
 const LEI_SALT: &str = "salt-lei";
@@ -1357,12 +1357,12 @@ struct CreditWorld {
     unit: u128,
 }
 
-/// 短時間窗的合約，一棵可賒帳的格。保證人質押 stake NEAR。金庫 30 節。
+/// A contract with a short time window, a cell that can buy on credit. The guarantor stakes stake NEAR. The vault holds 30 links.
 async fn credit_world(bond_bps: u32, stake: u128, grace: u64, recourse: u64) -> anyhow::Result<CreditWorld> {
     credit_world_with(bond_bps, stake, grace, recourse, 30 * UNIT, LEI).await
 }
 
-/// vault：開格後的金庫（yocto）。committed_lei：驗證者承諾的 LEI（測栽贓時和 LE 簽的不同）。
+/// vault: the vault after opening the cell (yocto). committed_lei: the LEI the verifier commits to (differs from the one the LE signed when testing framing).
 async fn credit_world_with(bond_bps: u32, stake: u128, grace: u64, recourse: u64, vault: u128, committed_lei: &str) -> anyhow::Result<CreditWorld> {
     credit_world_full(bond_bps, stake, grace, recourse, vault, committed_lei, 0).await
 }
@@ -1376,7 +1376,7 @@ async fn credit_world_fee(bond_bps: u32, premium_bps: u32, stake: u128, grace: u
     credit_world_x(CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei.to_string(), inspect, ..Default::default() }).await
 }
 
-/// 信用世界的所有選項。預設：沒保證金、沒費用、質押 5 NEAR、金庫 30 節。
+/// All options of the credit world. Defaults: no bond, no fee, stake 5 NEAR, vault 30 links.
 struct CwOpts { bond: u32, premium: u32, stake: u128, grace: u64, recourse: u64, vault: u128, lei: String, inspect: u64, max_tenor: u64, fee_payer: &'static str, accept_ttl: u64, cap: u32, extra_sellers: u32, token: bool }
 impl Default for CwOpts {
     fn default() -> Self {
@@ -1403,7 +1403,7 @@ async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
     }
     let attacker_start = balance(&attacker).await;
     let w = World { worker, writ, verifier, verifier_sk, funder, merchant, attacker, attacker_start };
-    // 代幣世界：6 位小數的穩定幣，每節 1 顆
+    // token world: 6-decimal stablecoin, 1 token per link
     let ft = if token {
         let t = w.worker.dev_deploy(&std::fs::read(FT_WASM)?).await?;
         t.call("new").args_json(json!({"owner_id": w.funder.id(), "total_supply": (1_000_000 * T).to_string()})).transact().await?.into_result()?;
@@ -1444,7 +1444,7 @@ async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
                    "terms_sig": terms_sig, "entity_tag": "ENTITY-7", "arbiter": arbiter.id(), "fee_payer": fee_payer, "seller_cap_bps": cap},
     });
     if let Some(t) = &ft {
-        // 驗證者簽的信用資產和格的資產不同：不能開
+        // the credit asset signed by the verifier differs from the cell's asset: cannot open
         args["asset"] = json!(t.id());
         let sig = w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes());
         let mut bad = args.clone();
@@ -1455,13 +1455,13 @@ async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
     }
     args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
     if ft.is_some() {
-        // 信用資產簽進去了：事後改掉也開不了
+        // the credit asset is signed in: changing it afterwards cannot open either
         let mut bad = args.clone();
         bad["credit"]["asset"] = Value::Null;
         let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": bad})).deposit(NearToken::from_near(1)).max_gas().transact().await?;
         assert!(format!("{:?}", r.into_result()).contains("BAD_ATTESTATION"));
     }
-    // 保證人簽的是 Seller，公司想改成 Buyer（反過來也一樣）：簽章不過
+    // the guarantor signed Seller, the company tries to change it to Buyer (and the reverse): signature fails
     if fee_payer == "Seller" || cap > 0 {
         let mut tampered = args.clone();
         tampered["credit"]["fee_payer"] = json!("Buyer");
@@ -1469,7 +1469,7 @@ async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
         let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": tampered})).deposit(NearToken::from_yoctonear(fee(20) + vault)).max_gas().transact().await?;
         assert!(format!("{:?}", r.into_result()).contains("BAD_ATTESTATION"));
     }
-    // 代幣樹：NEAR 留作準備（1 NEAR），金庫與質押都走 ft_transfer_call
+    // token tree: NEAR is kept as reserve (1 NEAR), vault and stake both go through ft_transfer_call
     let near = if ft.is_some() { fee(20) + NEAR_RESERVE } else { fee(20) + vault };
     let id: String = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_yoctonear(near)).max_gas().transact().await?.into_result()?.json()?;
     let agent = Account::from_secret_key(w.writ.id().clone(), agent_sk, &w.worker);
@@ -1587,7 +1587,7 @@ async fn b20_default_covered_by_the_vault_stays_sealed() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn b21_guarantor_pays_then_recourse_tree_dies_identity_revealed() -> anyhow::Result<()> {
-    // 金庫只有 2 節，賣 5 節：賠付一定走到保證人
+    // the vault has only 2 links, selling 5: the payout must reach the guarantor
     let cw = credit_world_with(0, 5, 0, 2, 2 * UNIT, LEI).await?;
     let w = &cw.w;
     let id = cw.delivered(5, 5, 1, "INV-G").await;
@@ -1604,7 +1604,7 @@ async fn b21_guarantor_pays_then_recourse_tree_dies_identity_revealed() -> anyho
     assert!(balance(&w.merchant).await - m0 > 4 * UNIT, "the seller got the whole amount");
     bench("B21", "company does not pay; the named guarantor's stake covers the seller, no approval needed", "seller paid in full", "seller paid in full", 0);
 
-    // 只凍結，不斷電；身分還封著
+    // freeze only, no power off; identity is still sealed
     let card = cw.card().await;
     assert_eq!(card["frozen"], true);
     assert_eq!(card["legal_entity"], "sealed");
@@ -1623,7 +1623,7 @@ async fn b21_guarantor_pays_then_recourse_tree_dies_identity_revealed() -> anyho
     cw.guarantor("enforce_recourse", json!({"credit": id})).await.unwrap();
     assert_eq!(keys0 - w.worker.view_access_keys(w.writ.id()).await?.len(), 1, "the tree's key is gone");
 
-    // owner 把保證人移出白名單，也擋不了揭露
+    // the owner removes the guarantor from the allowlist, which still cannot block disclosure
     w.writ.call("set_verifier").args_json(json!({"account": w.verifier.id()})).transact().await?.into_result()?;
     let e = cw.guarantor("credit_unseal", json!({"credit": id, "lei": "WRITDEMO999999999999", "salt": LEI_SALT, "ecr": cw.opening()})).await.unwrap_err();
     assert!(e.contains("COMMIT_MISMATCH"), "{}", e);
@@ -1668,7 +1668,7 @@ async fn a51_revoking_does_not_escape_a_debt() -> anyhow::Result<()> {
     wait_secs(2).await;
     cw.seller("claim_default", json!({"credit": id})).await.unwrap();
     assert_eq!(cw.credit(&id).await["debt"], "0", "the kept vault paid the seller");
-    // 結清後，餘額可領回
+    // after settlement, the balance can be withdrawn
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
     assert!(c["unclaimed"].as_str().unwrap().parse::<u128>()? > 0, "{}", c);
     let f1 = balance(&w.funder).await;
@@ -1683,7 +1683,7 @@ async fn a51_revoking_does_not_escape_a_debt() -> anyhow::Result<()> {
 async fn a52_seller_side_attacks() -> anyhow::Result<()> {
     let cw = credit_world(0, 5, 0, 1).await?;
     let w = &cw.w;
-    // 沒交貨就告違約
+    // file a default without delivery
     let id = cw.opened(1, 1, 1, "INV-N").await;
     cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
     wait_secs(2).await;
@@ -1691,14 +1691,14 @@ async fn a52_seller_side_attacks() -> anyhow::Result<()> {
     assert!(e.contains("NOT_DELIVERED"), "{}", e);
     bench("A52", "seller claims default without delivering", "NOT_DELIVERED", "NOT_DELIVERED", gain(w).await);
 
-    // 公司付了款，賣方刪帳號或不提領：也不能再告違約
+    // the company paid, the seller deleted the account or does not withdraw: a default still cannot be filed
     cw.funder("settle_by_funder", json!({"credit": id}), 0).await.unwrap();
     let e = cw.seller("claim_default", json!({"credit": id})).await.unwrap_err();
     assert!(e.contains("NOT_DELIVERED"), "{}", e);
     assert_eq!(cw.credit(&id).await["status"], "Settled");
     bench("A53", "seller refuses the money, then claims default anyway", "settled on the ledger", "settled on the ledger", gain(w).await);
 
-    // 爭議要附全額押金；有押金就不能告違約；只有仲裁人能裁
+    // a dispute needs the full deposit; with the deposit no default can be filed; only the arbiter can rule
     let id = cw.delivered(3, 2, 1, "INV-P").await;
     let e = cw.funder("dispute", json!({"credit": id, "reason_hash": hex::encode([2u8; 32])}), UNIT).await.unwrap_err();
     assert!(e.contains("ESCROW_FULL_AMOUNT"), "{}", e);
@@ -1713,7 +1713,7 @@ async fn a52_seller_side_attacks() -> anyhow::Result<()> {
     cw.arbiter.call(w.writ.id(), "resolve_dispute").args_json(json!({"credit": id, "to_seller": true})).gas(near_workspaces::types::Gas::from_tgas(100)).transact().await?.into_result()?;
     assert_eq!(cw.credit(&id).await["status"], "Settled");
 
-    // 仲裁人逾時：有交貨憑據給賣方
+    // arbiter timeout: with delivery evidence, the seller wins
     let id = cw.delivered(4, 1, 1, "INV-Q").await;
     cw.funder("dispute", json!({"credit": id, "reason_hash": hex::encode([2u8; 32])}), UNIT).await.unwrap();
     let e = cw.seller("resolve_timeout", json!({"credit": id})).await.unwrap_err();
@@ -1722,7 +1722,7 @@ async fn a52_seller_side_attacks() -> anyhow::Result<()> {
     cw.seller("resolve_timeout", json!({"credit": id})).await.unwrap();
     assert_eq!(cw.credit(&id).await["status"], "Settled");
 
-    // 沒人接受的單會過期，額度放回
+    // an order nobody accepts expires, the limit is restored
     let id = cw.opened(5, 1, 3600, "INV-T").await;
     wait_secs(3).await;
     let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
@@ -1736,7 +1736,7 @@ async fn a52_seller_side_attacks() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn a56_bond_is_locked_per_credit_and_cannot_be_raced() -> anyhow::Result<()> {
-    // 金庫 4.x 節，保證金 100%：兩筆各鎖 2 節。串通的賣方先告違約，只能動到自己那筆的保證金
+    // vault 4.x links, bond 100%: two orders lock 2 links each. A colluding seller files a default first and can only touch its own order's bond
     let cw = credit_world_with(10_000, 5, 0, 1, 6 * UNIT, LEI).await?;
     let first = cw.delivered(2, 2, 3600, "INV-1").await;
     let second = cw.delivered(4, 2, 1, "INV-2").await;
@@ -1755,7 +1755,7 @@ async fn a56_bond_is_locked_per_credit_and_cannot_be_raced() -> anyhow::Result<(
 
 #[tokio::test]
 async fn a79_a_bond_the_company_cannot_fund_is_refused() -> anyhow::Result<()> {
-    // 金庫 3.5 節，保證金 100%：第一筆鎖 2 節，第二筆鎖不到 2 節。以前差額會靜默轉給保證人
+    // vault 3.5 links, bond 100%: the first order locks 2 links, the second cannot lock a full 2. Previously the difference was silently shifted to the guarantor
     let cw = credit_world_with(10_000, 5, 0, 1, 7 * UNIT / 2, LEI).await?;
     let first = cw.delivered(2, 2, 3600, "INV-1").await;
     assert_eq!(cw.credit(&first).await["bond_locked"], (2 * UNIT).to_string());
@@ -1773,23 +1773,23 @@ async fn a79_a_bond_the_company_cannot_fund_is_refused() -> anyhow::Result<()> {
 async fn a57_order_limits_and_guarantor_rules() -> anyhow::Result<()> {
     let cw = credit_world(0, 0, 0, 1).await?;
     let w = &cw.w;
-    // 到期日短到沒時間反應
+    // due date too short to react
     let due = now_ns(w).await? - 5 * SEC;
     let v: Value = cw.agent.call(w.writ.id(), "open_credit").args_json(json!({"preimage": cw.pw.link(1), "j": 1, "to": w.merchant.id(), "invoice_hash": hex::encode([3u8; 32]), "due_at": due.to_string()}))
         .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
     assert_eq!(v["Rejected"]["reason"], "TENOR");
     bench("A57", "injected order with a due date outside the agreed terms", "Rejected:TENOR", "Rejected:TENOR", gain(w).await);
-    // 注入付給攻擊者
+    // injection pays the attacker
     let v: Value = cw.agent.call(w.writ.id(), "open_credit").args_json(json!({"preimage": cw.pw.link(1), "j": 1, "to": w.attacker.id(), "invoice_hash": hex::encode([4u8; 32]), "due_at": (now_ns(w).await? + 3000 * SEC).to_string()}))
         .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
     assert_eq!(v["Rejected"]["reason"], "SCOPE");
     bench("A58", "injected order to a seller outside the mandate", "Rejected:SCOPE", "Rejected:SCOPE", gain(w).await);
-    // 保證人沒押錢就接不了
+    // a guarantor with no stake cannot accept
     let id = cw.opened(1, 1, 3600, "INV-S").await;
     let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
     assert!(e.contains("GUARANTOR_CAPACITY"), "{}", e);
     bench("A59", "seller accepts an order the guarantor has no stake to back", "GUARANTOR_CAPACITY", "GUARANTOR_CAPACITY", gain(w).await);
-    // 有曝險不能抽走質押
+    // with exposure the stake cannot be withdrawn
     cw.w.verifier.call(w.writ.id(), "stake").deposit(NearToken::from_near(1)).transact().await?.into_result()?;
     cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
     cw.guarantor("request_unstake", json!({})).await.unwrap();
@@ -1802,7 +1802,7 @@ async fn a57_order_limits_and_guarantor_rules() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn a61_guarantor_cannot_frame_another_company() -> anyhow::Result<()> {
-    // 驗證者承諾的是受害公司的 LEI，LE 簽的是真公司的
+    // the verifier commits to the victim company's LEI, the LE signed the real company's
     let victim = "VICTIMCO000000000099";
     let cw = credit_world_with(0, 5, 0, 1, 2 * UNIT, victim).await?;
     let id = cw.delivered(5, 5, 1, "INV-F").await;
@@ -1817,20 +1817,20 @@ async fn a61_guarantor_cannot_frame_another_company() -> anyhow::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------- 第八輪：獨立審計找到的問題
+// ---------------------------------------------------------------- round 8: problems found by an independent audit
 
 #[tokio::test]
 async fn a62_the_audit_findings_stay_fixed() -> anyhow::Result<()> {
     let w = world().await?;
     let (cell, agent, pw, child, cagent, cpw, until) = tree(&w, 5).await?;
 
-    // F1／F2：重複帳號灌爆 scope，讓撤銷永遠失敗
+    // F1/F2: duplicate accounts blow up scope, making revocation fail forever
     let many: Vec<&AccountId> = std::iter::repeat(w.merchant.id()).take(17).collect();
     let v = hire(&agent, w.writ.id(), &pw.link(6), 1, hire_args(&SecretKey::from_random(KeyType::ED25519).public_key(), &Payword::new(1), &many, &until, 1, 1)).await;
     assert_eq!(v["Rejected"]["reason"], "HIRE_SCOPE");
     bench("A62", "hire with a huge duplicated scope, to make the tree too expensive to revoke", "Rejected:HIRE_SCOPE", "Rejected:HIRE_SCOPE", gain(&w).await);
 
-    // F7：父子各付同一張發票
+    // F7: parent and child each pay the same invoice
     let inv = b"INV-SHARED";
     let v = spend_invoice(&agent, w.writ.id(), &pw.link(6), 1, w.merchant.id(), inv).await;
     assert!(v.get("Paid").is_some(), "{}", v);
@@ -1838,7 +1838,7 @@ async fn a62_the_audit_findings_stay_fixed() -> anyhow::Result<()> {
     assert_eq!(v["Rejected"]["reason"], "DUPLICATE");
     bench("A63", "parent and sub-agent each pay the same invoice", "Rejected:DUPLICATE", "Rejected:DUPLICATE", gain(&w).await);
 
-    // F5：被解僱的鑰匙再被雇用
+    // F5: a dismissed key is hired again
     agent.call(w.writ.id(), "dismiss").args_json(json!({"child": child.to_string()})).gas(near_workspaces::types::Gas::from_tgas(60)).transact().await?.into_result()?;
     let v = hire(&agent, w.writ.id(), &pw.link(7), 1, hire_args(&cagent.secret_key().public_key(), &Payword::new(1), &[w.merchant.id()], &until, 1, 1)).await;
     assert_eq!(v["Rejected"]["reason"], "HIRE_KEY");
@@ -1879,14 +1879,14 @@ async fn a66_the_agent_cannot_spend_a_locked_bond() -> anyhow::Result<()> {
     let w = &cw.w;
     let id = cw.delivered(3, 3, 3600, "INV-B").await;
     assert_eq!(cw.credit(&id).await["bond_locked"], (3 * UNIT).to_string());
-    // 金庫 4.5 節，3 節鎖給賣方：只能動 1.5 節
+    // vault 4.5 links, 3 links locked for the seller: only 1.5 links can be touched
     let v = spend(&cw.agent, w.writ.id(), &cw.pw.link(5), 2, w.merchant.id()).await.unwrap();
     assert_eq!(v["Rejected"]["reason"], "FUNDS");
     bench("A66", "agent spends the bond locked for a seller", "Rejected:FUNDS", "Rejected:FUNDS", gain(w).await);
     Ok(())
 }
 
-// ---------------------------------------------------------------- 第九輪：信用合約審計
+// ---------------------------------------------------------------- round 9: credit contract audit
 
 #[tokio::test]
 async fn a67_offers_die_with_the_mandate() -> anyhow::Result<()> {
@@ -1912,7 +1912,7 @@ async fn a68_a_seller_cannot_deliver_and_default_at_once() -> anyhow::Result<()>
     let e = cw.seller("claim_default", json!({"credit": id})).await.unwrap_err();
     assert!(e.contains("INSPECTION_OPEN"), "{}", e);
     bench("A68", "seller marks delivery and claims default together, leaving no time to dispute", "INSPECTION_OPEN", "INSPECTION_OPEN", gain(&cw.w).await);
-    // 公司搶先爭議，賣方仍能留下交貨憑據；逾時歸賣方
+    // the company disputes first, the seller can still leave delivery evidence; on timeout it goes to the seller
     let cw = credit_world(0, 5, 0, 1).await?;
     let id2 = cw.opened(1, 1, 3600, "INV-RACE").await;
     cw.seller("accept_credit", json!({"credit": id2})).await.unwrap();
@@ -1927,14 +1927,14 @@ async fn a68_a_seller_cannot_deliver_and_default_at_once() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn a70_money_hidden_in_a_sub_agent_goes_to_the_debt_first() -> anyhow::Result<()> {
-    // 根格金庫大多搬給子 agent，賴帳後公司想靠斷電把子格的錢領回
+    // the root cell vault is mostly moved to the child agent; after defaulting, the company tries to take the child cell's money back by powering off
     let cw = credit_world_with(0, 5, 0, 1, 17 * UNIT, LEI).await?;
     let w = &cw.w;
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
     let until = c["valid_until"].as_str().unwrap().to_string();
     let sk = SecretKey::from_random(KeyType::ED25519);
     let cpw = Payword::new(9);
-    // 3 節給子 agent，加上雇用費，根格只剩一點點
+    // 3 links to the child agent, plus the hiring fee, leave the root cell only a little
     let v = hire(&cw.agent, w.writ.id(), &cw.pw.link(3), 3, hire_args(&sk.public_key(), &cpw, &[w.merchant.id()], &until, 3, 3)).await;
     assert!(v.get("Hired").is_some(), "{}", v);
     let id = cw.delivered(5, 2, 1, "INV-HIDE").await;
@@ -1974,7 +1974,7 @@ async fn b27_undelivered_orders_release_the_guarantor_and_late_repayment_works()
     cw.w.attacker.call(cw.w.writ.id(), "cancel_open").args_json(json!({"credit": id})).transact().await?.into_result()?;
     let st: Value = cw.w.writ.view("stake_of").args_json(json!({"account": cw.w.verifier.id()})).await?.json()?;
     assert_eq!(st["exposure"], "0", "the guarantor is released");
-    // 斷電之後才還也可以
+    // repaying after power off is also fine
     let id = cw.delivered(7, 5, 1, "INV-LATE").await;
     wait_secs(2).await;
     cw.seller("claim_default", json!({"credit": id})).await.unwrap();
@@ -1992,7 +1992,7 @@ async fn b27_undelivered_orders_release_the_guarantor_and_late_repayment_works()
     Ok(())
 }
 
-// ---------------------------------------------------------------- 第十輪：審計修正的複審
+// ---------------------------------------------------------------- round 10: re-review of audit fixes
 
 #[tokio::test]
 async fn a71_repaying_releases_what_was_retained() -> anyhow::Result<()> {
@@ -2010,7 +2010,7 @@ async fn a71_repaying_releases_what_was_retained() -> anyhow::Result<()> {
     assert!(cw.credit(&id).await["debt"].as_str().unwrap().parse::<u128>()? > 0);
     cw.funder("revoke", json!({"cell": cw.cell.to_string(), "evidence": "closing"}), 0).await.unwrap();
     let st0: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
-    // 金庫留下的錢就夠還：不必另外帶錢，剩下的放給公司領回
+    // the money left in the vault is enough to repay: no need to bring more, the rest is released for the company to withdraw
     cw.funder("reimburse", json!({"credit": id}), 0).await.unwrap();
     assert_eq!(cw.credit(&id).await["status"], "Reimbursed");
     let st1: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
@@ -2043,7 +2043,7 @@ async fn a72_while_owing_the_guarantor_nothing_else_gets_paid_first() -> anyhow:
     let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
     let v = hire(&cw.agent, w.writ.id(), &cw.pw.link(10), 1, hire_args(&sk.public_key(), &Payword::new(3), &[w.merchant.id()], c["valid_until"].as_str().unwrap(), 1, 1)).await;
     assert_eq!(v["Rejected"]["reason"], "FROZEN", "{}", v);
-    // 自己帶錢來付別筆可以
+    // bringing its own money to pay another order is fine
     cw.funder("settle_by_funder", json!({"credit": friend}), UNIT).await.unwrap();
     assert_eq!(cw.credit(&friend).await["status"], "Settled");
     assert_eq!(cw.solvent().await["solvent"], true);
@@ -2063,7 +2063,7 @@ async fn a73_late_delivery_cannot_win_a_dispute() -> anyhow::Result<()> {
     bench("A73", "seller files a delivery proof after the arbiter's time ran out", "DISPUTE_CLOSED", "DISPUTE_CLOSED", gain(&cw.w).await);
     cw.seller("resolve_timeout", json!({"credit": id})).await.unwrap();
     assert_eq!(cw.credit(&id).await["status"], "Cancelled");
-    // 爭議中補交：仲裁人多一段驗收期，不能立刻逾時領走
+    // top-up during a dispute: the arbiter gets one more review period, it cannot time out and be collected at once
     let cw = credit_world_full(0, 5, 0, 1, 30 * UNIT, LEI, 60).await?;
     let id = cw.opened(1, 1, 3600, "INV-LAST-MINUTE").await;
     cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
@@ -2102,7 +2102,7 @@ async fn a75_a_suspended_agent_cannot_settle() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn b28_guarantor_can_collect_again_and_unblock_a_silent_seller() -> anyhow::Result<()> {
-    // 保證金釋放後再收一次
+    // collect again after the bond is released
     let cw = credit_world(5000, 5, 0, 1).await?;
     let w = &cw.w;
     let cw2 = credit_world_with(5000, 5, 0, 1, 5 * UNIT, LEI).await?;
@@ -2122,7 +2122,7 @@ async fn b28_guarantor_can_collect_again_and_unblock_a_silent_seller() -> anyhow
     cw2.funder("reimburse", json!({"credit": id}), d1).await.unwrap();
     assert_eq!(cw2.credit(&id).await["status"], "Reimbursed");
     assert_eq!(cw2.solvent().await["solvent"], true);
-    // 賣方不請求：保證人要等多一段追償期才可代為觸發，錢仍給賣方
+    // the seller does not request: the guarantor must wait one more recovery period before triggering on its behalf, the money still goes to the seller
     let id = cw.delivered(1, 1, 1, "INV-SILENT").await;
     let e = cw.guarantor("claim_default", json!({"credit": id})).await.unwrap_err();
     assert!(e.contains("ONLY_SELLER"), "{}", e);
@@ -2134,7 +2134,7 @@ async fn b28_guarantor_can_collect_again_and_unblock_a_silent_seller() -> anyhow
     Ok(())
 }
 
-// ---------------------------------------------------------------- 第十一輪
+// ---------------------------------------------------------------- round 11
 
 #[tokio::test]
 async fn a76_a_sub_agent_cannot_pay_a_friend_while_the_company_owes() -> anyhow::Result<()> {
@@ -2158,7 +2158,7 @@ async fn a76_a_sub_agent_cannot_pay_a_friend_while_the_company_owes() -> anyhow:
     let e = child.call(w.writ.id(), "settle").args_json(json!({"credit": friend})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result();
     assert!(format!("{:?}", e).contains("REPAY_GUARANTOR_FIRST"), "{:?}", e);
     bench("A76", "while the company owes, a sub-agent settles a friendly order from its own vault", "REPAY_GUARANTOR_FIRST", "REPAY_GUARANTOR_FIRST", gain(w).await);
-    // 欠債時一直試不會把 agent 自己弄死，還清後還能工作
+    // while in debt, retrying does not kill the agent itself, and it can work again after repayment
     for i in 0..4 {
         let v = spend_invoice(&cw.agent, w.writ.id(), &cw.pw.link(6), 1, w.merchant.id(), format!("F{}", i).as_bytes()).await;
         assert_eq!(v["Rejected"]["reason"], "FROZEN", "{}", v);
@@ -2200,7 +2200,7 @@ async fn b29_rotating_the_legal_entity_key_does_not_block_the_reveal() -> anyhow
     Ok(())
 }
 
-// ---------------------------------------------------------------- 第十二輪：保證費
+// ---------------------------------------------------------------- round 12: guarantee fee
 
 #[tokio::test]
 async fn b30_the_guarantor_earns_a_fee_for_standing_behind_the_order() -> anyhow::Result<()> {
@@ -2209,7 +2209,7 @@ async fn b30_the_guarantor_earns_a_fee_for_standing_behind_the_order() -> anyhow
     assert_eq!(cw.card().await["premium_bps"], 1000);
     let st0: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
     let c0: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
-    // 只開單不收費，賣方接受才收
+    // opening an order collects no fee, only the seller's acceptance does
     let id = cw.opened(5, 5, 3600, "INV-FEE").await;
     let st: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
     assert_eq!(st["amount"], st0["amount"]);
@@ -2224,7 +2224,7 @@ async fn b30_the_guarantor_earns_a_fee_for_standing_behind_the_order() -> anyhow
     let v1: u128 = c1["vault"].as_str().unwrap().parse()?;
     assert!(v0 - v1 > fee, "storage and fee both left the vault");
     assert_eq!(cw.solvent().await["solvent"], true);
-    // 結清也不退：費用買的是已經承擔的曝險
+    // not refunded on settlement either: the fee buys exposure that is already borne
     cw.seller("mark_delivered", json!({"credit": id, "delivery_hash": hex::encode([1u8; 32])})).await.unwrap();
     let v: Value = cw.agent.call(w.writ.id(), "settle").args_json(json!({"credit": id})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
     assert!(v.get("CreditSettled").is_some(), "{}", v);
@@ -2237,10 +2237,10 @@ async fn b30_the_guarantor_earns_a_fee_for_standing_behind_the_order() -> anyhow
 
 #[tokio::test]
 async fn a80_a_long_order_cannot_pay_the_one_period_fee() -> anyhow::Result<()> {
-    // 每期 2%；天期 90 天要收 3 期。一期的費用付得起、三期付不起：不能把長單當短單賺保證
+    // 2% per period; a 90-day term takes 3 periods. One period's fee is affordable, three are not: a long order cannot be treated as a short one to earn the guarantee
     let cw = credit_world_x(CwOpts { premium: 200, vault: UNIT, max_tenor: 100 * 86_400, ..Default::default() }).await?;
     let due = now_ns(&cw.w).await? + 90 * 86_400 * SEC;
-    // 10 節的 2% = 0.2 節，一期付得起；三期 0.6 節超過扣完單據儲存後的金庫
+    // 2% of 10 links = 0.2 links, one period is affordable; three periods = 0.6 links exceeds the vault after receipt storage
     let v: Value = cw.agent.call(cw.w.writ.id(), "open_credit").args_json(json!({"preimage": cw.pw.link(10), "j": 10, "to": cw.w.merchant.id(), "invoice_hash": hex::encode(Sha256::digest("INV-LONG")), "due_at": due.to_string()}))
         .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
     let id = v["CreditOpened"]["credit"].as_str().unwrap_or_else(|| panic!("{}", v)).to_string();
@@ -2315,7 +2315,7 @@ async fn b33_a_seller_rule_refuses_is_adjusted_and_ships() -> anyhow::Result<()>
     let w = &cw.w;
     let rule = |bond: u32, max: u128, gs: Value| json!({"max_amount": max.to_string(), "max_tenor_secs": "7200", "min_bond_bps": bond, "max_defaults": 0, "guarantors": gs, "asset": null, "max_fee_bps": 10_000, "arbiters": []});
     let dep = NearToken::from_millinear(15);
-    // 沒付儲存押金
+    // storage deposit not paid
     let r = w.merchant.call(w.writ.id(), "set_seller_policy").args_json(json!({"policy": rule(5000, 3 * UNIT, json!([]))})).transact().await?.into_result();
     assert!(format!("{:?}", r).contains("POLICY_STORAGE"), "{:?}", r);
     bench("A83", "seller makes the contract store a rule without paying for the storage", "POLICY_STORAGE", "POLICY_STORAGE", gain(w).await);
@@ -2332,17 +2332,17 @@ async fn b33_a_seller_rule_refuses_is_adjusted_and_ships() -> anyhow::Result<()>
     assert_eq!(cw.credit(&id).await["status"], "Open");
     bench("A84", "an order outside the seller's own rule gets accepted anyway", "POLICY:ORDER_TOO_LARGE", "POLICY:ORDER_TOO_LARGE", gain(w).await);
 
-    // 別人設的規則只算他自己的，動不到賣方的
+    // a rule set by someone else counts only for that person, it cannot touch the seller's
     w.attacker.call(w.writ.id(), "set_seller_policy").args_json(json!({"policy": rule(0, 5 * UNIT, json!([]))})).deposit(dep).transact().await?.into_result()?;
     let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
     assert!(e.contains("POLICY:ORDER_TOO_LARGE"), "{}", e);
 
-    // 先用傳入的規則試算，不會存下來
+    // first trial with the rule passed in, it is not stored
     let c: Value = w.writ.view("check_order").args_json(json!({"credit": id, "policy": rule(2500, 5 * UNIT, json!([]))})).await?.json()?;
     assert_eq!(c["ok"], true, "{}", c);
     let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
     assert!(e.contains("POLICY:ORDER_TOO_LARGE"), "{}", e);
-    // 調整規則（不用再付押金）就出貨
+    // adjust the rule (no deposit needed again) and ship
     cw.seller("set_seller_policy", json!({"policy": rule(2500, 5 * UNIT, json!([w.verifier.id()]))})).await.unwrap();
     let c: Value = w.writ.view("check_order").args_json(json!({"credit": id})).await?.json()?;
     assert_eq!(c["ok"], true, "{}", c);
@@ -2354,7 +2354,7 @@ async fn b33_a_seller_rule_refuses_is_adjusted_and_ships() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn a85_a_colluding_seller_can_only_reach_its_share_of_the_stake() -> anyhow::Result<()> {
-    // 質押 5 NEAR，單一賣方上限 0.3% = 1.5 節。人頭賣方開單、交貨、不付款的串通，一次最多領這麼多
+    // stake 5 NEAR, per-seller cap 0.3% = 1.5 links. Collusion where a straw seller opens an order, delivers and does not pay can draw at most this much at once
     let cw = credit_world_x(CwOpts { cap: 30, accept_ttl: 3600, ..Default::default() }).await?;
     let w = &cw.w;
     assert_eq!(cw.card().await["seller_cap_bps"], 30);
@@ -2368,7 +2368,7 @@ async fn a85_a_colluding_seller_can_only_reach_its_share_of_the_stake() -> anyho
     let st: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
     assert_eq!(st["exposure"], UNIT.to_string());
     bench("A85", "one straw seller account takes more of the stake than its cap at once", "SELLER_CONCENTRATION", "SELLER_CONCENTRATION", gain(w).await);
-    // 第一筆結清，曝險放回來，第二筆就成立
+    // the first order settles, exposure is released, the second order stands
     cw.funder("settle_by_funder", json!({"credit": first}), 0).await.unwrap();
     cw.seller("accept_credit", json!({"credit": second})).await.unwrap();
     assert_eq!(cw.credit(&second).await["status"], "Accepted");
@@ -2425,14 +2425,14 @@ async fn a86_throwaway_sellers_cannot_grow_the_book_without_limit() -> anyhow::R
     Ok(())
 }
 
-// ---------------------------------------------------------------- 第十三輪：信用改用穩定幣（6 位小數，contract/ft-mock）
+// ---------------------------------------------------------------- round 13: credit in a stablecoin (6 decimals, contract/ft-mock)
 
 const NEAR_RESERVE: u128 = 1_000_000_000_000_000_000_000_000;
 
 impl CreditWorld {
-    /// 代幣世界預設：金庫 30 顆、質押 50 顆。
+    /// Token world defaults: vault 30 tokens, stake 50 tokens.
     fn tk(&self) -> &Contract { self.token.as_ref().unwrap() }
-    /// who 從代幣合約 ft_transfer_call 進來，回傳實際用掉多少（被退回或 panic 就是 0）。
+    /// who comes in via ft_transfer_call from the token contract, returns how much was actually used (refunded or panic means 0).
     async fn ftcall(&self, who: &Account, amount: u128, msg: String) -> u128 {
         let v: String = who.call(self.tk().id(), "ft_transfer_call").args_json(json!({"receiver_id": self.w.writ.id(), "amount": amount.to_string(), "msg": msg}))
             .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await.unwrap().into_result().unwrap().json().unwrap();
@@ -2450,7 +2450,7 @@ impl CreditWorld {
         let v: String = self.w.writ.view("claimable_of").args_json(json!({"account": who, "asset": self.tk().id()})).await.unwrap().json().unwrap();
         v.parse().unwrap()
     }
-    /// 帳上的總額等於合約在代幣上的餘額：一顆都沒有憑空多出來或消失。
+    /// The total on the books equals the contract's balance in the token: not one token appears or disappears from nowhere.
     async fn token_books_match(&self) {
         assert_eq!(self.ttotal().await, self.fbal(self.w.writ.id()).await, "token books vs token balance");
     }
@@ -2471,7 +2471,7 @@ async fn b35_credit_in_a_stablecoin_with_the_seller_paying_the_fee() -> anyhow::
     let n0: Value = w.writ.view("solvency").await?.json()?;
     assert_eq!(n0["solvent"], true);
 
-    // 用量單：上限 5 顆，實際 4 顆
+    // metered order: cap 5 tokens, actual 4 tokens
     let id = cw.opened(5, 5, 3600, "INV-USDC").await;
     let c = cw.credit(&id).await;
     assert_eq!(c["asset"], cw.tk().id().as_str());
@@ -2492,7 +2492,7 @@ async fn b35_credit_in_a_stablecoin_with_the_seller_paying_the_fee() -> anyhow::
     let st = cw.tstake().await;
     assert_eq!((st["amount"].as_str().unwrap().parse::<u128>()?, st["earned"].as_str().unwrap().parse::<u128>()?), (50 * T + fee, fee));
     cw.token_books_match().await;
-    // 賣方提領真的拿到代幣
+    // the seller's withdrawal really gets the tokens
     let before = cw.fbal(w.merchant.id()).await;
     cw.seller("withdraw", json!({"asset": cw.tk().id()})).await.unwrap();
     assert_eq!(cw.fbal(w.merchant.id()).await - before, 4 * T - fee);
@@ -2518,7 +2518,7 @@ async fn b36_a_stablecoin_default_is_paid_by_the_token_stake_and_recovered_in_th
     assert_eq!(st["claims_paid"], (3 * T).to_string());
     assert_eq!(cw.card().await["frozen"], true);
     cw.token_books_match().await;
-    // 公司撤銷想走人：金庫的錢沒了也欠著，準備退回 NEAR 可提領，債還在
+    // the company revokes to leave: the vault money is gone but still owed, the reserve is refunded as NEAR withdrawable, the debt remains
     let f0 = cw.fbal(w.funder.id()).await;
     cw.funder("revoke", json!({"cell": cw.cell.to_string(), "evidence": "skip town"}), 0).await.unwrap();
     assert_eq!(cw.fbal(w.funder.id()).await, f0, "no token comes back while it owes");
@@ -2527,7 +2527,7 @@ async fn b36_a_stablecoin_default_is_paid_by_the_token_stake_and_recovered_in_th
     let n0 = balance(&w.funder).await;
     cw.funder("withdraw", json!({}), 0).await.unwrap();
     assert!(balance(&w.funder).await > n0);
-    // 還債：少一顆不行，多的記進可提領
+    // repay: one token short is not enough, the excess is recorded as withdrawable
     let f0 = cw.fbal(w.funder.id()).await;
     assert_eq!(cw.ftcall(&w.funder, debt - 1, format!("reimburse:{}", id)).await, 0, "refunded in full");
     assert_eq!(cw.fbal(w.funder.id()).await, f0);
@@ -2536,7 +2536,7 @@ async fn b36_a_stablecoin_default_is_paid_by_the_token_stake_and_recovered_in_th
     assert_eq!(cw.tclaim(w.funder.id()).await, 5);
     assert_eq!(cw.tstake().await["recovered"], debt.to_string());
     assert_eq!(cw.card().await["frozen"], false);
-    // 還有一筆未結：結清後收工
+    // another order is still open: finish after it settles
     assert_eq!(cw.ftcall(&w.funder, T, format!("settle:{}", other)).await, T);
     assert_eq!(cw.card().await["outstanding"], "0");
     cw.token_books_match().await;
@@ -2570,7 +2570,7 @@ async fn b37_a_token_tree_hires_disputes_and_closes_per_asset() -> anyhow::Resul
     assert_eq!(cw.fbal(w.merchant.id()).await - m0, T, "the sub-agent pays in the token");
     cw.token_books_match().await;
 
-    // 爭議：押金是代幣；判公司勝全退，判賣方勝付賣方
+    // dispute: the deposit is tokens; ruled for the company refunds everything, ruled for the seller pays the seller
     let lose = cw.delivered(4, 1, 3600, "INV-D1").await;
     assert_eq!(cw.ftcall(&w.funder, T, format!("dispute:{}:{}", lose, hex::encode([2u8; 32]))).await, T);
     assert_eq!(cw.credit(&lose).await["dispute_escrow"], T.to_string());
@@ -2583,7 +2583,7 @@ async fn b37_a_token_tree_hires_disputes_and_closes_per_asset() -> anyhow::Resul
     assert_eq!(cw.tclaim(w.funder.id()).await, T + 3);
     cw.token_books_match().await;
 
-    // 整棵樹關掉：代幣退給法人，準備退進 NEAR 可提領，兩邊帳都清
+    // the whole tree is shut down: tokens go back to the legal entity, the reserve goes back as NEAR withdrawable, both books are cleared
     let open_one = cw.delivered(6, 1, 3600, "INV-KEEP").await;
     let f0 = cw.fbal(w.funder.id()).await;
     let vault = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json::<Value>()?["vault"].as_str().unwrap().parse::<u128>()?;
@@ -2609,7 +2609,7 @@ async fn a88_near_cannot_stand_in_for_the_token() -> anyhow::Result<()> {
     let cw = credit_world_x(tworld()).await?;
     let w = &cw.w;
     let id = cw.delivered(5, 5, 3600, "INV-CONFUSE").await;
-    // 5 顆穩定幣的最小單位是 5,000,000：5,000,000 yoctoNEAR 幾乎不值錢。合約不能把它當成 5 顆
+    // The smallest unit of 5 stablecoin tokens is 5,000,000: 5,000,000 yoctoNEAR is almost worthless. The contract must not treat it as 5 tokens
     let e = cw.funder("settle_by_funder", json!({"credit": id}), 5 * T).await.unwrap_err();
     assert!(e.contains("USE_FT_TRANSFER_CALL"), "{}", e);
     let e = cw.funder("dispute", json!({"credit": id, "reason_hash": hex::encode([2u8; 32])}), 5 * T).await.unwrap_err();
@@ -2624,7 +2624,7 @@ async fn a89_a_fake_token_cannot_credit_itself() -> anyhow::Result<()> {
     let cw = credit_world_x(tworld()).await?;
     let w = &cw.w;
     let id = cw.delivered(5, 5, 3600, "INV-FAKE").await;
-    // 攻擊者自己當「代幣合約」，直接呼叫 ft_on_transfer 宣稱公司付了款
+    // the attacker acts as the "token contract" itself and calls ft_on_transfer directly, claiming the company paid
     let call = |sender: &AccountId, msg: String| {
         let (a, wr, s) = (w.attacker.clone(), w.writ.id().clone(), sender.clone());
         async move { a.call(&wr, "ft_on_transfer").args_json(json!({"sender_id": s, "amount": (5 * T).to_string(), "msg": msg})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await.unwrap().into_result() }
@@ -2636,7 +2636,7 @@ async fn a89_a_fake_token_cannot_credit_itself() -> anyhow::Result<()> {
     let st: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id(), "asset": w.attacker.id()})).await?.json()?;
     assert_eq!(st, Value::Null, "a fake token opens no stake record");
     assert_eq!(cw.credit(&id).await["status"], "Delivered");
-    // 另一種真的代幣也一樣：panic 後全數退回
+    // another real token is the same: refunded in full after a panic
     let other = w.worker.dev_deploy(&std::fs::read(FT_WASM)?).await?;
     other.call("new").args_json(json!({"owner_id": w.funder.id(), "total_supply": (100 * T).to_string()})).transact().await?.into_result()?;
     w.funder.call(other.id(), "storage_deposit").args_json(json!({"account_id": w.writ.id()})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
@@ -2645,7 +2645,7 @@ async fn a89_a_fake_token_cannot_credit_itself() -> anyhow::Result<()> {
     assert_eq!(v, "0");
     assert_eq!(ft_balance(w, &other, w.funder.id()).await, 100 * T, "refunded");
     assert_eq!(cw.credit(&id).await["status"], "Delivered");
-    // 陌生人想替公司走爭議：拿不走也停不了賣方
+    // a stranger tries to run the dispute for the company: cannot take anything and cannot stop the seller
     w.funder.call(cw.tk().id(), "ft_transfer").args_json(json!({"receiver_id": w.attacker.id(), "amount": (5 * T).to_string()})).deposit(NearToken::from_yoctonear(1)).transact().await?.into_result()?;
     assert_eq!(cw.ftcall(&w.attacker, 5 * T, format!("dispute:{}:{}", id, hex::encode([2u8; 32]))).await, 0);
     assert_eq!(cw.fbal(w.attacker.id()).await, 5 * T);
@@ -2661,14 +2661,14 @@ async fn a90_a_failed_token_withdrawal_neither_loses_nor_duplicates() -> anyhow:
     let id = cw.delivered(5, 5, 3600, "INV-FAIL").await;
     cw.funder("settle_by_funder", json!({"credit": id}), 0).await.unwrap();
     assert_eq!(cw.tclaim(w.merchant.id()).await, 5 * T);
-    // 賣方退出代幣：ft_transfer 一定失敗
+    // the seller leaves the token: ft_transfer must fail
     w.merchant.call(cw.tk().id(), "storage_unregister").args_json(json!({})).deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
     let t0 = cw.ttotal().await;
     let _ = cw.seller("withdraw", json!({"asset": cw.tk().id()})).await;
     assert_eq!(cw.tclaim(w.merchant.id()).await, 5 * T, "credited back");
     assert_eq!(cw.ttotal().await, t0);
     cw.token_books_match().await;
-    // 回來註冊後領到，只領得到一次
+    // after coming back and registering it is paid out, and only once
     w.funder.call(cw.tk().id(), "storage_deposit").args_json(json!({"account_id": w.merchant.id()})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
     cw.seller("withdraw", json!({"asset": cw.tk().id()})).await.unwrap();
     assert_eq!(cw.fbal(w.merchant.id()).await, 5 * T);
@@ -2714,7 +2714,7 @@ async fn a92_a_token_cell_without_credit_stays_as_it_was() -> anyhow::Result<()>
     Ok(())
 }
 
-/// 單據儲存費夠不夠付真實用量：包含第一次出現的賣方曝險紀錄。
+/// Whether receipt storage is enough for real usage: includes the seller exposure record that appears for the first time.
 #[tokio::test]
 async fn b38_the_order_fee_covers_the_storage_it_uses() -> anyhow::Result<()> {
     let cw = credit_world_x(CwOpts { accept_ttl: 3600, ..Default::default() }).await?;
@@ -2724,7 +2724,7 @@ async fn b38_the_order_fee_covers_the_storage_it_uses() -> anyhow::Result<()> {
     let b = w.writ.view_account().await?.storage_usage as u128;
     let cost = (b - a) * 10_000_000_000_000_000_000u128;
     println!("WRIT_GAS|order_storage_bytes={}", b - a);
-    // 每節預付的發票紀錄 + 單據儲存費
+    // invoice record prepaid per link + receipt storage fee
     let paid = 7_000_000_000_000_000_000_000u128 + 1_000_000_000_000_000_000_000u128;
     assert!(cost <= paid, "{} bytes cost {} > paid {}", b - a, cost, paid);
     assert_eq!(cw.credit(&id).await["status"], "Delivered");
@@ -2756,7 +2756,7 @@ async fn b39_the_contract_says_where_its_source_is_and_check_order_gives_a_selle
 
 #[tokio::test]
 async fn a93_terms_with_an_unbounded_tenor_are_refused() -> anyhow::Result<()> {
-    // 到期日接近 u64 上限時，到期日加時間窗會溢位，取消與求償永遠失敗
+    // When the due date is close to the u64 limit, due date plus time window overflows, so cancel and claim would fail forever
     let r = credit_world_x(CwOpts { max_tenor: 10 * 365 * 86_400 + 1, ..Default::default() }).await;
     let e = match r { Ok(_) => panic!("register must refuse"), Err(e) => format!("{:?}", e) };
     assert!(e.contains("BAD_CREDIT_TERMS"), "{}", e);
@@ -2769,9 +2769,9 @@ async fn a93_terms_with_an_unbounded_tenor_are_refused() -> anyhow::Result<()> {
 async fn a94_a_rule_catches_the_wrong_asset_a_high_fee_and_an_unknown_arbiter() -> anyhow::Result<()> {
     let cw = credit_world_x(CwOpts { premium: 2000, fee_payer: "Seller", max_tenor: 200 * 86_400, accept_ttl: 3600, ..tworld() }).await?;
     let w = &cw.w;
-    // NEAR 單位的上限，對 6 位小數的代幣形同沒有上限：規則沒寫這種代幣就不收
+    // The NEAR-unit cap is effectively no cap for a 6-decimal token: a rule that does not name this token does not accept it
     let rule = json!({"max_amount": (100u128 * 1_000_000_000_000_000_000_000_000).to_string(), "max_tenor_secs": "20000000", "min_bond_bps": 0, "max_defaults": 0, "guarantors": [], "asset": null, "max_fee_bps": 500, "arbiters": [w.attacker.id()]});
-    // 不寫資產的規則開不了
+    // a rule without an asset cannot open
     let mut missing = rule.clone();
     missing.as_object_mut().unwrap().remove("asset");
     let r = w.merchant.call(w.writ.id(), "set_seller_policy").args_json(json!({"policy": missing})).deposit(NearToken::from_millinear(15)).transact().await?.into_result();
@@ -2814,7 +2814,7 @@ async fn a95_one_yocto_cannot_create_a_row_and_a_delisted_guarantor_takes_no_ord
 #[tokio::test]
 async fn a78_a_company_with_no_money_for_the_fee_gets_no_guarantee() -> anyhow::Result<()> {
     let cw = credit_world_fee(0, 2000, 5, 0, 1, UNIT, LEI, 0).await?;
-    // 金庫 1 節扣掉單據儲存，不到 1 節；5 節的 20% 是 1 節，付不起
+    // 1 link of vault minus receipt storage is less than 1 link; 20% of 5 links is 1 link, cannot afford it
     let id = cw.opened(5, 5, 3600, "INV-NOFEE").await;
     let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
     assert!(e.contains("PREMIUM_SHORT"), "{}", e);

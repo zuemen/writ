@@ -2,7 +2,8 @@
 name = "writ"
 version = "0.2.0"
 edition = "2021"
-# Spike 版（D1）：驗證 Keypom 模式、ed25519_verify、sha256 鏈。D2 起長成正式合約。
+description = "Writ: payment guarantees for AI agents' orders on NEAR"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

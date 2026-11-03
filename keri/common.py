@@ -1,22 +1,22 @@
 """
-Writ 的 KERI 共用工具：schema、路徑、base58、CESR 串流拆解。
+Writ's shared KERI utilities: schema, paths, base58, CESR stream splitting.
 
-兩個角色各自一個 keystore，彼此不共享資料庫：
-  - 發行端（issuer.py）：模擬「法人 LE → 職員 human（ECR）→ agent（AMC）」，keystore 在 keri/.keystore/
-  - 驗證端（verify.py）：全新的暫存 Habery，只吃發行端匯出的 CESR 串流，從頭驗整條鏈
+The two roles each have their own keystore and do not share a database:
+  - Issuer side (issuer.py): simulates "legal entity LE -> staff member human (ECR) -> agent (AMC)", keystore in keri/.keystore/
+  - Verifier side (verify.py): a fresh temporary Habery that takes only the CESR stream exported by the issuer and verifies the whole chain from scratch
 """
 import json, os
 from keri.core import scheming, coring
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-KEYSTORE = os.path.join(HERE, ".keystore")          # 發行端的私密資料（.gitignore）
-BUNDLE = os.path.join(HERE, "bundle")                # 持有人出示的公開 CESR
-REGISTRAR = os.path.join(HERE, "registrar")          # 發行方公布的 KEL／TEL（驗證端自己去查，不信任持有人給的狀態）
-PRIVATE = os.path.join(KEYSTORE, "private.json")     # demo 用：agent 私鑰、PayWord 種子（.gitignore）
+KEYSTORE = os.path.join(HERE, ".keystore")          # issuer's private data (.gitignore)
+BUNDLE = os.path.join(HERE, "bundle")                # public CESR presented by the holder
+REGISTRAR = os.path.join(HERE, "registrar")          # KEL/TEL published by the issuer (the verifier looks it up itself and does not trust state given by the holder)
+PRIVATE = os.path.join(KEYSTORE, "private.json")     # for the demo: agent private key, PayWord seed (.gitignore)
 
 
 def b58(b: bytes) -> str:
-    """NEAR 公鑰／私鑰字串用的 base58（Bitcoin 字母表，無 checksum）。"""
+    """base58 for NEAR public/private key strings (Bitcoin alphabet, no checksum)."""
     A = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
     n = int.from_bytes(b, "big")
     out = ""
@@ -27,7 +27,7 @@ def b58(b: bytes) -> str:
 
 
 def _schema(title: str, attrs: dict, required: list, edges: dict | None, rules: bool = False):
-    """建一份 ACDC JSON Schema，$id 由 keripy 以 Blake3-256 自我定址（SAID）。"""
+    """Build an ACDC JSON Schema; $id is self-addressed by keripy with Blake3-256 (SAID)."""
     a_props = {"d": {"type": "string"}, "u": {"type": "string"}, "i": {"type": "string"}, "dt": {"type": "string", "format": "date-time"}}
     a_props.update(attrs)
     props = {
@@ -51,8 +51,8 @@ def _schema(title: str, attrs: dict, required: list, edges: dict | None, rules: 
     return schemer
 
 
-# vLEI 的信任鏈用官方 schema（keri/schemas/，WebOfTrust/vLEI 的原檔）：GLEIF 根 → QVI → 法人 → ECR。
-# 發行者是 mock，schema 是真的。ECR 走法人直接發給員工的 le edge（官方 schema 的兩條路之一）。
+# The vLEI trust chain uses the official schemas (keri/schemas/, original files from WebOfTrust/vLEI): GLEIF root -> QVI -> legal entity -> ECR.
+# The issuers are mocks, the schemas are real. The ECR uses the le edge issued by the legal entity directly to the employee (one of the two paths in the official schema).
 def _official(name: str, said: str):
     with open(os.path.join(HERE, "schemas", name + ".json"), "rb") as f:
         schemer = scheming.Schemer(raw=f.read())
@@ -66,20 +66,20 @@ ECR = _official("legal-entity-engagement-context-role-vLEI-credential", "EEy9Pki
 
 
 def rules_for(schemer) -> dict:
-    """官方 schema 把 rules 條文定成 const：直接取用，不自己寫。"""
+    """The official schema fixes the rules text as a const: use it directly, do not write our own."""
     block = next(x for x in schemer.sed["properties"]["r"]["oneOf"] if x["type"] == "object")
     return {k: {"l": v["properties"]["l"]["const"]} for k, v in block["properties"].items() if k != "d"}
 
 
 def block(**fields) -> dict:
-    """ACDC 的 e／r 區塊本身也要自我定址（d 是區塊內容的 SAID）。"""
+    """The e/r blocks of an ACDC must be self-addressed too (d is the SAID of the block content)."""
     return coring.Saider.saidify(sad=dict(d="", **fields))[1]
 
 
-# AMC：GLEIF《Agentic AI in Payments》Annex A p.44 —— 行動類別、交易上限、允許的交易對手、有效時間窗。
-# 討論稿 p.45 明寫 AMC 的正式 ACDC schema 尚未定義；這是本專案的提案版本。
-# paywordRoot / paywordLength / unitYocto 把「額度」本身綁進憑證：鏈上 w0 必須等於憑證裡的值。
-# settlementAsset（選填）：NEP-141 代幣合約帳號；省略 = NEAR。unitYocto 此時為該代幣最小單位。
+# AMC: GLEIF "Agentic AI in Payments" Annex A p.44: action class, transaction cap, allowed counterparties, validity window.
+# The discussion paper p.45 states that the formal ACDC schema for the AMC is not yet defined; this is this project's proposed version.
+# paywordRoot / paywordLength / unitYocto bind the "limit" itself into the credential: w0 on chain must equal the value in the credential.
+# settlementAsset (optional): NEP-141 token contract account; omitted = NEAR. unitYocto is then the token's smallest unit.
 AMC = _schema(
     "Agent Mandate Credential",
     {

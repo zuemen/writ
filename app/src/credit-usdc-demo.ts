@@ -1,11 +1,11 @@
 /**
- * make credit-usdc-demo —— 信用改用穩定幣：本機 ft-mock（6 位小數，當成 USDC），賣方付保證費。只碰本機 sandbox。
- *   1 風險卡：資產、NEAR 準備、保證金、誰付費
- *   2 賣方規則拒單 → 調整規則 → 接受
- *   3 用量單：上限 5、實際 4，賣方實收扣掉保證費
- *   4 下一筆不付：金庫與保證金先賠，不足的由保證人的代幣質押賠
- *   5 公司用代幣還保證人，解凍；帳上總額等於合約的代幣餘額
- * 結尾印 CREDIT_USDC_RESULT 一行給機器檢查。
+ * make credit-usdc-demo: credit in a stablecoin: local ft-mock (6 decimals, treated as USDC), seller pays the guarantee fee. Local sandbox only.
+ *   1 Risk card: asset, NEAR reserve, bond, who pays the fee
+ *   2 Seller rule rejects the order, adjust the rule, accept
+ *   3 Metered order: cap 5, actual 4, seller receives the amount net of the guarantee fee
+ *   4 Next one unpaid: vault and bond pay first, any shortfall is paid from the guarantor's token stake
+ *   5 Company repays the guarantor in tokens, unfrozen; the total on the books equals the contract's token balance
+ * Prints one CREDIT_USDC_RESULT line at the end for machine checking.
  */
 import { createHash } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
@@ -23,7 +23,7 @@ const nowNs = () => BigInt(Date.now()) * 1_000_000n;
 const USD = 1_000_000n;
 const usd = (v: string | bigint) => (Number(BigInt(v)) / 1e6).toFixed(2) + " USDC";
 
-// ---- 本機的「USDC」：部署 contract/ft-mock
+// ---- Local "USDC": deploy contract/ft-mock
 const ROOTACC = "test.near";
 const root = as(ROOTACC, readJson(join(ROOT, ".sandbox", "validator_key.json")).secret_key as KeyPairString);
 const usdc = `usdc.${ROOTACC}`;
@@ -48,7 +48,7 @@ async function ftCall(from: string, sk: KeyPairString, amount: bigint, msg: stri
   return r;
 }
 
-// ---- 憑證：信用條款簽進 AMC 與 attestation（計價資產、賣方付費、單一賣方上限）
+// ---- Credential: credit terms signed into the AMC and attestation (pricing asset, seller pays, single-seller cap)
 for (const d of ["keri/.keystore", "keri/bundle", "keri/registrar"]) rmSync(join(ROOT, d), { recursive: true, force: true });
 const init = py("issuer.py", "init", "--scope", a.merchant.id, "--rail", a.acme.id, "--n", "20", "--unit", USD.toString(), "--daily", "20", "--days", "30",
   "--asset", usdc, "--credit-limit", (20n * USD).toString(), "--bond-bps", "2500", "--premium-bps", "200", "--fee-payer", "Seller", "--seller-cap-bps", "5000",
@@ -60,7 +60,7 @@ const cell = reg.cell;
 const agent = as(a.writ.id, keriPrivate().agent_near_secret_key as KeyPairString);
 const seller = as(a.merchant.id, a.merchant.sk);
 
-// 公司入金 6 USDC，保證人質押 100 USDC（都走 ft_transfer_call）
+// Company deposits 6 USDC, guarantor stakes 100 USDC (both via ft_transfer_call)
 await ftCall(a.acme.id, a.acme.sk, 6n * USD, String(cell));
 const toV = await call(acme, usdc, "ft_transfer", { receiver_id: a.verifier.id, amount: (100n * USD).toString() }, { deposit: 1n });
 if (toV.error) throw new Error("ft_transfer: " + toV.error);
@@ -82,7 +82,7 @@ async function seller_(m: string, args: object) {
   if (x.error) throw new Error(`${m}: ${x.error}`);
 }
 
-// ---- 賣方規則
+// ---- Seller rule
 const rule = (minBond: number) => ({ max_amount: (10n * USD).toString(), max_tenor_secs: "7200", min_bond_bps: minBond, max_defaults: 0, guarantors: [] as string[], asset: usdc, max_fee_bps: 500, arbiters: [] as string[] });
 const set1 = await setSellerPolicy(rule(5000));
 if (set1.error) throw new Error("set_seller_policy: " + set1.error);
@@ -95,7 +95,7 @@ const allowed: any = await checkOrder(k1);
 await seller_("accept_credit", { credit: k1 });
 say(`2  seller rule asks 50% bond → ${refused.reasons.join(", ")}; accept → ${tried.error}; rule set to 25% → ok=${allowed.ok}; order ${k1} accepted`);
 
-// ---- 用量單
+// ---- Metered order
 await seller_("mark_delivered", { credit: k1, delivery_hash: sha("delivery 1"), final_amount: (4n * USD).toString() });
 const s1 = await call(agent, a.writ.id, "settle", { credit: k1 }, { gas: teraToGas("50") });
 if (!s1.value?.CreditSettled) throw new Error("settle: " + JSON.stringify(s1.value ?? s1.error));
@@ -105,18 +105,18 @@ const got = (await bal(a.merchant.id)) - m0;
 const st1: any = await view(a.writ.id, "stake_of", { account: a.verifier.id, asset: usdc });
 say(`3  usage order: limit 5, billed 4, company paid 4; seller received ${usd(got)}, guarantor earned ${usd(st1.earned)}`);
 
-// ---- 違約
+// ---- Default
 const k2 = await open(8, "INV-USDC-2", 1);
 await seller_("accept_credit", { credit: k2 });
 await seller_("mark_delivered", { credit: k2, delivery_hash: sha("delivery 2") });
-await sleep(5000); // 過到期日與 3 秒驗收期
+await sleep(5000); // Wait past the due date and the 3-second acceptance period
 await seller_("claim_default", { credit: k2 });
 const cr: any = await view(a.writ.id, "credit_of", { credit: k2 });
 const claim2 = BigInt((await view(a.writ.id, "claimable_of", { account: a.merchant.id, asset: usdc })) as string);
 const frozen: any = await view(a.writ.id, "risk_card", { cell });
 say(`4  order ${k2} not paid: vault and bond paid first, the token stake paid ${usd(cr.debt)}; seller is owed ${usd(claim2)}; frozen=${frozen.frozen}`);
 
-// ---- 還債
+// ---- Repayment
 await ftCall(a.acme.id, a.acme.sk, BigInt(cr.debt), `reimburse:${k2}`);
 const after: any = await view(a.writ.id, "risk_card", { cell });
 const book: any = await view(a.writ.id, "guarantor_book", { account: a.verifier.id, asset: usdc });

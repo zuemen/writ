@@ -78,7 +78,7 @@ pub const MAX_SCOPE: usize = 16;
 const NS_PER_DAY: u64 = 86_400_000_000_000;
 /// The guarantee fee is priced by tenor: premium_bps is the rate per period of 30 days.
 pub const NS_PER_PERIOD: u64 = 30 * NS_PER_DAY;
-const GAS_FOR_CALLBACK: Gas = Gas::from_tgas(35); // 要付得起撤銷後的 ft_transfer（20）＋ on_refund（5）
+const GAS_FOR_CALLBACK: Gas = Gas::from_tgas(35); // must afford the post-revocation ft_transfer (20) + on_refund (5)
 const GAS_FOR_REFUND_CB: Gas = Gas::from_tgas(5);
 const MAX_EVIDENCE: usize = 128;
 /// Storage of one credit record (about 430 bytes for the order and 250 for a per-seller exposure record). Charged at open, from the root's vault or NEAR reserve; not refunded.
@@ -131,39 +131,39 @@ pub enum Status {
 #[near(serializers = [borsh, json])]
 #[derive(Clone)]
 pub struct Cell {
-    pub amc_said: String,          // AMC 的 SAID（憑證本身不上鏈）
-    pub issuer_aid: String,        // AMC 簽發者的 KERI AID —— 撤銷事件的 i 必須是它
-    pub issuer_pk: String,         // AMC 簽發者（人）當前的 Ed25519 公鑰 hex —— revoke_by_kel 用
-    pub agent_pk: PublicKey,       // agent 的鑰匙（= KERI 委派 AID 的簽章鑰）
-    pub verifier: AccountId,       // 哪個驗證者擔保了這條鏈
-    pub funder: AccountId,         // 法人出資帳號（入金、撤銷、續命）
-    pub lei_commit: String,        // sha256(LEI ‖ salt) hex —— LEI 本身不上鏈
-    pub ecr_commit: String,        // sha256(LE 公鑰 hex|ECR SAID|salt) hex —— HR 撤銷 ECR 時才打開
-    pub scope: Vec<AccountId>,     // 允許的交易對手
-    pub valid_until: U64,          // 有效期（Unix ns）
-    pub unit: U128,                // 每個鏈節值多少 yoctoNEAR
-    pub n: u32,                    // 鏈長（總額度 = n × unit）
-    pub idx: u32,                  // 已消耗幾節
-    pub w_cur: String,             // 目前的鏈頭 hex（初始 = w0）
-    pub daily_links: u32,          // 每日最多可消耗幾節（速率）
-    pub max_links: u32,            // 單筆最多幾節（AMC 的交易上限）
-    pub max_strikes: u32,          // 連續拒絕幾次刪鑰匙；0 = 不自動刪（寫在憑證裡）
-    pub day: u64,                  // 速率計數所屬的日
-    pub day_used: u32,             // 當日已消耗幾節
-    pub vault: U128,               // 這格可動用的金庫餘額
-    pub unclaimed: U128,           // 關格退款失敗的金額，法人可用 claim_refund 重領
+    pub amc_said: String,          // SAID of the AMC (the credential itself is not on chain)
+    pub issuer_aid: String,        // KERI AID of the AMC issuer: the revocation event's i must be this
+    pub issuer_pk: String,         // current Ed25519 public key hex of the AMC issuer (the person), used by revoke_by_kel
+    pub agent_pk: PublicKey,       // the agent's key (= signing key of the KERI delegated AID)
+    pub verifier: AccountId,       // which verifier vouched for this chain
+    pub funder: AccountId,         // legal entity's funding account (deposit, revoke, refresh)
+    pub lei_commit: String,        // sha256(LEI ‖ salt) hex; the LEI itself is not on chain
+    pub ecr_commit: String,        // sha256(LE public key hex|ECR SAID|salt) hex; opened only when HR revokes the ECR
+    pub scope: Vec<AccountId>,     // allowed counterparties
+    pub valid_until: U64,          // validity period (Unix ns)
+    pub unit: U128,                // yoctoNEAR value of each chain link
+    pub n: u32,                    // chain length (total limit = n × unit)
+    pub idx: u32,                  // links consumed so far
+    pub w_cur: String,             // current chain head hex (initially w0)
+    pub daily_links: u32,          // max links consumable per day (rate)
+    pub max_links: u32,            // max links per payment (the AMC's transaction cap)
+    pub max_strikes: u32,          // consecutive rejections before the key is deleted; 0 = never auto-delete (written in the credential)
+    pub day: u64,                  // the day the rate counter belongs to
+    pub day_used: u32,             // links consumed today
+    pub vault: U128,               // vault balance this cell can use
+    pub unclaimed: U128,           // amount whose refund failed on closing the cell; the legal entity can claim it again with claim_refund
     pub spends: u32,
-    pub rejects: u32,              // 累計拒絕
-    pub strikes: u32,              // 連續拒絕（成功一筆就歸零）
+    pub rejects: u32,              // total rejections
+    pub strikes: u32,              // consecutive rejections (reset by one success)
     pub status: Status,
     /// None = native NEAR; Some(token) = a NEP-141 such as a stablecoin, with the vault counted in that token's smallest unit.
     pub asset: Option<AccountId>,
-    pub root: u64,                 // 這棵樹的根格（根格指向自己）
-    pub parent: Option<u64>,       // 雇用它的格
-    pub depth: u32,                // 根格 = 0
-    pub children: Vec<u64>,        // 它雇用的格
-    pub tree_size: u32,            // 整棵樹幾格（只在根格維護）
-    pub near_reserve: U128,        // 代幣樹的根格才有：開格時留下的 NEAR，付單據儲存與雇用費
+    pub root: u64,                 // root cell of this tree (the root points to itself)
+    pub parent: Option<u64>,       // the cell that hired it
+    pub depth: u32,                // root cell = 0
+    pub children: Vec<u64>,        // cells it hired
+    pub tree_size: u32,            // number of cells in the whole tree (kept only on the root cell)
+    pub near_reserve: U128,        // only on the root cell of a token tree: NEAR left at opening, pays receipt storage and hiring fees
 }
 
 /// The verdict of a spend. Being refused is a normal result, not an error.
@@ -220,18 +220,18 @@ pub enum FeePayer {
 #[near(serializers = [borsh, json])]
 #[derive(Clone)]
 pub struct CreditArgs {
-    pub limit: U128,            // 未結清總額上限
-    pub bond_bps: u32,          // 保證金比例（萬分比），賣方接受時逐筆鎖定
-    pub premium_bps: u32,       // 保證費（每 30 天的萬分比，不滿一期算一期），賣方接受時由公司金庫付給保證人，不退
-    pub min_tenor: U64,         // 到期日距今最短（秒），防注入把到期設成幾秒後
+    pub limit: U128,            // cap on total outstanding amount
+    pub bond_bps: u32,          // bond ratio (basis points), locked per order when the seller accepts
+    pub premium_bps: u32,       // guarantee fee (basis points per 30 days, a partial period counts as one), paid from the company's vault to the guarantor when the seller accepts, non-refundable
+    pub min_tenor: U64,         // shortest time to the due date (seconds), prevents an injection from setting the due date a few seconds out
     pub max_tenor: U64,
-    pub terms_hash: String,     // 公司簽過的條款雜湊（準據法、同意揭露等）
-    pub terms_sig: String,      // LE 對 (合約, AMC, terms_hash, LEI) 的簽章 hex；揭露時才驗，防栽贓
-    pub entity_tag: String,     // 保證人給這家公司的固定假名，跨格累積紀錄
-    pub arbiter: AccountId,     // 爭議仲裁人，不得是保證人
-    pub fee_payer: FeePayer,    // 保證費誰付，簽進 attestation
-    pub seller_cap_bps: u32,    // 單一賣方的曝險上限（質押的萬分比）；0 = 不限。防串通賣方把質押一次領走
-    pub asset: Option<AccountId>, // 信用的計價資產，簽進 attestation，必須等於這格的資產；None = NEAR
+    pub terms_hash: String,     // hash of the terms the company signed (governing law, consent to disclosure, etc.)
+    pub terms_sig: String,      // LE's signature hex over (contract, AMC, terms_hash, LEI); checked only at disclosure, prevents framing
+    pub entity_tag: String,     // a fixed pseudonym the guarantor gives this company, accumulating records across cells
+    pub arbiter: AccountId,     // dispute arbiter, must not be the guarantor
+    pub fee_payer: FeePayer,    // who pays the guarantee fee, signed into the attestation
+    pub seller_cap_bps: u32,    // exposure cap per seller (basis points of the stake); 0 = unlimited. Prevents colluding sellers from drawing the stake out at once
+    pub asset: Option<AccountId>, // pricing asset of the credit, signed into the attestation, must equal this cell's asset; None = NEAR
 }
 
 /// The credit state of a tree (kept on the root only).
@@ -241,23 +241,23 @@ pub struct CreditTerms {
     pub args: CreditArgs,
     pub guarantor: AccountId,
     pub terms_ecr_commit: String,
-    pub outstanding: U128,      // 未結清總額
-    pub bond_locked: U128,      // 已鎖定的保證金（在根格金庫內）
-    pub open_debts: u32,        // 欠保證人的筆數；大於 0 就不能再賒
+    pub outstanding: U128,      // total outstanding
+    pub bond_locked: U128,      // bond locked (inside the root cell's vault)
+    pub open_debts: u32,        // number of debts owed to the guarantor; above 0 no more credit
 }
 
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Debug, PartialEq)]
 pub enum CreditStatus {
-    Open,       // agent 開單，賣方還沒接受
-    Accepted,   // 賣方接受，保證金與保證人曝險已鎖
-    Delivered,  // 賣方已交貨，到期沒付才有違約
-    Disputed,   // 公司附全額押金提出爭議
-    Settled,    // 已付
-    Cancelled,  // 逾時未接受，或仲裁判賣方敗
-    Defaulted,  // 已賠給賣方，欠保證人（或已由保證金賠完）
-    Reimbursed, // 公司已還保證人，維持封存
-    Enforced,   // 追償期滿，整棵樹已斷電，可揭露
+    Open,       // agent opened the order, seller has not accepted yet
+    Accepted,   // seller accepted, bond and guarantor exposure locked
+    Delivered,  // seller has delivered; a default exists only if unpaid at the due date
+    Disputed,   // company filed a dispute with a full deposit
+    Settled,    // paid
+    Cancelled,  // not accepted in time, or arbitration ruled against the seller
+    Defaulted,  // paid out to the seller, owed to the guarantor (or fully covered by the bond)
+    Reimbursed, // company has repaid the guarantor, stays sealed
+    Enforced,   // recovery period over, the whole tree is powered off, disclosure possible
 }
 
 #[near(serializers = [borsh, json])]
@@ -267,21 +267,21 @@ pub struct Credit {
     pub cell: U64,
     pub root: U64,
     pub seller: AccountId,
-    pub amount: U128,           // 目前金額；用量單交貨時可能縮小
-    pub original_amount: U128,  // 開單時的上限
-    pub asset: Option<AccountId>, // 金額的單位；None = NEAR
+    pub amount: U128,           // current amount; may shrink on delivery of a metered order
+    pub original_amount: U128,  // cap at the time the order was opened
+    pub asset: Option<AccountId>, // unit of the amount; None = NEAR
     pub invoice_hash: String,
     pub opened_at: U64,
     pub due_at: U64,
     pub status: CreditStatus,
     pub bond_locked: U128,
-    pub exposure: U128,         // 保證人為這筆承擔的金額
-    pub fee: U128,              // 賣方接受時定下的保證費：買方付的已收，賣方付的等收款時才扣
-    pub fee_periods: u32,       // 接受時算出的期數；用量單縮小時賣方付的費用照這個重算
+    pub exposure: U128,         // amount the guarantor bears for this order
+    pub fee: U128,              // guarantee fee fixed when the seller accepts: collected already if the buyer pays, deducted at payment if the seller pays
+    pub fee_periods: u32,       // number of periods computed at acceptance; when a metered order shrinks, the fee the seller pays is recomputed from this
     pub delivery_hash: Option<String>,
     pub delivered_at: U64,
     pub dispute_escrow: U128,
-    pub debt: U128,             // 保證人實際賠付、公司還沒還的金額
+    pub debt: U128,             // amount the guarantor actually paid out and the company has not yet repaid
     pub recourse_until: U64,
 }
 
@@ -291,11 +291,11 @@ pub struct Credit {
 pub struct Stake {
     pub amount: U128,
     pub exposure: U128,
-    pub unstake_at: U64, // 0 = 沒有申請提領
-    pub earned: U128,    // 累計收到的保證費
-    pub claims_paid: U128, // 累計用質押賠給賣方的金額
-    pub recovered: U128,   // 累計從公司追回的金額
-    pub sellers: Vec<AccountId>, // 曝險來源的賣方（有上限，見 MAX_BOOK_SELLERS）
+    pub unstake_at: U64, // 0 = no withdrawal requested
+    pub earned: U128,    // total guarantee fees received
+    pub claims_paid: U128, // total paid to sellers from the stake
+    pub recovered: U128,   // total recovered from the company
+    pub sellers: Vec<AccountId>, // sellers the exposure comes from (capped, see MAX_BOOK_SELLERS)
 }
 
 /// A seller's automatic credit rule: an order that fits ships, one that does not comes back with reasons.
@@ -305,12 +305,12 @@ pub struct SellerPolicy {
     pub max_amount: U128,
     pub max_tenor_secs: U64,
     pub min_bond_bps: u32,
-    pub max_defaults: u32,            // 公司假名最多幾筆違約紀錄
-    pub guarantors: Vec<AccountId>,   // 核准的保證人；空 = 都接受
+    pub max_defaults: u32,            // max default records per company pseudonym
+    pub guarantors: Vec<AccountId>,   // approved guarantors; empty = accept all
     #[serde(deserialize_with = "named_asset")]
-    pub asset: Option<AccountId>,     // 這條規則收的資產（必填，null = NEAR）；max_amount 就是這個資產的單位
-    pub max_fee_bps: u32,             // 保證費最多占金額的萬分比；不論誰付
-    pub arbiters: Vec<AccountId>,     // 核准的仲裁人；空 = 都接受
+    pub asset: Option<AccountId>,     // asset this rule takes (required, null = NEAR); max_amount is in this asset's unit
+    pub max_fee_bps: u32,             // max guarantee fee as basis points of the amount, no matter who pays
+    pub arbiters: Vec<AccountId>,     // approved arbiters; empty = accept all
 }
 
 /// Result of check_order. ok: the rule asked about (the stored rule if none was passed), the order's state and the money all pass.
@@ -327,7 +327,7 @@ pub struct OrderCheck {
 struct Quote {
     fee: u128,
     periods: u128,
-    charge: u128, // 接受當下從根格金庫收的費用：買方付 = fee，賣方付 = 0
+    charge: u128, // fee collected from the root cell's vault at acceptance: buyer pays = fee, seller pays = 0
     bond: u128,
     exposure: u128,
     failures: Vec<String>,
@@ -348,7 +348,7 @@ pub struct EntityRecord {
 #[derive(Clone)]
 pub struct Windows {
     pub accept_ttl: U64,
-    pub inspect: U64,       // 交貨後至少這麼久才能請求違約，公司有時間提出爭議
+    pub inspect: U64,       // only this long after delivery can a default be requested, giving the company time to dispute
     pub grace: U64,
     pub recourse: U64,
     pub dispute_timeout: U64,
@@ -394,42 +394,42 @@ pub struct Stats {
 #[derive(Clone)]
 pub struct Unseal {
     pub requester: AccountId,
-    pub reason_hash: String,   // 調閱理由（例如法院命令）的 sha256 hex；理由本文不上鏈
+    pub reason_hash: String,   // sha256 hex of the disclosure reason (e.g. a court order); the reason text is not on chain
     pub requested_at: U64,     // ns
-    pub objected: bool,        // 法人提出異議：公開留痕，不是否決（GLEIF 討論稿 p.28–29 的 view-key 模型）
-    pub lei: Option<String>,   // 揭露後才有
+    pub objected: bool,        // the legal entity filed an objection: left as a public trace, not a veto (view-key model of the GLEIF discussion paper p.28-29)
+    pub lei: Option<String>,   // present only after disclosure
 }
 
 #[near(contract_state, contract_metadata(version = "0.2.0", link = "https://github.com/zuemen/writ", standard(standard = "nep297", version = "1.0.0")))]
 #[derive(PanicOnDefault)]
 pub struct Contract {
     owner: AccountId,
-    verifiers: IterableMap<AccountId, String>, // account → Ed25519 公鑰 hex
+    verifiers: IterableMap<AccountId, String>, // account -> Ed25519 public key hex
     cells: LookupMap<u64, Cell>,
     key_to_cell: LookupMap<PublicKey, u64>,
     next_id: u64,
-    vault_total: u128, // 所有 NEAR 帳目的總和；合約餘額必須 >= 這個數。代幣另記在 token_total
+    vault_total: u128, // sum of all NEAR books; the contract balance must be >= this. Tokens are tracked separately in token_total
     stats: Stats,
     supervisors: IterableMap<AccountId, bool>,
     unseals: LookupMap<u64, Unseal>,
     unseal_delay_ns: u64,
-    used_amcs: LookupMap<String, u64>, // 一張 AMC 只能開一格；撤銷後不能用同一張 attestation 復活
-    paid_invoices: LookupSet<Vec<u8>>, // cell id ‖ 發票雜湊：同一張發票不能付兩次
-    pending_invoices: LookupSet<Vec<u8>>, // 發票已占用但賣方沒拿到錢：開單到付清之間，或仲裁判公司勝之後
-    used_keys: LookupSet<PublicKey>, // 鑰匙一生只用一次：解僱、撤銷、tripwire 之後都不能再被雇用或開格
+    used_amcs: LookupMap<String, u64>, // an AMC can open only one cell; after revocation the same attestation cannot revive it
+    paid_invoices: LookupSet<Vec<u8>>, // cell id ‖ invoice hash: the same invoice cannot be paid twice
+    pending_invoices: LookupSet<Vec<u8>>, // invoice taken but the seller got no money: between opening the order and payment, or after arbitration for the company
+    used_keys: LookupSet<PublicKey>, // a key is used only once in its life: after dismissal, revocation or tripwire it cannot be hired or open a cell again
     credits: LookupMap<u64, Credit>,
     terms: LookupMap<u64, CreditTerms>,
-    stakes: LookupMap<(AccountId, Option<AccountId>), Stake>, // (保證人, 資產)：不同資產的質押互不支援
-    claimable: LookupMap<(AccountId, Option<AccountId>), u128>, // (帳號, 資產)；先記帳後提領：賣方自己來領
+    stakes: LookupMap<(AccountId, Option<AccountId>), Stake>, // (guarantor, asset): stakes of different assets do not back each other
+    claimable: LookupMap<(AccountId, Option<AccountId>), u128>, // (account, asset); record first, withdraw later: the seller comes to claim
     entities: LookupMap<String, EntityRecord>,
     next_credit: u64,
     windows: Windows,
     policies: LookupMap<AccountId, SellerPolicy>,
-    seller_exposure: LookupMap<(AccountId, Option<AccountId>, AccountId), u128>, // (保證人, 資產, 賣方) → 曝險；歸零就刪
-    token_total: LookupMap<AccountId, u128>, // 每種代幣的帳目總和；合約在該代幣的餘額必須 >= 這個數
+    seller_exposure: LookupMap<(AccountId, Option<AccountId>, AccountId), u128>, // (guarantor, asset, seller) -> exposure; deleted at zero
+    token_total: LookupMap<AccountId, u128>, // sum of books per token; the contract's balance in that token must be >= this
 }
 
-// ---------------- 小工具 ----------------
+// ---------------- helpers ----------------
 
 fn hex32(s: &str, what: &str) -> [u8; 32] {
     let v = hex::decode(s).unwrap_or_else(|_| env::panic_str(&format!("BAD_HEX:{}", what)));
@@ -513,7 +513,7 @@ impl Contract {
         }
     }
 
-    // ================= 管理：白名單驗證者 =================
+    // ================= Admin: allowlisted verifiers =================
 
     pub fn set_verifier(&mut self, account: AccountId, pk_hex: Option<String>) {
         require!(env::predecessor_account_id() == self.owner, "ONLY_OWNER");
@@ -528,7 +528,7 @@ impl Contract {
         }
     }
 
-    // ================= 憑證時：開格（冷驗一次） =================
+    // ================= At credential time: open a cell (cold verification once) =================
 
     /// Called by the funder with the verifier's attestation. On a NEAR cell the deposit minus the fee goes to the vault; on a token cell with credit terms it becomes the NEAR reserve.
     /// The contract adds a function-call key for the agent on its own account (the Keypom pattern).
@@ -549,7 +549,7 @@ impl Contract {
         require!(!self.used_amcs.contains_key(&args.amc_said), "AMC_ALREADY_USED");
         require!(!self.used_keys.contains(&args.agent_pk), "KEY_IN_USE");
 
-        // 謂詞 1：鏈有效 —— 白名單驗證者的簽章
+        // Predicate 1: chain is valid: signature of an allowlisted verifier
         let vpk_hex = self.verifiers.get(&args.verifier).unwrap_or_else(|| env::panic_str("UNKNOWN_VERIFIER"));
         let vpk = hex32(vpk_hex, "verifier_pk");
         let sig: [u8; 64] = hex::decode(&args.signature)
@@ -559,8 +559,8 @@ impl Contract {
         let msg = attestation_message(&args, &funder, &env::current_account_id());
         require!(env::ed25519_verify(&sig, msg.as_bytes(), &vpk), "BAD_ATTESTATION");
 
-        // NEAR 格：附帶的 NEAR 扣掉開格費進金庫。代幣格：金庫用 ft_transfer_call 入金；
-        // 有信用條款的代幣格，多的 NEAR 留作準備（付單據儲存與雇用費），沒有的退回。
+        // NEAR cell: the attached NEAR minus the opening fee goes into the vault. Token cell: the vault is funded with ft_transfer_call;
+        // a token cell with credit terms keeps the extra NEAR as reserve (pays receipt storage and hiring fees), one without refunds it.
         let vault = if args.asset.is_none() { deposit.as_yoctonear() - fee } else { 0 };
         let reserve = if args.asset.is_some() && args.credit.is_some() { deposit.as_yoctonear() - fee } else { 0 };
         let id = self.next_id;
@@ -621,7 +621,7 @@ impl Contract {
             if !self.entities.contains_key(&key) {
                 self.entities.insert(key, EntityRecord { first_seen: U64(env::block_timestamp()), ..Default::default() });
             }
-            // 驗證者簽過這種代幣才開質押帳：ft_on_transfer 的呼叫者誰都能假冒代幣，假代幣不能灌儲存
+            // Open the stake account only for a token the verifier has signed: anyone can pose as a token contract to call ft_on_transfer, and a fake token must not inflate storage
             let sk = (args.verifier.clone(), args.asset.clone());
             if args.asset.is_some() && !self.stakes.contains_key(&sk) {
                 self.stakes.insert(sk, Stake::default());
@@ -635,7 +635,7 @@ impl Contract {
                                "verifier": args.verifier, "vault": vault.to_string(), "near_reserve": reserve.to_string(), "n": args.n, "unit": args.unit.0.to_string()}),
         );
         if args.asset.is_some() && args.credit.is_none() && deposit.as_yoctonear() > fee {
-            // 沒有信用條款的代幣格用不到 NEAR，超過開格費的退回
+            // A token cell without credit terms has no use for NEAR; anything above the opening fee is refunded
             Promise::new(funder.clone()).transfer(NearToken::from_yoctonear(deposit.as_yoctonear() - fee)).detach();
         }
         Promise::new(env::current_account_id())
@@ -657,7 +657,7 @@ impl Contract {
         require!(c.status == Status::Active, "NOT_ACTIVE");
         let d = env::attached_deposit().as_yoctonear();
         if c.asset.is_some() {
-            // 代幣樹的根格：附的 NEAR 補進準備；代幣本身走 ft_transfer_call
+            // Root cell of a token tree: the attached NEAR tops up the reserve; the tokens themselves go through ft_transfer_call
             require!(c.parent.is_none() && self.terms.contains_key(&cell.0), "TOKEN_CELL_USE_FT_TRANSFER_CALL");
             c.near_reserve = U128(c.near_reserve.0 + d);
         } else {
@@ -667,7 +667,7 @@ impl Contract {
         self.cells.insert(cell.0, c);
     }
 
-    // ================= 執行時：每筆一個雜湊檢查 =================
+    // ================= At run time: one hash check per payment =================
 
     /// Callable only by an agent's function-call key: signer and predecessor must both be the contract account.
     /// preimage: the link a person released to the agent (hex); j: links to spend; amount = j x unit.
@@ -677,7 +677,7 @@ impl Contract {
         let pk = env::signer_account_pk();
         let id = *self.key_to_cell.get(&pk).unwrap_or_else(|| env::panic_str("NO_CELL"));
         let mut c = self.cells.get(&id).cloned().unwrap();
-        // 協定層已保證鑰匙存在＝未撤銷；狀態欄位是給人看的雙重保險
+        // The protocol layer already guarantees the key exists = not revoked; the status field is a double safeguard for humans
         require!(c.status == Status::Active, "NOT_ACTIVE");
 
         let now = env::block_timestamp();
@@ -687,10 +687,10 @@ impl Contract {
             c.day_used = 0;
         }
 
-        // 發票在整棵樹只能付一次，不是每格一次
+        // An invoice can be paid only once in the whole tree, not once per cell
         let invoice_key = Self::invoice_key(c.root, &invoice_hash);
         let free = self.free_vault(id, &c);
-        // 依序檢查：過期 → 上層停權 → 對手 → 發票 → 單筆上限 → 額度（鏈長）→ 雜湊鏈 → 速率 → 金庫
+        // Checks in order: expired -> upper level suspended -> counterparty -> invoice -> per-payment cap -> limit (chain length) -> hash chain -> rate -> vault
         let reason: Option<&str> = if now > c.valid_until.0 {
             Some("EXPIRED")
         } else if self.suspended(&c) {
@@ -722,9 +722,9 @@ impl Contract {
             return PromiseOrValue::Value(self.reject(id, c, pk, r));
         }
 
-        // 通過：推進鏈頭、扣額度、扣金庫，然後轉帳
+        // Passed: advance the chain head, deduct the limit, deduct the vault, then transfer
         let amount = (j as u128) * c.unit.0;
-        // 錢真的到了才算付款；轉帳途中發票已占用，但還不是「已付」
+        // It counts as paid only when the money really arrives; during the transfer the invoice is taken but not yet "paid"
         let ik = invoice_key.unwrap();
         self.paid_invoices.insert(ik.clone());
         self.pending_invoices.insert(ik);
@@ -740,10 +740,10 @@ impl Contract {
         self.cells.insert(id, c);
         self.sub_total(&asset, amount);
 
-        // 跨 receipt 沒有原子回滾：先扣（預留），callback 失敗再退回金庫
-        // 代幣格：合約自己發 receipt 附 1 yocto 呼叫 ft_transfer（agent 的 FC key 不能附存款，合約可以）
+        // No atomic rollback across receipts: deduct first (reserve), refund to the vault if the callback fails
+        // Token cell: the contract itself issues a receipt calling ft_transfer with 1 yocto attached (the agent's FC key cannot attach a deposit, the contract can)
         let payout = Self::send(&asset, to.clone(), amount, format!("writ cell {}", id));
-        // 交易的最終結果就是轉帳的真正結果：Paid 只在錢真的到了才出現
+        // The transaction's final result is the transfer's real result: Paid appears only when the money really arrived
         payout
             .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_CALLBACK).on_transfer(U64(id), U128(amount), invoice_hash, to, idx, remaining))
             .into()
@@ -765,7 +765,7 @@ impl Contract {
             c.day_used = 0;
         }
         let amount = (j as u128).saturating_mul(c.unit.0);
-        // 雇用費由根格（公司）付：子 agent 的金庫只有撥給它的預算，付不起也不該付
+        // The hiring fee is paid by the root cell (the company): the child agent's vault holds only the budget given to it, it cannot and should not pay
         let root_cell = if c.root == id { None } else { self.cells.get(&c.root).cloned() };
         let tree_size = root_cell.as_ref().map(|r| r.tree_size).unwrap_or(c.tree_size);
         let fee = hire_fee(j);
@@ -778,7 +778,7 @@ impl Contract {
                 Some(r) => c.vault.0 >= amount && self.free_vault(c.root, r) >= fee,
             }
         };
-        // 代幣樹：預算是代幣，雇用費是 NEAR，從根格的準備扣
+        // Token tree: the budget is tokens, the hiring fee is NEAR, deducted from the root cell's reserve
         let reserve = root_cell.as_ref().map(|r| r.near_reserve.0).unwrap_or(c.near_reserve.0);
         let reserve_ok = !token_tree || reserve >= fee;
         let w0_ok = hex::decode(&child.w0).map(|v| v.len() == 32).unwrap_or(false);
@@ -833,7 +833,7 @@ impl Contract {
         if root_cell.is_none() && token_tree {
             c.near_reserve = U128(c.near_reserve.0 - fee);
         }
-        self.vault_total -= fee; // 費用留在合約付儲存與 gas；amount 只是換格，總額不變
+        self.vault_total -= fee; // the fee stays in the contract to pay storage and gas; amount only changes cell, the total is unchanged
         let child_id = self.next_id;
         self.next_id += 1;
         c.children.push(child_id);
@@ -943,7 +943,7 @@ impl Contract {
     /// Policy refusal: counts a strike and deletes the key after too many in a row. Returns Rejected; the transaction succeeds.
     fn reject(&mut self, id: u64, mut c: Cell, pk: PublicKey, r: &str) -> Verdict {
         c.rejects += 1;
-        // 凍結是公司的債，不是 agent 被騙：不計 strike，還清後 agent 不必逐格復職
+        // Freezing is the company's debt, not the agent being fooled: no strike, and after repayment the agent need not be reinstated cell by cell
         if !no_strike(r) {
             c.strikes += 1;
         }
@@ -975,7 +975,7 @@ impl Contract {
             event("paid", serde_json::json!({"cell": cell.0.to_string(), "to": to, "amount": amount.0.to_string(), "idx": idx, "invoice": invoice_hash}));
             return Verdict::Paid { cell, amount, idx, remaining_links: remaining };
         }
-        // 沒付成：這張發票還能再付；鏈節已消耗不退（防重放）；錢退回金庫
+        // Not paid: this invoice can be paid again; the chain link is consumed and not refunded (anti-replay); money goes back to the vault
         if let Some(k) = Self::invoice_key(c.root, &invoice_hash) {
             self.paid_invoices.remove(&k);
             self.pending_invoices.remove(&k);
@@ -984,12 +984,12 @@ impl Contract {
         let strikes = c.strikes;
         let mut retained = false;
         if matches!(c.status, Status::Revoked { .. }) {
-            // 轉帳途中格已被撤銷：關閉的格不能再領錢，直接退給法人
+            // The cell was revoked during the transfer: a closed cell cannot be paid out any more, refund directly to the legal entity
             let (asset, funder, root_id) = (c.asset.clone(), c.funder.clone(), c.root);
             self.cells.insert(cell.0, c);
             let retain = self.terms.get(&root_id).map(|t| t.outstanding.0 > 0 || t.open_debts > 0).unwrap_or(false);
             if retain {
-                // 公司還欠錢：這筆錢和其他金庫一樣留在根格，先付欠款
+                // The company still owes money: this money stays in the root cell like the rest of the vault, and pays the debt first
                 let mut r = self.cells.get(&root_id).cloned().unwrap();
                 r.vault = U128(r.vault.0 + amount.0);
                 self.cells.insert(root_id, r);
@@ -1029,7 +1029,7 @@ impl Contract {
         hex::encode(cur) == w_cur.to_lowercase()
     }
 
-    // ================= 撤銷 =================
+    // ================= Revocation =================
 
     /// Manual revocation, by the funder, this cell's verifier, or the owner.
     /// evidence: the SAID of the KERI rev event (supplied by a watcher) or "manual".
@@ -1082,17 +1082,17 @@ impl Contract {
         let mut refund = 0u128;
         let mut reserve = 0u128;
         let mut keys: Vec<PublicKey> = vec![];
-        // 公司還欠錢時金庫留在根格，事件要照實說沒有退款
+        // When the company still owes money the vault stays in the root cell, so the event must say honestly that there is no refund
         let holds = self.terms.get(&c.root).map(|t| t.outstanding.0 > 0 || t.open_debts > 0).unwrap_or(false);
         let mut stack: Vec<(u64, Cell, Status)> = vec![(id, c, status)];
         while let Some((cid, mut cell, st)) = stack.pop() {
             if cell.status == Status::Active {
-                keys.push(cell.agent_pk.clone()); // tripped 的格鑰匙已刪過；再刪會失敗
+                keys.push(cell.agent_pk.clone()); // the tripped cell's key was already deleted; deleting again would fail
             }
             let part = cell.vault.0;
             refund += part;
             cell.vault = U128(0);
-            // NEAR 準備不是賠款的資產，也不會再開新單：關格就還給法人
+            // The NEAR reserve is not an asset that pays claims and no new orders will open: closing the cell returns it to the legal entity
             reserve += cell.near_reserve.0;
             cell.near_reserve = U128(0);
             cell.status = st.clone();
@@ -1109,7 +1109,7 @@ impl Contract {
             }
             self.cells.insert(cid, cell);
         }
-        // 整棵樹還有未結清的信用：金庫留在根格付欠款，靠撤銷賴不了帳；結清後才可領回
+        // The whole tree still has unsettled credit: the vault stays in the root cell to pay the debt, so revocation cannot be used to dodge it; it can be taken back only after settlement
         let root_id = self.cells.get(&id).map(|c| c.root).unwrap_or(id);
         let keep = refund > 0 && self.terms.get(&root_id).map(|t| t.outstanding.0 > 0 || t.open_debts > 0).unwrap_or(false);
         if keep {
@@ -1311,7 +1311,7 @@ impl Contract {
         }
     }
 
-    // ================= 監理調閱（tier-1：只揭露 LEI） =================
+    // ================= Regulator disclosure request (tier-1: only the LEI is disclosed) =================
 
     pub fn set_supervisor(&mut self, account: AccountId, enabled: bool) {
         require!(env::predecessor_account_id() == self.owner, "ONLY_OWNER");
@@ -1328,7 +1328,7 @@ impl Contract {
         require!(self.supervisors.get(&who).copied().unwrap_or(false), "NOT_SUPERVISOR");
         require!(self.cells.contains_key(&cell.0), "NO_CELL");
         if let Some(u) = self.unseals.get(&cell.0) {
-            // 提出者若已被移出白名單，它的請求不再占住這格
+            // If the requester has been removed from the allowlist, its request no longer holds this cell
             require!(u.lei.is_none() && !self.supervisors.contains_key(&u.requester), "ALREADY_REQUESTED");
         }
         hex32(&reason_hash, "reason_hash");
@@ -1370,7 +1370,7 @@ impl Contract {
         self.unseals.get(&cell.0).cloned()
     }
 
-    // ================= 給商家／任何人看的 =================
+    // ================= For merchants / anyone to read =================
 
     pub fn invoice_paid(&self, cell: U64, invoice_hash: String) -> bool {
         let root = self.cells.get(&cell.0).map(|c| c.root).unwrap_or(cell.0);
@@ -1510,7 +1510,7 @@ impl Contract {
     }
 }
 
-// ================= 信用：Who pays is named before the agent buys =================
+// ================= Credit: Who pays is named before the agent buys =================
 #[near]
 impl Contract {
     /// A guarantor stakes NEAR; it cannot withdraw what is exposed. Token stakes go through ft_on_transfer("stake").
@@ -1521,7 +1521,7 @@ impl Contract {
 
     fn stake_in(&mut self, who: AccountId, asset: Option<AccountId>, amount: u128) {
         require!(self.verifiers.contains_key(&who), "NOT_A_VERIFIER");
-        // 代幣的質押帳在驗證者簽過第一棵這種代幣的樹時開好（register）：假代幣開不了帳
+        // The stake account of a token is opened when the verifier signs the first tree of that token (register): a fake token cannot open one
         require!(asset.is_none() || self.stakes.contains_key(&(who.clone(), asset.clone())), "STAKE_ASSET_UNKNOWN");
         let mut st = self.stake_get(&who, &asset);
         st.amount = U128(st.amount.0 + amount);
@@ -1543,7 +1543,7 @@ impl Contract {
         require!(st.unstake_at.0 > 0 && env::block_timestamp() >= st.unstake_at.0, "UNSTAKE_TOO_EARLY");
         require!(st.amount.0.saturating_sub(st.exposure.0) >= amount.0, "STAKE_EXPOSED");
         st.amount = U128(st.amount.0 - amount.0);
-        st.unstake_at = U64(0); // 每次提領都要重新申請並等待
+        st.unstake_at = U64(0); // every withdrawal must be requested again and waited for
         self.stake_put(&who, &asset, st);
         self.sub_total(&asset, amount.0);
         Self::send(&asset, who.clone(), amount.0, "writ stake".to_string())
@@ -1568,7 +1568,7 @@ impl Contract {
         let invoice_key = Self::invoice_key(c.root, &invoice_hash);
         let root_vault = if c.root == id { c.vault.0 } else { self.cells.get(&c.root).map(|r| r.vault.0).unwrap_or(0) };
         let root_reserve = if c.root == id { c.near_reserve.0 } else { self.cells.get(&c.root).map(|r| r.near_reserve.0).unwrap_or(0) };
-        // 單據儲存是 NEAR：NEAR 樹從根格可用金庫付，代幣樹從根格的 NEAR 準備付
+        // Receipt storage is NEAR: a NEAR tree pays from the root cell's usable vault, a token tree from the root cell's NEAR reserve
         let token_tree = c.asset.is_some();
         let storage_free = if token_tree { root_reserve } else { root_vault.saturating_sub(terms.as_ref().map(|t| t.bond_locked.0).unwrap_or(0)) };
         let reason: Option<&str> = if terms.is_none() {
@@ -1668,7 +1668,7 @@ impl Contract {
         if let Some(r) = self.accept_state_failures(&cr, &t, &root, &cell, now).first() {
             env::panic_str(r);
         }
-        // 賣方自己設的規則；沒設就不檢查
+        // The seller's own rule; if none is set, no check
         if let Some(p) = self.policies.get(&cr.seller) {
             if let Some(r) = self.policy_failures(p, &cr, &t, now).first() {
                 env::panic_str(&format!("POLICY:{}", r));
@@ -1711,14 +1711,14 @@ impl Contract {
         };
         no(cr.status != CreditStatus::Open, "NOT_OPEN");
         no(now > cr.opened_at.0 + self.windows.accept_ttl.0 * 1_000_000_000, "OFFER_EXPIRED");
-        // 公司已撤銷或停權、已凍結、期限已過：這張報價不能再成立，否則是拿保證人的錢墊
+        // Company revoked or suspended, already frozen, period passed: this quote can no longer stand, otherwise the guarantor's money would be fronted
         no(cell.status != Status::Active || self.suspended(cell), "AGENT_NOT_ACTIVE");
         no(t.open_debts != 0, "COMPANY_FROZEN");
-        // 移出白名單是鎖定後唯一的緊急手段：這個保證人不再接新單，已接的照走
+        // Removal from the allowlist is the only emergency measure after locking: this guarantor takes no new orders, accepted ones run on
         no(!self.verifiers.contains_key(&t.guarantor), "GUARANTOR_DELISTED");
         no(now > cell.valid_until.0, "MANDATE_EXPIRED");
         no(cr.seller == t.args.arbiter, "ARBITER_NOT_INDEPENDENT");
-        // 保證人或公司自己當賣方，等於自己製造違約：前者可走到揭露，後者把質押領給自己
+        // The guarantor or the company acting as seller means manufacturing a default itself: the former can reach disclosure, the latter draws the stake to itself
         no(cr.seller == t.guarantor || cr.seller == root.funder, "SELLER_NOT_INDEPENDENT");
         out
     }
@@ -1746,12 +1746,12 @@ impl Contract {
 
     /// What accepting this order would charge and lock now.
     fn quote(&self, cr: &Credit, t: &CreditTerms, root: &Cell, now: u64) -> Quote {
-        // 保證費：這是保證人肯做的理由。買方付的接受當下收，之後怎麼結束都不退（曝險已經承擔）；賣方付的等收款時扣
+        // Guarantee fee: this is why the guarantor is willing. What the buyer pays is collected at acceptance and never refunded however the order ends (the exposure is already borne); what the seller pays is deducted at payment
         let periods = fee_periods(cr.due_at.0, now);
         let fee = guarantee_fee(cr.amount.0, t.args.premium_bps, periods);
         let charge = if t.args.fee_payer == FeePayer::Buyer { fee } else { 0 };
         let free = root.vault.0.saturating_sub(t.bond_locked.0);
-        // 保證金是硬性要求：風險卡寫幾成就鎖幾成，付不出來這張單就不成立，差額不會靜默轉給保證人
+        // The bond is a hard requirement: lock as many tenths as the risk card says, if it cannot be paid the order does not stand, the difference is never silently shifted to the guarantor
         let bond = cr.amount.0 * (t.args.bond_bps as u128) / 10_000;
         let exposure = cr.amount.0 - bond;
         let st = self.stake_get(&t.guarantor, &t.args.asset);
@@ -1765,7 +1765,7 @@ impl Contract {
         if st.amount.0.saturating_add(charge).saturating_sub(st.exposure.0) < exposure {
             failures.push("GUARANTOR_CAPACITY".to_string());
         }
-        // 串通的賣方最多領走質押的這個比例。分母是收這筆費用之前的質押，比較保守
+        // Colluding sellers can draw at most this share of the stake. The denominator is the stake before this fee is collected, which is more conservative
         let to_seller = self.seller_exposure_of(&t.guarantor, &t.args.asset, &cr.seller) + exposure;
         if t.args.seller_cap_bps > 0 && to_seller.saturating_mul(10_000) > st.amount.0.saturating_mul(t.args.seller_cap_bps as u128) {
             failures.push("SELLER_CONCENTRATION".to_string());
@@ -1826,7 +1826,7 @@ impl Contract {
         common.extend(q.failures.iter().cloned());
         let would_accept = common.is_empty() && stored.map(|p| self.policy_failures(p, cr, t, now).is_empty()).unwrap_or(true);
         reasons.extend(common);
-        // 接受之後回報單上定下來的值
+        // After acceptance, report the values fixed on the order
         let (fee, periods, bond, exposure) = if cr.status != CreditStatus::Open {
             (cr.fee.0, cr.fee_periods as u128, cr.bond_locked.0, cr.exposure.0)
         } else {
@@ -1872,7 +1872,7 @@ impl Contract {
             _ => env::panic_str("NOT_CANCELLABLE"),
         }
         self.release(&mut cr, CreditStatus::Cancelled, 0);
-        // 取消的單沒人收到錢也沒人裁定過：發票放回去，公司可以重開或付款
+        // A cancelled order: nobody received money and nobody ruled: the invoice is put back, the company can reopen or pay
         if let Some(k) = Self::invoice_key(cr.root.0, &cr.invoice_hash) {
             self.paid_invoices.remove(&k);
             self.pending_invoices.remove(&k);
@@ -1886,7 +1886,7 @@ impl Contract {
     pub fn mark_delivered(&mut self, credit: U64, delivery_hash: String, final_amount: Option<U128>) {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
         require!(env::predecessor_account_id() == cr.seller, "ONLY_SELLER");
-        // 公司搶先提出爭議時，賣方仍然可以留下交貨憑據，仲裁逾時才不會一律退給公司
+        // When the company disputes first, the seller can still leave delivery evidence, so an arbitration timeout does not always refund the company
         require!(matches!(cr.status, CreditStatus::Accepted | CreditStatus::Disputed) && cr.delivery_hash.is_none(), "NOT_ACCEPTED");
         hex32(&delivery_hash, "delivery_hash");
         if let Some(f) = final_amount {
@@ -1900,7 +1900,7 @@ impl Contract {
         if cr.status == CreditStatus::Accepted {
             cr.status = CreditStatus::Delivered;
         } else {
-            // 爭議逾時後不能補；爭議中補交，仲裁人至少還有一段驗收期可以看
+            // No additions after the dispute timeout; during a dispute the additions leave the arbiter at least one more review period
             require!(now <= cr.recourse_until.0, "DISPUTE_CLOSED");
             cr.recourse_until = U64(cr.recourse_until.0.max(now + self.windows.inspect.0 * 1_000_000_000));
         }
@@ -1920,7 +1920,7 @@ impl Contract {
         let mut c = self.cells.get(&id).cloned().unwrap();
         require!(!self.suspended(&c), "SUSPENDED");
         require!(!self.owes_guarantor(cr.root.0), "REPAY_GUARANTOR_FIRST");
-        // 付這一筆時，這筆自己鎖的保證金可以用
+        // When paying this order, the bond this order locked itself can be used
         let usable = if id == cr.root.0 { self.free_vault(id, &c) + cr.bond_locked.0 } else { c.vault.0 };
         require!(usable >= cr.amount.0, "VAULT_SHORT");
         c.vault = U128(c.vault.0 - cr.amount.0);
@@ -1949,9 +1949,9 @@ impl Contract {
             self.credit_seller(&root.funder, &root.asset, attached - cr.amount.0);
         } else {
             require!(attached == 0, "PARTIAL_DEPOSIT");
-            // 欠保證人時金庫要先還保證人，別筆單要另外帶錢來付
+            // When the guarantor is owed, the vault must repay the guarantor first; other orders must bring their own money to pay
             require!(!self.owes_guarantor(cr.root.0), "REPAY_GUARANTOR_FIRST");
-            // 被鎖的這筆保證金可以用來付這一筆
+            // The bond locked for this order can be used to pay this order
             let t = self.terms.get(&cr.root.0).unwrap();
             let usable = root.vault.0.saturating_sub(t.bond_locked.0 - cr.bond_locked.0);
             require!(usable >= cr.amount.0, "VAULT_SHORT");
@@ -2024,7 +2024,7 @@ impl Contract {
         let delivered = cr.delivery_hash.is_some();
         let key = Self::invoice_key(cr.root.0, &cr.invoice_hash);
         self.finish_dispute(cr, delivered);
-        // 仲裁人沒裁定、也沒交貨：沒人判過這張發票，放回去
+        // The arbiter did not rule and there was no delivery: nobody has ruled on this invoice, put it back
         if let (false, Some(k)) = (delivered, key) {
             self.paid_invoices.remove(&k);
             self.pending_invoices.remove(&k);
@@ -2038,7 +2038,7 @@ impl Contract {
         let who = env::predecessor_account_id();
         let now = env::block_timestamp();
         let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
-        // 賣方一直不請求時曝險會卡住：再過一段追償期，保證人可以代為觸發，錢仍然給賣方
+        // When the seller never requests, the exposure gets stuck: after another recovery period the guarantor can trigger it on the seller's behalf, the money still goes to the seller
         let stale = now > cr.due_at.0 + (self.windows.grace.0 + self.windows.recourse.0) * 1_000_000_000
             && now > cr.delivered_at.0 + (self.windows.inspect.0 + self.windows.recourse.0) * 1_000_000_000;
         require!(who == cr.seller || (who == t.guarantor && stale), "ONLY_SELLER");
@@ -2054,7 +2054,7 @@ impl Contract {
             self.cells.insert(cr.cell.0, c);
         }
         let mut r = self.cells.get(&cr.root.0).cloned().unwrap();
-        // 根格金庫：別筆鎖定的保證金不能動，這筆的可以
+        // Root cell vault: bonds locked for other orders cannot be touched, this order's can
         let usable = r.vault.0.saturating_sub(t.bond_locked.0 - cr.bond_locked.0);
         let take = left.min(usable);
         r.vault = U128(r.vault.0 - take);
@@ -2101,7 +2101,7 @@ impl Contract {
         Self::check_payment_asset(&root.asset, &via, attached);
         require!(matches!(cr.status, CreditStatus::Defaulted | CreditStatus::Enforced) && cr.debt.0 > 0, "NO_DEBT");
         let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
-        // 金庫裡沒被鎖的錢先抵，不足的才要帶錢來
+        // Unlocked money in the vault offsets first, only the shortfall needs to be brought
         let mut r = root.clone();
         let from_vault = r.vault.0.saturating_sub(t.bond_locked.0).min(cr.debt.0);
         let due = cr.debt.0 - from_vault;
@@ -2130,14 +2130,14 @@ impl Contract {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
         let t = self.terms.get(&cr.root.0).cloned().unwrap();
         require!(env::predecessor_account_id() == t.guarantor, "ONLY_GUARANTOR");
-        // 已斷電的也可以再收一次：別筆單結束後釋放的保證金要先還保證人
+        // A powered-off tree can also be collected again: the bond released when other orders end must first repay the guarantor
         require!(matches!(cr.status, CreditStatus::Defaulted | CreditStatus::Enforced) && cr.debt.0 > 0, "NO_DEBT");
         require!(env::block_timestamp() > cr.recourse_until.0, "RECOURSE_OPEN");
         let root = self.cells.get(&cr.root.0).cloned().unwrap();
         if root.status == Status::Active || matches!(root.status, Status::Tripped) {
             self.close(cr.root.0, root, Status::Revoked { by: env::predecessor_account_id(), evidence: format!("recourse on credit {}", credit.0) });
         }
-        // 樹裡還有錢（子格金庫都已收回根格）：先還保證人，這筆還清就不必揭露
+        // There is still money in the tree (child vaults are all back in the root cell): repay the guarantor first; if this order is fully repaid, no disclosure is needed
         let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
         let mut root = self.cells.get(&cr.root.0).cloned().unwrap();
         let usable = root.vault.0.saturating_sub(t.bond_locked.0);
@@ -2177,7 +2177,7 @@ impl Contract {
         let digest = hex::encode(env::sha256(format!("{}|{}", lei, salt).as_bytes()));
         require!(digest == root.lei_commit, "COMMIT_MISMATCH");
         let open = hex::encode(env::sha256(format!("{}|{}|{}|{}", ecr.le_aid, ecr.le_pk, ecr.ecr_said, ecr.salt).as_bytes()));
-        // 條款是開格當時的 LE 鑰匙簽的；之後換鑰（update_signers）不影響這裡
+        // The terms were signed by the LE key at the time of opening; a later key change (update_signers) does not affect this
         require!(open == t.terms_ecr_commit, "BAD_ECR_OPENING");
         let sig: [u8; 64] = hex::decode(&t.args.terms_sig).ok().and_then(|v| v.as_slice().try_into().ok()).unwrap_or_else(|| env::panic_str("BAD_TERMS_SIG"));
         let msg = format!("writ:terms:v1\ncontract={}\namc={}\nterms={}\nlei={}", env::current_account_id(), root.amc_said, t.args.terms_hash, lei);
@@ -2384,7 +2384,7 @@ mod tests {
     use near_sdk::test_utils::{get_created_receipts, VMContextBuilder};
     use near_sdk::{testing_env, PromiseResult};
 
-    /// 轉帳途中格被撤銷，轉帳又失敗：錢不能卡在已關閉的格，要直接退給法人。
+    /// The cell was revoked during the transfer and the transfer failed too: the money cannot be stuck in a closed cell, it must be refunded directly to the legal entity.
     #[test]
     fn failed_transfer_on_a_revoked_cell_refunds_the_funder() {
         let writ: AccountId = "writ.near".parse().unwrap();
@@ -2420,7 +2420,7 @@ mod tests {
         assert_eq!(w.cells.get(&2).unwrap().vault.0, 5, "active cell gets the money back");
         assert_eq!(w.vault_total, 5);
 
-        // 公司還欠錢：撤銷中轉帳失敗的錢留在根格，不退給公司
+        // The company still owes money: money from a failed transfer during revocation stays in the root cell, not refunded to the company
         let args = CreditArgs { limit: U128(1), bond_bps: 0, premium_bps: 0, min_tenor: U64(0), max_tenor: U64(1), terms_hash: String::new(), terms_sig: String::new(), entity_tag: String::new(), arbiter: writ.clone(), fee_payer: FeePayer::Buyer, seller_cap_bps: 0, asset: None };
         w.terms.insert(1, CreditTerms { args, guarantor: writ.clone(), terms_ecr_commit: String::new(), outstanding: U128(0), bond_locked: U128(0), open_debts: 1 });
         ctx(vec![PromiseResult::Failed]);

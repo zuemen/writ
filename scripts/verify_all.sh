@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# make verify —— 一個指令重現所有主張，最後印一張成績單。給機器初審與想自己查的人。
-# 只碰本機 sandbox；最後讀一次公開的 testnet 狀態（只讀，不簽交易）。
+# make verify: one command reproduces every claim and prints a scorecard. For machine first-pass review and for those who want to check themselves.
+# Touches only the local sandbox; at the end reads the public testnet state once (read-only, signs no transaction).
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -26,7 +26,7 @@ row "who pays (make credit-demo)" "$([ $s_credit = 0 ] && echo PASS || echo FAIL
 row "credential chain (make keri-check)" "$([ $s_keri = 0 ] && echo PASS || echo FAIL)" "$(awk '/verify.py check/{f=1} /test_forgeries/{f=0} f' "$LOG/keri.log" | grep -c '^✓') checks on official vLEI schemas"
 row "forged credentials refused" "$([ $s_keri = 0 ] && echo PASS || echo FAIL)" "$(grep -m1 KERI_FORGERIES "$LOG/keri.log")"
 
-# 公開 testnet：合約帳號不該有 full-access key（只讀）
+# Public testnet: the contract account should have no full-access key (read-only)
 keys="$(curl -sS -m 20 -X POST -H 'content-type: application/json' -d "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"query\",\"params\":{\"request_type\":\"view_access_key_list\",\"finality\":\"final\",\"account_id\":\"$CONTRACT\"}}" "$RPC" 2>/dev/null)"
 if [ -z "$keys" ]; then
   row "testnet contract keys" "SKIP" "RPC not reachable"

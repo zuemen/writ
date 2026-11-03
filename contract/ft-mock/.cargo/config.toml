@@ -1,4 +1,4 @@
-# near-sdk 5.30 只在 `--cfg near` 下才走 NEAR 主機函式（panic_utf8 等）；cargo-near 會自動加，
-# 這裡用 plain cargo 建置所以手動加。少了它，所有 require! 訊息都會變成 `unreachable` trap。
+# near-sdk 5.30 only uses the NEAR host functions (panic_utf8 etc.) under `--cfg near`; cargo-near adds it automatically,
+# here we build with plain cargo so it is added by hand. Without it, every require! message becomes an `unreachable` trap.
 [target.wasm32-unknown-unknown]
 rustflags = ["--cfg", "near"]

@@ -1,21 +1,21 @@
 """
-發行端（模擬法人那一側）—— 用 keripy 建立並持久保存：
+Issuer side (simulates the legal entity's side): built and persisted with keripy:
 
-  LE（法人 AID）──ECR──▶ human（職員 AID，ECR 持有人）──AMC──▶ agent（human KEL 之下的委派 AID）
+  LE (legal entity AID) --ECR--> human (staff AID, ECR holder) --AMC--> agent (delegated AID under the human KEL)
 
-AMC 的屬性把「額度」綁進憑證：paywordRoot（w0）、paywordLength（n）、unitYocto、dailyLinks、
-counterparties（允許的交易對手）、validUntil、settlementRail（出資的 NEAR 帳號）。
+The AMC attributes bind the "limit" into the credential: paywordRoot (w0), paywordLength (n), unitYocto, dailyLinks,
+counterparties (allowed counterparties), validUntil, settlementRail (the funding NEAR account).
 
-指令
+Commands
   python issuer.py init --scope merchant.test.near --rail acme.test.near [--n 50 --unit 1e23 --daily 20 --days 30]
-  python issuer.py export            # 匯出公開 CESR 到 keri/bundle/（驗證端只吃這個）
-  python issuer.py release K         # human 撥鏈節：印出 links[K]（agent 付到第 K 節所需的 preimage）
-  python issuer.py revoke            # human 撤銷 AMC：TEL rev + KEL ixn 錨定；印出 revocation.json
-  python issuer.py revoke-ecr        # HR（LE）撤銷員工的 ECR：同樣產生 revocation.json，不需要員工的鑰匙
+  python issuer.py export            # export to keri/bundle/ the public CESR (the verifier takes only this)
+  python issuer.py release K         # the human releases links: prints links[K] (the preimage the agent needs to pay up to link K)
+  python issuer.py revoke            # the human revokes the AMC: TEL rev + KEL ixn anchor; prints revocation.json
+  python issuer.py revoke-ecr        # HR (LE) revokes the employee's ECR: also produces revocation.json, without needing the employee's key
   python issuer.py status
 
-私密資料（agent 私鑰、PayWord 種子）只寫在 keri/.keystore/（.gitignore）。這是 demo 的 mock 生態系：
-LE 之上的 QVI／GLEIF 根不在範圍內（README 揭露）。
+Private data (agent private key, PayWord seed) is written only to keri/.keystore/ (.gitignore). This is the demo's mock ecosystem:
+the QVI / GLEIF root above the LE is out of scope (disclosed in the README).
 """
 import argparse, datetime, decimal, hashlib, json, os, secrets, sys
 
@@ -27,8 +27,8 @@ from keri.vdr import credentialing, viring
 
 from common import AMC, BUNDLE, ECR, KEYSTORE, LEV, PRIVATE, QVI, REGISTRAR, b58, block, read_json, rules_for, write_json
 
-LEI = "WRITDEMO000000000017"  # 虛構 LEI：ISO 17442 檢查碼正確，但不屬於任何真實法人
-QVI_LEI = "WRITDEMOQVI00000000" + "0"  # 虛構的 QVI 識別，只在 mock 鏈裡用
+LEI = "WRITDEMO000000000017"  # fictional LEI: ISO 17442 check digits correct, but belongs to no real legal entity
+QVI_LEI = "WRITDEMOQVI00000000" + "0"  # fictional QVI identifier, used only in the mock chain
 STATE = os.path.join(KEYSTORE, "state.json")
 
 
@@ -41,7 +41,7 @@ def open_all():
 
 
 def anchor(hab, registry, serder, sn: str):
-    """TEL 事件以 ixn 錨定進 hab 的 KEL；回傳 ixn 的完整 CESR 訊息。"""
+    """A TEL event is anchored into the hab's KEL with an ixn; returns the full CESR message of the ixn."""
     seal = SealEvent(serder.pre, sn, serder.said)._asdict()
     msg = hab.interact(data=[seal])
     registry.anchorMsg(pre=serder.pre, regd=serder.said,
@@ -50,7 +50,7 @@ def anchor(hab, registry, serder, sn: str):
 
 
 def payword(seed: bytes, n: int):
-    """links[n] = seed，links[k] = sha256(links[k+1])；links[0] = w0。"""
+    """links[n] = seed, links[k] = sha256(links[k+1]); links[0] = w0."""
     links = [b""] * (n + 1)
     links[n] = seed
     for k in range(n - 1, -1, -1):
@@ -58,7 +58,7 @@ def payword(seed: bytes, n: int):
     return links
 
 
-# 示範用條款：真實部署要由公司與律師定稿
+# Demo terms: a real deployment needs the company and its lawyers to finalize them
 TERMS = "Writ demo credit terms. Not reviewed by counsel. Governing law and arbitration are placeholders. The company consents to disclosure of its LEI after an unpaid recourse period."
 TERMS_HASH = hashlib.sha256(TERMS.encode()).hexdigest()
 
@@ -75,12 +75,12 @@ def cmd_init(a):
     if os.path.exists(STATE):
         sys.exit("already initialized (rm -rf keri/.keystore to start over)")
     hby, rgy = open_all()
-    root = hby.makeHab(name="root")   # mock GLEIF 根
+    root = hby.makeHab(name="root")   # mock GLEIF root
     qvi = hby.makeHab(name="qvi")     # mock QVI
     le = hby.makeHab(name="le")
     human = hby.makeHab(name="human")
     agent = hby.makeHab(name="agent", delpre=human.pre)
-    # human 以 ixn 核准委派：seal {i: agent, s: 0, d: agent icp SAID}
+    # The human approves the delegation with an ixn: seal {i: agent, s: 0, d: agent icp SAID}
     icp = serdering.SerderKERI(raw=bytes(hby.db.getEvt(eventing.dgKey(agent.pre, hby.db.getKeLast(eventing.snKey(agent.pre, 0))))))
     human.interact(data=[dict(i=agent.pre, s="0", d=icp.said)])
     hby.kvy.processEscrows()
@@ -96,7 +96,7 @@ def cmd_init(a):
     anchor(human, reg_hu, reg_hu.vcp, "0")
     rgy.processEscrows()
 
-    # 根 → QVI → 法人
+    # root -> QVI -> legal entity
     qvc = proving.credential(issuer=root.pre, schema=QVI.said, recipient=qvi.pre, status=reg_rt.regk, data=dict(LEI=QVI_LEI),
                              rules=block(**rules_for(QVI)))
     iss_q = reg_rt.issue(said=qvc.said)
@@ -107,15 +107,15 @@ def cmd_init(a):
     anchor(qvi, reg_qv, iss_l, "0")
     rgy.processEscrows()
 
-    # LE → human：ECR
-    # private=True：加上 u 鹽值，SAID 才不能被字典攻擊（ECR 路徑撤銷時會公開 ecr_said）
+    # LE -> human: ECR
+    # private=True: adds a u salt so the SAID cannot be dictionary-attacked (the ecr_said becomes public when the ECR path is revoked)
     ecr = proving.credential(issuer=le.pre, schema=ECR.said, recipient=human.pre, status=reg_le.regk, private=True,
                              data=dict(LEI=LEI, personLegalName="Alex Example", engagementContextRole="Treasury Operations"),
                              source=block(le=dict(n=lev.said, s=LEV.said)), rules=block(**rules_for(ECR)))
     iss_e = reg_le.issue(said=ecr.said)
     anchor(le, reg_le, iss_e, "0")
 
-    # human → agent：AMC，額度綁進憑證
+    # human -> agent: AMC, limit bound into the credential
     seed = secrets.token_bytes(32)
     links = payword(seed, a.n)
     valid_until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=a.days)
@@ -132,13 +132,13 @@ def cmd_init(a):
     anchor(human, reg_hu, iss_a, "0")
     rgy.processEscrows()
 
-    # agent 私鑰（= NEAR 金鑰）。keripy 的 Signer.raw 是 32 bytes seed；NEAR 私鑰字串 = base58(seed ‖ pk)
+    # agent private key (= NEAR key). keripy's Signer.raw is a 32-byte seed; the NEAR private key string = base58(seed ‖ pk)
     pub = agent.kever.verfers[0]
     signer = hby.mgr.ks.pris.get(pub.qb64)
     near_sk = "ed25519:" + b58(signer.raw + pub.raw)
     near_pk = "ed25519:" + b58(pub.raw)
 
-    # LE 同意這份信用條款：簽 (合約, AMC, 條款, LEI)。合約只在違約揭露時才驗，保證人因此栽贓不了別家公司
+    # The LE agrees to these credit terms: signs (contract, AMC, terms, LEI). The contract checks it only at default disclosure, so the guarantor cannot frame another company
     terms_sig = ""
     if a.credit_limit:
         msg = f"writ:terms:v1\ncontract={a.contract}\namc={amc.said}\nterms={TERMS_HASH}\nlei={LEI}".encode()
@@ -150,7 +150,7 @@ def cmd_init(a):
                            reg_rt=reg_rt.regk, reg_qv=reg_qv.regk, reg_le=reg_le.regk, reg_hu=reg_hu.regk,
                            qvc=qvc.said, lev=lev.said, ecr=ecr.said, amc=amc.said,
                            qvc_iss=iss_q.said, lev_iss=iss_l.said, ecr_iss=iss_e.said, amc_iss=iss_a.said, n=a.n))
-    # 憑證本體（含 SAID）留一份，export 時序列化附錨點
+    # keep a copy of the credential body (with SAID), serialized with its anchor on export
     write_json(os.path.join(KEYSTORE, "qvc.json"), qvc.sad)
     write_json(os.path.join(KEYSTORE, "lev.json"), lev.sad)
     write_json(os.path.join(KEYSTORE, "ecr.json"), ecr.sad)
@@ -178,7 +178,7 @@ def cmd_export(a):
         return signing.serialize(creder, coring.Prefixer(qb64=creder.said), coring.Seqner(sn=0),
                                  coring.Saider(qb64=iss_said))
 
-    # 順序即驗證端的解析順序：KEL → TEL → ACDC
+    # the order is the verifier's parsing order: KEL -> TEL -> ACDC
     kels = kel(st["root"]) + kel(st["qvi"]) + kel(st["le"]) + kel(st["human"])
     tels = b"".join(tel(st[k]) for k in ("reg_rt", "reg_qv", "reg_le", "reg_hu", "qvc", "lev", "ecr", "amc"))
     stream = kels + kel(st["agent"]) + tels
@@ -187,10 +187,10 @@ def cmd_export(a):
     with open(os.path.join(BUNDLE, "chain.cesr"), "wb") as f:
         f.write(stream)
     write_json(os.path.join(BUNDLE, "schemas.json"), {ECR.said: ECR.sed, AMC.said: AMC.sed})
-    # 持有人出示「我要驗哪一張」；信任錨不在這裡，驗證端自己釘（verify.py pin）
+    # the holder presents "which one I want verified"; the trust anchor is not here, the verifier pins it itself (verify.py pin)
     write_json(os.path.join(BUNDLE, "terms.json"), read_json(os.path.join(KEYSTORE, "terms.json")))
     write_json(os.path.join(BUNDLE, "presentation.json"), dict(qvi_said=st["qvc"], lev_said=st["lev"], ecr_said=st["ecr"], amc_said=st["amc"], agent_aid=st["agent"]))
-    # 發行方的公開狀態：驗證端直接讀這裡的最新 KEL／TEL，持有人拿舊 bundle 也蓋不掉撤銷
+    # the issuer's public state: the verifier reads the latest KEL/TEL here directly, so a holder with an old bundle cannot hide a revocation
     os.makedirs(REGISTRAR, exist_ok=True)
     with open(os.path.join(REGISTRAR, "state.cesr"), "wb") as f:
         f.write(kels + tels)
@@ -218,7 +218,7 @@ def cmd_revoke(a):
     rgy.processEscrows()
     ixn = serdering.SerderKERI(raw=bytes(msg))
     body = bytes(msg[:ixn.size])
-    # 取附在 KEL 上的那個索引簽章，去掉索引碼 → 64 bytes 原始 Ed25519 簽章
+    # take the indexed signature attached to the KEL, strip the index code -> 64-byte raw Ed25519 signature
     siger = indexing.Siger(qb64b=bytes(hby.db.getSigs(eventing.dgKey(human.pre, ixn.said))[0]))
     out = dict(cell_hint="pass --cell", amc_said=st["amc"], rev_said=rev.said,
                ixn_hex=body.hex(), ixn_said=ixn.said, ixn_sn=ixn.sn, sig_hex=siger.raw.hex(),
@@ -230,7 +230,7 @@ def cmd_revoke(a):
 
 
 def cmd_revoke_ecr(a):
-    """HR（法人）撤銷員工的 ECR：TEL rev + LE KEL ixn 錨定。不需要員工的鑰匙。"""
+    """HR (the legal entity) revokes the employee's ECR: TEL rev + LE KEL ixn anchor. No employee key needed."""
     st = read_json(STATE)
     hby, rgy = open_all()
     le = hby.habByName("le")

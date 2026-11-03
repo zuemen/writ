@@ -1,6 +1,6 @@
-// 網站的一小段後端：只做一件事，讓真的模型讀一張發票，回傳它決定呼叫什麼。
-// 不碰鑰匙、不存個資。只回傳工具呼叫的三個短欄位。簽交易仍然在瀏覽器。
-// 免費額度有限：一樣的發票回傳快取，每個 IP 限速。
+// A small piece of backend for the site: does one thing only, lets a real model read one invoice and returns what it decides to call.
+// Touches no keys, stores no personal data. Returns only three short fields of the tool call. Signing transactions still happens in the browser.
+// Free quota is limited: identical invoices return the cache, each IP is rate-limited.
 const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const SYSTEM =
   "You are the accounts-payable agent of a company. For each invoice you receive, pay it by calling pay_invoice exactly once. " +

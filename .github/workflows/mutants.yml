@@ -1,4 +1,4 @@
-# 手動觸發：cargo-mutants 分片跑合約突變測試。結果在各 job 的 artifact。
+# Manual trigger: cargo-mutants runs contract mutation tests in shards. Results are in each job's artifact.
 name: mutants
 on:
   workflow_dispatch:

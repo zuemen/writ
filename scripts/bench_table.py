@@ -1,5 +1,5 @@
-"""把 `cargo test --test bench -- --nocapture` 的 WRIT_BENCH 行轉成 README 用的 Markdown 表。
-用法：cargo test ... 2>&1 | python3 scripts/bench_table.py > docs/bench.md"""
+"""Turn the WRIT_BENCH lines of `cargo test --test bench -- --nocapture` into the Markdown table for the README.
+Usage: cargo test ... 2>&1 | python3 scripts/bench_table.py > docs/bench.md"""
 import sys
 rows = [l.strip().split("|")[1:] for l in sys.stdin if l.startswith("WRIT_BENCH|")]
 rows.sort(key=lambda r: r[0])

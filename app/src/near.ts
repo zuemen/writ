@@ -1,5 +1,5 @@
 /**
- * Writ 鏈下共用：連線、帳號、呼叫（一律拿到 tx hash 與回傳值）、四種失敗貼標。
+ * Writ off-chain shared code: connection, accounts, calls (always returns tx hash and return value), tagging the four kinds of failure.
  */
 import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions, teraToGas, type KeyPairString } from "near-api-js";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -17,7 +17,7 @@ export const writeJson = (p: string, o: unknown) => {
   writeFileSync(p, JSON.stringify(o, null, 1));
 };
 
-/** .demo/accounts.json：setup 建立的帳號與私鑰（只在本機 sandbox；.gitignore） */
+/** .demo/accounts.json: accounts and private keys created by setup (local sandbox only; .gitignore) */
 export function accounts(): Record<string, { id: string; sk: KeyPairString }> {
   const p = join(DEMO, "accounts.json");
   if (!existsSync(p)) throw new Error("run `make demo-setup` first (.demo/accounts.json missing)");
@@ -30,7 +30,7 @@ export function as(id: string, sk: KeyPairString) {
 
 export type CallOut = { hash?: string; value?: any; logs: string[]; error?: string; tag?: string };
 
-/** 送一筆 function call。不丟例外：協定層拒絕回 tag，合約 panic 回 error，成功回 value。 */
+/** Send one function call. Throws no exception: protocol-layer rejection returns a tag, contract panic returns error, success returns value. */
 export async function call(
   acct: Account, contractId: string, method: string, args: object,
   opts: { gas?: bigint; deposit?: bigint } = {},
@@ -56,7 +56,7 @@ export async function call(
   }
 }
 
-/** 部署 + 初始化 + 刪 full-access key 放同一個 batch：之後沒有任何鑰匙能動合約帳號的錢。 */
+/** Deploy + initialize + delete the full-access key in one batch: afterwards no key can move the contract account's funds. */
 export const DEMO_WINDOWS = (recourse: number) => ({ accept_ttl: "600", inspect: "3", grace: "0", recourse: String(recourse), dispute_timeout: "60", unstake_delay: "60" });
 
 export async function deployLocked(id: string, sk: KeyPairString, wasm: Uint8Array, owner: string, unsealDelaySecs: number, recourseSecs = 6) {
@@ -77,7 +77,7 @@ export async function view(contractId: string, method: string, args: object = {}
   return provider.callFunction({ contractId, method, args });
 }
 
-/** 協定層拒絕（沒有 tx hash）→ demo 字卡。四種要分開，gas 用完不能被讀成「被攻破」。 */
+/** Protocol-layer rejection (no tx hash) becomes a demo caption. The four are kept apart; running out of gas must not be read as "broken into". */
 export function label(err: unknown): { tag: string; error: string } {
   const s = JSON.stringify(err, (_k, v) => (typeof v === "bigint" ? v.toString() : v)) + String(err) + String((err as any)?.message ?? "");
   const pick = (t: string) => ({ tag: t, error: (s.match(/(AccessKeyNotFound|NotEnoughAllowance|MethodNameMismatch|ReceiverMismatch|DepositWithFunctionCall|RequiresFullAccess)/) ?? ["AccessKeyNotFound: agent key is no longer on the contract account (revoked or tripped)"])[0] });
@@ -87,7 +87,7 @@ export function label(err: unknown): { tag: string; error: string } {
   return { tag: "UNKNOWN", error: s.slice(0, 300) };
 }
 
-/** 解析 NEP-297 事件 */
+/** Parse NEP-297 events */
 export const events = (logs: string[]) =>
   logs.filter((l) => l.startsWith("EVENT_JSON:")).map((l) => JSON.parse(l.slice(11)));
 

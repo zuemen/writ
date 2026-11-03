@@ -1,14 +1,14 @@
 /**
- * make demo —— 60 秒故事的可重現版本（本機 sandbox，不需要任何 API key）。
- *   1 驗證者在全新 keystore 驗整條 KERI 鏈 → 簽 attestation
- *   2 法人開格入金；合約把 agent 的 KERI 鑰匙掛成 function-call key
- *   3 商家看五個謂詞（LEI 封著）
- *   4 agent 付款（PayWord 鏈節，每筆一個雜湊檢查）
- *   5 發票藏 prompt injection → agent 付給攻擊者 → 合約拒絕（有 tx hash），攻擊者 0 入帳
- *   6 監理方調閱 → 公開等待期 → 驗證者揭露 LEI（合約比對承諾）
- *   7 職員離職：HR 在 KERI 撤銷他的 ECR → 任何人提交簽過的 ixn → 合約刪鑰匙
- *   8 agent 再付 → 協定層拒絕
- * 每一步寫進 .demo/timeline.json。結尾印 DEMO_RESULT 一行給機器檢查。
+ * make demo: reproducible version of the 60-second story (local sandbox, no API key needed).
+ *   1 Verifier checks the whole KERI chain in a fresh keystore, signs an attestation
+ *   2 Legal entity opens a cell and deposits; the contract installs the agent's KERI key as a function-call key
+ *   3 Merchant sees five predicates (LEI sealed)
+ *   4 Agent pays (PayWord link, one hash check per payment)
+ *   5 Invoice hides a prompt injection, agent pays the attacker, contract rejects it (with tx hash), attacker receives 0
+ *   6 Regulator requests disclosure, public waiting period, verifier discloses the LEI (contract checks the commitment)
+ *   7 Staff member leaves: HR revokes his ECR in KERI, anyone submits the signed ixn, contract deletes the key
+ *   8 Agent pays again, rejected at the protocol layer
+ * Each step is written to .demo/timeline.json. Prints one DEMO_RESULT line at the end for machine checking.
  */
 import { join } from "node:path";
 import { DEMO, fmt, view, writeJson } from "./near.js";
@@ -47,7 +47,7 @@ say("5", `attacker +${fmt(attackerGain)}`);
 const dup = await pay(cell, 3, a.merchant.id, "INV-0042");
 say("5", `injection asks to pay INV-0042 again → ${JSON.stringify(dup.value)}`, { hash: dup.hash });
 
-// 6. 監理調閱：只揭露 LEI，而且揭露本身是公開交易
+// 6. Regulator disclosure request: only the LEI is disclosed, and the disclosure itself is a public transaction
 const u1 = await requestUnseal(cell);
 say("6", `${a.regulator.id} requests disclosure (reason hash of "${u1.reason}") → public, waiting period starts`, { hash: u1.hash });
 const tooEarly = await releaseUnseal(cell);

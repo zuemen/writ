@@ -1,6 +1,6 @@
 /**
- * make bounty —— 在 testnet 開一格「鑰匙公開」的格：maxStrikes = 0，連續被拒也不刪鑰匙，讓任何人都能一直試。
- * 先真的付一筆，留下一個已公開的鏈節。設定寫到 .demo-testnet/bounty.json（含 agent 私鑰，只給 hosted 頁，不進 repo）。
+ * make bounty: open a "public key" cell on testnet: maxStrikes = 0, repeated rejections do not delete the key, so anyone can keep trying.
+ * First really pay once, leaving a published chain link. Settings are written to .demo-testnet/bounty.json (contains the agent private key; for the hosted page only, not in the repo).
  */
 import { rmSync } from "node:fs";
 import { join } from "node:path";

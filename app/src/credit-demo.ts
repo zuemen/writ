@@ -1,12 +1,12 @@
 /**
- * make credit-demo —— 「誰負責」的完整故事，用真的 KERI 憑證與簽章（本機 sandbox）：
- *   1 賣方看風險卡：公司名封存，保證人具名
- *   1b 賣方規則拒單，回報原因；賣方調整規則，訂單成立
- *   2 agent 賒帳、賣方交貨、公司按時付款：什麼都不揭露
- *   3 下一筆公司不付：賠付自動走完金庫與保證人的質押，賣方拿到全額
- *   4 公司被凍結，不能再賒，但 agent 還在、身分還封著
- *   5 追償期滿公司仍不還：整棵樹斷電，公司名公開（LE 的簽章防止栽贓）
- * 結尾印 CREDIT_RESULT 一行給機器檢查。
+ * make credit-demo: the full "who is responsible" story, with real KERI credentials and signatures (local sandbox):
+ *   1 Seller sees the risk card: company name sealed, guarantor named
+ *   1b Seller's rule rejects the order and reports the reason; seller adjusts the rule, order stands
+ *   2 Agent buys on credit, seller delivers, company pays on time: nothing is disclosed
+ *   3 Next one the company does not pay: payout runs through the vault and the guarantor's stake automatically, seller gets the full amount
+ *   4 Company is frozen and cannot buy on credit again, but the agent remains and identity stays sealed
+ *   5 Company still does not repay after the recovery period: the whole tree is cut off, company name is made public (the LE's signature prevents framing)
+ * Prints one CREDIT_RESULT line at the end for machine checking.
  */
 import { createHash } from "node:crypto";
 import { rmSync, writeFileSync } from "node:fs";
@@ -17,7 +17,7 @@ import { A, balance, checkOrder, register, setSellerPolicy } from "./flow.js";
 import { keriPrivate, py, releaseLink } from "./keri.js";
 
 const a = A();
-// 對 testnet 跑：開一份新的憑證（別的流程留下的 ECR 已撤銷）。沒有專屬仲裁帳號，用 owner
+// Against testnet: open a fresh credential (the ECR left by other flows is revoked). No dedicated arbiter account, use the owner
 const LIVE = !!process.env.WRIT_CREDIT_REPORT;
 if (LIVE) {
   for (const d of ["keri/.keystore", "keri/bundle", "keri/registrar"]) rmSync(join(ROOT, d), { recursive: true, force: true });
@@ -32,7 +32,7 @@ const nowNs = () => BigInt(Date.now()) * 1_000_000n;
 const seller = as(a.merchant.id, a.merchant.sk);
 const guarantor = as(a.verifier.id, a.verifier.sk);
 
-// 金庫只放一點點，賴帳時賠付才會走到保證人
+// The vault holds only a little, so a default payout reaches the guarantor
 const reg = await register(process.env.WRIT_CREDIT_DEPOSIT ?? "0.6");
 if (!reg.ok) throw new Error("register failed: " + reg.error);
 const cell = reg.cell;
@@ -64,7 +64,7 @@ async function order(j: number, invoice: string, dueInSecs: number) {
 const card0: any = await view(a.writ.id, "risk_card", { cell });
 say(`1  risk card: legal entity=${card0.legal_entity}, guarantor=${card0.guarantor}, stake=${fmt(card0.guarantor_stake)}, limit=${fmt(card0.credit_limit)}, guarantee fee=${card0.premium_bps / 100}%`);
 
-// 賣方規則：要求 25% 保證金、單筆 0.05 NEAR。這家公司的條款沒有保證金，訂單不符合就回傳原因
+// Seller rule: require a 25% bond, 0.05 NEAR per order. This company's terms have no bond, so the order does not fit and the reason is returned
 const strict = { max_amount: NEAR("0.05").toString(), max_tenor_secs: "7200", min_bond_bps: 2500, max_defaults: 0, guarantors: [] as string[], asset: null, max_fee_bps: 500, arbiters: [] as string[] };
 const set1 = await setSellerPolicy(strict);
 if (set1.error) throw new Error("set_seller_policy: " + set1.error);
@@ -86,7 +86,7 @@ txs.push(["Agent settles the first order on time; the company stays sealed", s1.
 const card1: any = await view(a.writ.id, "risk_card", { cell });
 say(`2  order ${paid} delivered and paid on time → ${JSON.stringify(s1.value ?? s1.error)}; legal entity=${card1.legal_entity}; record: ${card1.settled} settled`);
 
-// testnet 上從算到期日到上鏈要好幾秒，到期日給寬一點；要等過到期日與 3 秒驗收期
+// On testnet it takes several seconds from computing the due date to landing on chain, so give the due date some slack; wait past the due date and the 3-second acceptance period
 const dueSecs = LIVE ? 30 : 1;
 const placed = Date.now();
 const unpaid = await order(8, "INV-CREDIT-2", dueSecs);

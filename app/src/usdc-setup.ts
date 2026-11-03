@@ -1,7 +1,7 @@
 /**
- * make testnet-usdc —— 用 Circle 官方 testnet USDC 跑一筆真實付款（不是 mock 代幣）。
- * 前提：法人帳號（accounts.json 的 acme）已從 https://faucet.circle.com 領到測試 USDC。
- * 結果寫進 docs/testnet-usdc.md。
+ * make testnet-usdc: run one real payment with Circle's official testnet USDC (not a mock token).
+ * Precondition: the legal entity account (acme in accounts.json) has received test USDC from https://faucet.circle.com.
+ * Results are written to docs/testnet-usdc.md.
  */
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -10,9 +10,9 @@ import { DEMO, NEAR, ROOT, as, call, view } from "./near.js";
 import { A, pay, register } from "./flow.js";
 import { py } from "./keri.js";
 
-// https://developers.circle.com/stablecoins/usdc-contract-addresses （NEAR testnet）
+// https://developers.circle.com/stablecoins/usdc-contract-addresses (NEAR testnet)
 const USDC = "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af";
-const UNIT = 100_000n; // 0.1 USDC（6 位小數）
+const UNIT = 100_000n; // 0.1 USDC (6 decimals)
 const a = A();
 const acme = as(a.acme.id, a.acme.sk);
 const usdc = (id: string) => view(USDC, "ft_balance_of", { account_id: id }) as Promise<string>;
@@ -23,7 +23,7 @@ if (have < 4n * 10n * UNIT) {
   process.exit(2);
 }
 
-// 合約與商家都要先在代幣註冊，收款才不會失敗
+// The contract and the merchant must register with the token first, or receiving will fail
 for (const id of [a.writ.id, a.merchant.id]) {
   const r = await call(acme, USDC, "storage_deposit", { account_id: id, registration_only: true }, { deposit: NEAR("0.01"), gas: teraToGas("30") });
   if (r.error) throw new Error(`storage_deposit ${id}: ${r.error}`);

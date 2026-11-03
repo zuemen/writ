@@ -1,4 +1,4 @@
-# cargo mutants：只突變合約本體；測試以 WRIT_REBUILD=1 從突變後的原始碼重建 wasm 再跑全部測試：先跑快的單元測試與 fuzz，再跑攻擊台
+# cargo mutants: mutate only the contract itself; tests rebuild the wasm from the mutated source with WRIT_REBUILD=1 and then run all tests: fast unit tests and fuzz first, then the attack bench
 examine_globs = ["src/lib.rs"]
 exclude_re = ["attestation_preview", "Contract::owner"]
 test_tool = "cargo"

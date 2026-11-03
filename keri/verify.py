@@ -1,23 +1,23 @@
 """
-驗證端（白名單驗證者，對應 GLEIF 討論稿 Annex A 裡 PSP 的角色）。
+Verifier side (an allowlisted verifier, corresponds to the PSP role in GLEIF discussion paper Annex A).
 
-吃持有人出示的公開 CESR（keri/bundle/），在**全新的暫存 keystore** 裡用 keripy 重新驗整條鏈；
-憑證狀態另外向發行方的公開來源查（keri/registrar/），不信任持有人給的 TEL：
+Takes the public CESR presented by the holder (keri/bundle/) and re-verifies the whole chain with keripy in a **fresh temporary keystore**;
+credential status is looked up separately from the issuer's public source (keri/registrar/), the TEL given by the holder is not trusted:
 
-  1. KEL：LE、human、agent 三條事件日誌的簽章與順序；agent 必須是 human 之下的委派 AID（delpre == human）
-  2. TEL：ECR 與 AMC 都在「已發行、未撤銷」狀態
-  3. ACDC：憑證的 SAID、官方 vLEI schema（keri/schemas/）、TEL 錨點；AMC 的 edge 指向 ECR，且 ECR 的持有人 == AMC 的簽發人
-  4. 信任鏈：驗證端釘住的根（verify.py pin；mock，正式版是 GLEIF 根）→ QVI → 法人 → ECR，每層 I2I，LEI 要一致
-     憑證的 i 欄位不算數：登錄簿的控制者必須就是簽發人；schema SAID 也由驗證端決定
-  5. agent 的 KERI 當前公鑰 == 要掛到 NEAR 上的 function-call key
+  1. KEL: signatures and order of the three event logs LE, human, agent; the agent must be a delegated AID under the human (delpre == human)
+  2. TEL: both ECR and AMC are in the "issued, not revoked" state
+  3. ACDC: credential SAID, official vLEI schema (keri/schemas/), TEL anchor; the AMC's edge points to the ECR, and the ECR's holder == the AMC's issuer
+  4. Trust chain: the root pinned by the verifier (verify.py pin; mock, the real one is the GLEIF root) -> QVI -> legal entity -> ECR, I2I at each level, LEI must match
+     the credential's i field does not count: the registry's controller must be the issuer; the schema SAID is also decided by the verifier
+  5. the agent's current KERI public key == the function-call key to be attached on NEAR
 
-全部通過才簽 attestation（Ed25519，簽的 bytes 與合約 attestation_message 逐字相同）。
+Only when everything passes is an attestation signed (Ed25519, the signed bytes are identical character by character to the contract's attestation_message).
 
-  python verify.py keygen                                    # 產生驗證者金鑰（印出 pk hex）
-  python verify.py pin --root <AID>                          # 釘住信任根（驗證端的設定，不來自持有人）
-  python verify.py attest --verifier verifier.test.near      # 驗鏈 + 印出 register 的 args JSON
-  python verify.py check                                     # 只驗鏈，不簽
-  python verify.py reveal --amc <SAID>                       # 解封：印出當初承諾的 LEI 與 salt
+  python verify.py keygen                                    # generate the verifier key (prints pk hex)
+  python verify.py pin --root <AID>                          # pin the trust root (verifier configuration, does not come from the holder)
+  python verify.py attest --verifier verifier.test.near      # verify the chain + print the args JSON for register
+  python verify.py check                                     # verify the chain only, do not sign
+  python verify.py reveal --amc <SAID>                       # unseal: print the LEI and salt committed earlier
 """
 import argparse, datetime, hashlib, hmac, json, os, secrets, sys
 
@@ -30,8 +30,8 @@ from common import AMC, BUNDLE, ECR, HERE, LEV, QVI, REGISTRAR, b58, read_json, 
 
 _STATE = os.path.join(HERE, "..", os.environ.get("WRIT_DEMO_DIR", ".demo"))
 VKEY = os.environ.get("WRIT_VERIFIER_KEY", os.path.join(_STATE, "verifier_key.json"))
-RECORDS = os.path.join(_STATE, "verifier_records.json")  # LEI 的 salt 只存在驗證者這裡
-POLICY = os.environ.get("WRIT_VERIFIER_POLICY", os.path.join(_STATE, "verifier_policy.json"))  # 驗證端自己釘的信任錨
+RECORDS = os.path.join(_STATE, "verifier_records.json")  # the LEI salt exists only here, at the verifier
+POLICY = os.environ.get("WRIT_VERIFIER_POLICY", os.path.join(_STATE, "verifier_policy.json"))  # trust anchor pinned by the verifier itself
 
 
 class ChainError(Exception):
@@ -39,7 +39,7 @@ class ChainError(Exception):
 
 
 def verify_chain():
-    """回傳 dict(結果)；任何一步失敗都 raise ChainError。"""
+    """Returns a dict (result); any failing step raises ChainError."""
     if not os.path.exists(POLICY):
         raise ChainError("no pinned trust root: run verify.py pin --root <AID>")
     root_aid = read_json(POLICY)["root_aid"]
@@ -52,13 +52,13 @@ def verify_chain():
     with habbing.openHby(name="writ-verifier", temp=True) as hby:
         rgy = credentialing.Regery(hby=hby, name="writ-verifier", temp=True)
         vry = verifying.Verifier(hby=hby, reger=rgy.reger)
-        # 只接受驗證端自己認得的 schema，不吃持有人帶來的定義
+        # accept only schemas the verifier itself recognizes, do not take definitions brought by the holder
         for sch in (QVI, LEV, ECR, AMC):
             hby.db.schema.pin(sch.said, scheming.Schemer(sed=sch.sed))
         psr = parsing.Parser(kvy=hby.kvy, tvy=rgy.tvy, vry=vry)
         psr.parse(ims=stream)
         psr.parse(ims=live)
-        for _ in range(3):  # 委派、TEL、憑證都可能先進 escrow
+        for _ in range(3):  # delegation, TEL and credentials may all enter escrow first
             hby.kvy.processEscrows(); rgy.tvy.processEscrows(); vry.processEscrows()
 
         checks = []
@@ -70,7 +70,7 @@ def verify_chain():
 
         amc_said = shown["amc_said"]
         amc = rgy.reger.creds.get(keys=amc_said)
-        # keripy 不收鏈上游已撤銷的憑證：先講清楚真正原因，不要只說「AMC 解析失敗」
+        # keripy does not accept a credential revoked upstream in the chain: state the real reason, do not just say "AMC parsing failed"
         names = {shown.get("qvi_said"): "QVI credential", shown.get("lev_said"): "legal entity vLEI", shown.get("ecr_said"): "ECR", amc_said: "AMC"}
         for said, name in names.items():
             for tever in rgy.tevers.values():
@@ -143,7 +143,7 @@ def credit_line(c):
 
 
 def attestation_message(r, lei_commit, ecr_commit, verifier, contract, attested_at, credit=None):
-    """必須與合約 attestation_message 逐字一致。"""
+    """Must be identical character by character to the contract's attestation_message."""
     return (
         "writ:attest:v6\n"
         f"contract={contract}\namc={r['amc_said']}\nissuer_aid={r['issuer_aid']}\nissuer_pk={r['issuer_pk']}\nagent_pk={r['agent_near_pk']}\nw0={r['w0']}\n"
@@ -186,7 +186,7 @@ def cmd_attest(a):
     key = read_json(VKEY)
     salt = secrets.token_hex(16)
     lei_commit = hashlib.sha256(f"{r['lei']}|{salt}".encode()).hexdigest()
-    # HR 撤銷 ECR 用的承諾：LE 公鑰與 ECR SAID 平常不上鏈；打開用的 salt 交給法人（不是驗證者獨有）
+    # Commitment used when HR revokes the ECR: the LE public key and ECR SAID are normally not on chain; the salt for opening goes to the legal entity (not exclusive to the verifier)
     ecr_salt = secrets.token_hex(16)
     ecr_commit = hashlib.sha256(f"{r['le_aid']}|{r['le_pk']}|{r['ecr_said']}|{ecr_salt}".encode()).hexdigest()
     attested_at = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) * 1_000_000_000
@@ -194,7 +194,7 @@ def cmd_attest(a):
     if r["credit"]:
         if r["credit"].get("asset") != r["asset"]:
             sys.exit("REFUSED: the credit asset differs from the cell's settlement asset")
-        # 固定假名：同一家公司跨格累積紀錄；只有保證人算得出來，別人比對不出 LEI
+        # fixed pseudonym: the same company accumulates records across cells; only the guarantor can compute it, others cannot match it to an LEI
         tag = hmac.new(bytes.fromhex(read_json(VKEY)["sk_hex"]), r["lei"].encode(), hashlib.sha256).hexdigest()[:24]
         terms = read_json(os.path.join(BUNDLE, "terms.json"))
         signed = f"writ:terms:v1\ncontract={a.contract}\namc={r['amc_said']}\nterms={r['credit']['terms_hash']}\nlei={r['lei']}".encode()
@@ -207,7 +207,7 @@ def cmd_attest(a):
             credit.pop("asset", None)
     msg = attestation_message(r, lei_commit, ecr_commit, a.verifier, a.contract, attested_at, credit).encode()
     sig = pysodium.crypto_sign_detached(msg, bytes.fromhex(key["sk_hex"]))
-    # LEI 與 salt 只留在驗證者這裡（解封時才用）
+    # the LEI and salt stay only at the verifier (used only at unsealing)
     recs = read_json(RECORDS) if os.path.exists(RECORDS) else {}
     recs[r["amc_said"]] = dict(lei=r["lei"], salt=salt, lei_commit=lei_commit)
     write_json(RECORDS, recs)
@@ -224,7 +224,7 @@ def cmd_attest(a):
 
 
 def cmd_reveal(a):
-    """解封時才用：印出驗證者當初承諾的 (LEI, salt)。"""
+    """Used only at unsealing: print the (LEI, salt) the verifier committed to."""
     recs = read_json(RECORDS)
     r = recs.get(a.amc) or sys.exit("no record for this AMC")
     print(json.dumps(dict(lei=r["lei"], salt=r["salt"])))

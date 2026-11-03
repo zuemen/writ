@@ -1,5 +1,5 @@
-# 合約：建置與攻擊台。第一次跑測試會下載 near-sandbox 二進位（需網路一次）。
-# .cargo/config.toml 已加 --cfg near（near-sdk 5.30 需要；cargo-near 會自動加，這裡用 plain cargo）。
+# Contract: build and attack bench. The first test run downloads the near-sandbox binary (needs network once).
+# .cargo/config.toml already adds --cfg near (needed by near-sdk 5.30; cargo-near adds it automatically, here we use plain cargo).
 WASM_OPT := $(wildcard ../app/node_modules/.bin/wasm-opt)
 build:
 	cargo build --target wasm32-unknown-unknown --release
@@ -14,7 +14,7 @@ endif
 	cd ft-mock && cargo build --target wasm32-unknown-unknown --release
 	cp ft-mock/target/wasm32-unknown-unknown/release/ft_mock.wasm res/ft_mock.wasm
 
-# 跑攻擊台並重產 docs/bench.md；任何測試失敗則 exit 1
+# Run the attack bench and regenerate docs/bench.md; exit 1 if any test fails
 test: build
 	cargo test --lib
 	cargo test --test bench -- --nocapture --test-threads=2 2>&1 | tee /tmp/writ_bench.log | python3 ../scripts/bench_table.py > ../docs/bench.md
@@ -22,7 +22,7 @@ test: build
 	grep "test result" /tmp/writ_bench.log
 	grep -q "test result: ok" /tmp/writ_bench.log || { grep -E "panicked|^Error|Error:" /tmp/writ_bench.log | head -20; exit 1; }
 
-# 容器裡 fd 硬上限 < 65535 時 neard 拒絕啟動；用 shim 繞過（一般電腦不需要）
+# In a container, neard refuses to start when the fd hard limit is < 65535; work around it with a shim (not needed on a normal computer)
 test-lowfd: build ../tools/fakerlimit.so
 	LD_PRELOAD=$(abspath ../tools/fakerlimit.so) $(MAKE) test-inner
 test-inner:

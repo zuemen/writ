@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 組出網站到 .demo-testnet/site/。config.json 含測試用私鑰，故意只放在 hosted 頁，不進 repo。
-# 需要先跑過 make bounty（鑰匙公開格）與 make pool（走流程用的格）。
+# Assemble the site into .demo-testnet/site/. config.json contains test private keys, so it is deliberately kept only on the hosted page, not in the repo.
+# Run make bounty (public key cell) and make pool (cells for the flow) first.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/.demo-testnet/site"

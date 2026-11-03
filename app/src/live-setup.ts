@@ -1,7 +1,7 @@
 /**
- * make live-agent —— 網站「Fool a live model」用的 agent：預算很小但是真的，下一個鏈節隨網頁公開。
- * 所以模型決定的付款會真的被合約裁定：乾淨發票真的付給供應商，換收款人是 SCOPE，重付是 DUPLICATE，灌水是 PER_TX。
- * 任何人都能拿這些鏈節花錢，但只能付給 mandate 裡的供應商，每筆最多 3 節。私鑰只在 .demo-testnet/，不進 repo。
+ * make live-agent: agent for the site's "Fool a live model": a small but real budget, the next chain link is published with the page.
+ * So payments the model decides on are really ruled on by the contract: a clean invoice really pays the supplier, a changed payee is SCOPE, a repeat is DUPLICATE, inflation is PER_TX.
+ * Anyone can spend with these links, but only to the supplier in the mandate, at most 3 links per payment. Private keys stay in .demo-testnet/, not in the repo.
  */
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -19,7 +19,7 @@ const reg = await register(process.env.WRIT_LIVE_AGENT_DEPOSIT ?? "0.50");
 if (!reg.ok) throw new Error("register failed: " + reg.error);
 console.log(`  live agent cell #${reg.cell} tx ${reg.hash}`);
 
-// 先真的付一張，讓「重付」有東西可以被擋
+// First really pay one invoice, so the "repeat payment" has something to be blocked
 const first = await pay(reg.cell, 1, a.merchant.id, "INV-1");
 if (!first.value?.Paid) throw new Error("first payment failed: " + JSON.stringify(first));
 console.log(`  first payment tx ${first.hash}`);

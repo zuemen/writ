@@ -1,10 +1,10 @@
-/** 把 demo 的 timeline 轉成 docs/testnet.md（每步附 testnet explorer 連結）。 */
+/** Turns the demo's timeline into docs/testnet.md (each step with a testnet explorer link). */
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import { DEMO, ROOT, readJson } from "./near.js";
 const t = readJson(join(DEMO, "timeline.json"));
 const a = readJson(join(DEMO, "accounts.json"));
-// 合約帳號上的鑰匙：不該有 full-access key，只有 agent 的 function-call key（撤銷後連這把都沒有）
+// Keys on the contract account: there should be no full-access key, only the agent's function-call key (after revocation not even that one)
 const keysRes: any = await (await fetch(process.env.NEAR_RPC ?? "https://test.rpc.fastnear.com", {
   method: "POST", headers: { "content-type": "application/json" },
   body: JSON.stringify({ jsonrpc: "2.0", id: "1", method: "query", params: { request_type: "view_access_key_list", finality: "final", account_id: a.writ.id } }),

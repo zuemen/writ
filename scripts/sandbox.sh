@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 本機 NEAR sandbox：start / stop / status。資料在 .sandbox/（.gitignore）。
-# 二進位來源：$NEAR_SANDBOX_BIN，或 `make -C contract test` 時 near-workspaces 下載的那一份。
+# Local NEAR sandbox: start / stop / status. Data is in .sandbox/ (.gitignore).
+# Binary source: $NEAR_SANDBOX_BIN, or the one near-workspaces downloaded during `make -C contract test`.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOME_DIR="$ROOT/.sandbox"
@@ -10,7 +10,7 @@ find_bin() {
   ls "$ROOT"/contract/target/debug/build/near-sandbox-*/out/.near/near-sandbox-*/near-sandbox 2>/dev/null | head -1
 }
 preload() {
-  # neard 需要 fd 上限 65535；硬上限不夠的容器用 shim（一般電腦不會走到這裡）
+  # neard needs an fd limit of 65535; in containers with too low a hard limit use a shim (a normal computer never gets here)
   if [ "$(ulimit -Hn)" != "unlimited" ] && [ "$(ulimit -Hn)" -lt 65535 ]; then
     [ -f "$ROOT/tools/fakerlimit.so" ] || gcc -shared -fPIC -o "$ROOT/tools/fakerlimit.so" "$ROOT/tools/fakerlimit.c" -ldl
     echo "LD_PRELOAD=$ROOT/tools/fakerlimit.so"

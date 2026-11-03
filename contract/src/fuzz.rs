@@ -1,4 +1,4 @@
-// 隨機序列不變量測試：隨機呼叫加隨機 callback 失敗，每步核對總帳。SEEDS、STEPS 可調。
+// Random-sequence invariant test: random calls plus random callback failures, ledger checked at every step. SEEDS and STEPS are adjustable.
 #[cfg(test)]
 mod fuzz {
     use super::*;
@@ -35,8 +35,8 @@ mod fuzz {
         log: Vec<String>,
         sur: u128,
         last_err: String,
-        token: Option<AccountId>, // None = NEAR 世界；Some = 代幣世界，金庫、質押、賣方的錢都是這個代幣
-        tbal: u128,               // 合約在代幣上的餘額（模型）
+        token: Option<AccountId>, // None = NEAR world; Some = token world, vault, stake and seller funds are all this token
+        tbal: u128,               // the contract's token balance (model)
         tsur: u128,
     }
 
@@ -79,7 +79,7 @@ mod fuzz {
                                 MockAction::Transfer { deposit, .. } => { self.bal -= deposit.as_yoctonear(); }
                                 MockAction::FunctionCallWeight { method_name, args, .. } => {
                                     let m = String::from_utf8(method_name.clone()).unwrap();
-                                    // ft_transfer 附的 1 yocto 是合約自己出的零頭，模型不記
+                                    // The 1 yocto attached to ft_transfer is a small amount the contract pays itself; the model does not track it
                                     if m == "ft_transfer" {
                                         let v: Value = serde_json::from_slice(args).unwrap();
                                         self.tbal -= v["amount"].as_str().unwrap().parse::<u128>().unwrap();
@@ -106,7 +106,7 @@ mod fuzz {
         fn resolve(&mut self, fail: bool) {
             let Some(cb) = self.pending.pop_front() else { return };
             let amt: u128 = cb.args["amount"].as_str().unwrap().parse().unwrap();
-            // 轉帳失敗，錢沒離開合約：看這筆是哪個資產
+            // Transfer failed, money did not leave the contract: check which asset this one is
             let in_token = match cb.method.as_str() {
                 "on_withdraw" => !cb.args["asset"].is_null(),
                 _ => { let id: u64 = cb.args["cell"].as_str().unwrap().parse().unwrap(); self.peek(|w| w.cells.get(&id).unwrap().asset.is_some()) }
@@ -127,7 +127,7 @@ mod fuzz {
         }
         fn hit(&mut self, s: &str) { *self.hits.entry(s.to_string()).or_default() += 1; }
 
-        /// 代幣世界的付款：代幣合約呼叫 ft_on_transfer。panic = ft_resolve_transfer 全退，餘額不變。
+        /// Payment in the token world: the token contract calls ft_on_transfer. panic = ft_resolve_transfer refunds everything, balance unchanged.
         fn ft(&mut self, name: &str, sender: &AccountId, amount: u128, msg: String) -> bool {
             let token = self.token.clone().unwrap();
             let s = sender.clone();
@@ -167,7 +167,7 @@ mod fuzz {
                         if c.root.0 != *r { continue; }
                         if matches!(c.status, CreditStatus::Open | CreditStatus::Accepted | CreditStatus::Delivered | CreditStatus::Disputed) {
                             o += c.amount.0; b += c.bond_locked.0; exp += c.exposure.0;
-                            // 接受之後保證金永遠等於條款承諾的比例，曝險是剩下的部分
+                            // After acceptance the bond always equals the ratio the terms promise, exposure is the remainder
                             if c.status != CreditStatus::Open {
                                 let want = c.amount.0 * t.args.bond_bps as u128 / 10_000;
                                 if c.bond_locked.0 != want { e.push(format!("bond {} vs promised {}", c.bond_locked.0, want)); }
@@ -186,12 +186,12 @@ mod fuzz {
                 }
                 for k in &credits { let c = w.credits.get(k).unwrap(); if c.status == CreditStatus::Disputed { sum += c.dispute_escrow.0; } }
                 if st.exposure.0 != exp { e.push(format!("exposure {} vs {}", st.exposure.0, exp)); }
-                // 帳簿：已賠 - 已追回 = 所有單還欠保證人的錢；賣方清單有上限
+                // Books: paid out - recovered = what all orders still owe the guarantor; the seller list has a cap
                 for k in &credits { if w.credits.get(k).unwrap().asset != asset { e.push("credit in the wrong asset".into()); } }
                 let owed: u128 = credits.iter().map(|k| w.credits.get(k).unwrap().debt.0).sum();
                 if st.claims_paid.0 < st.recovered.0 || st.claims_paid.0 - st.recovered.0 != owed { e.push(format!("book claims {} recovered {} owed {}", st.claims_paid.0, st.recovered.0, owed)); }
                 if st.sellers.len() > MAX_BOOK_SELLERS { e.push("book sellers over the cap".into()); }
-                // 每個賣方的曝險 = 它所有未結單的曝險；歸零就不留紀錄
+                // Each seller's exposure = the exposure of all its open orders; at zero no record is kept
                 for s in ["s1.near", "s2.near"] {
                     let s = acc(s);
                     let want: u128 = credits.iter().map(|k| w.credits.get(k).unwrap()).filter(|c| c.seller == s && matches!(c.status, CreditStatus::Open | CreditStatus::Accepted | CreditStatus::Delivered | CreditStatus::Disputed)).map(|c| c.exposure.0).sum();
@@ -204,7 +204,7 @@ mod fuzz {
                     let c = w.cells.get(id).unwrap();
                     if c.root != *id && matches!(c.status, Status::Revoked { .. }) && c.vault.0 > 0 { e.push(format!("closed child holds vault {}", id)); }
                 }
-                // 每個資產分開對帳：NEAR 只有準備與可提領，代幣有金庫、質押、押金與可提領
+                // Each asset is reconciled separately: NEAR has only reserve and withdrawable; tokens have vault, stake, deposit and withdrawable
                 if let Some(t) = &asset {
                     let tt = w.token_total.get(t).copied().unwrap_or(0);
                     if sum != tt { e.push(format!("token_total {} vs buckets {}", tt, sum)); }
@@ -246,7 +246,7 @@ mod fuzz {
 
     fn new_world(seed: u64) -> Cx { world_in(seed, None) }
 
-    /// 代幣世界：一半的 seed 跑這個。NEAR 準備也是隨機的，準備不足的路徑才走得到。
+    /// Token world: half of the seeds run this. NEAR reserve is random too, so the reserve-short paths are reached.
     fn world_in(seed: u64, token: Option<AccountId>) -> Cx {
         let mut cx = Cx { snap: HashMap::new(), now: 1_000_000 * NS, bal: 5_000 * 1_000_000_000_000_000_000_000_000u128, rng: seed.wrapping_mul(0x9E3779B97F4A7C15) | 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0, last_err: String::new(), token: token.clone(), tbal: 0, tsur: 0 };
         cx.up(&writ(), None, 0);
@@ -376,7 +376,7 @@ mod fuzz {
                 let Some(c) = &info else { return "skip".into() }; let k = c.id;
                 let d = match cx.r(3) { 0 => 0, 1 => c.amount.0, _ => c.amount.0 + 7 };
                 if cx.token.is_some() && d > 0 {
-                    // 代幣樹用 NEAR 付一定被擋：1 NEAR 不能當成一大筆代幣
+                    // A token tree paying with NEAR is always rejected: 1 NEAR cannot count as a large amount of tokens
                     if cx.run("near_on_token", &funder, None, d, |w| w.settle_by_funder(k)).is_some() { panic!("INVARIANT NEAR paid a token order"); }
                     cx.ft("settle_by_funder", &funder, d, format!("settle:{}", k.0));
                 } else {
@@ -395,7 +395,7 @@ mod fuzz {
             22 => {
                 match cx.r(10) {
                     8 => {
-                        // 規則只設在 s2：s1 一直沒有規則，才走得到後面的路徑
+                        // Rules are set only on s2: s1 never has a rule, so the later paths are reached
                         let s = acc("s2.near");
                         let p = if cx.r(4) == 0 { None } else { Some(SellerPolicy { max_amount: U128((cx.r(6) as u128 + 1) * UNIT), max_tenor_secs: U64(cx.r(400) + 10), min_bond_bps: [0u32, 0, 2000][cx.r(3) as usize], max_defaults: cx.r(3) as u32, guarantors: if cx.r(6) == 0 { vec![acc("other.near")] } else { vec![] }, asset: if cx.r(8) == 0 { Some(acc("fake.near")) } else { cx.token.clone() }, max_fee_bps: [100u32, 500, 10_000][cx.r(3) as usize], arbiters: if cx.r(8) == 0 { vec![acc("other.near")] } else { vec![] } }) };
                         let d = SELLER_POLICY_STORAGE + cx.r(2) as u128 * 5;
@@ -415,7 +415,7 @@ mod fuzz {
             _ => { let dt = if cx.r(4) == 0 { cx.r(150) + 1 } else { cx.r(20) + 1 }; cx.now += dt * NS; "time".into() }
         };
         let _ = rootid;
-        // 性質：欠保證人時，這棵樹的金庫只能因為償債／違約賠付而減少
+        // Property: when the guarantor is owed, this tree's vault can shrink only through repayment or default payout
         let rs = cx.roots.clone();
         for r in rs {
             if owes_before.get(&r).copied().unwrap_or(0) > 0 {
@@ -435,7 +435,7 @@ mod fuzz {
         v
     }
 
-    /// 收尾：所有單都能走到終點、所有錢都領得走
+    /// Wrap-up: every order can reach its end, all money can be withdrawn
     fn drain(cx: &mut Cx, seed: u64) {
         while !cx.pending.is_empty() { cx.resolve(false); }
         let roots = cx.roots.clone();
@@ -490,7 +490,7 @@ mod fuzz {
     }
 
 
-    /// 定向 PoC：欠保證人時，子格 agent 用 settle 把子格金庫付給友好賣方
+    /// Directed PoC: when the guarantor is owed, a child-cell agent uses settle to pay the child cell's vault to a friendly seller
     #[test]
     fn invariants() {
         std::panic::set_hook(Box::new(|i| {

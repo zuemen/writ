@@ -1,9 +1,9 @@
 """
-make keri-check 的反例：驗證端必須拒絕每一張偽造或過期的憑證。
+Counter-examples for make keri-check: the verifier must reject every forged or expired credential.
 
-每個情境都在暫存資料夾裡用真 keripy 產生憑證，再交給 verify.verify_chain()。
-第一項是誠實的鏈，必須通過，證明其他情境不是因為環境壞掉才被拒。
-最後一行 KERI_FORGERIES|PASS|<n> 給機器檢查。
+Each scenario builds credentials with real keripy in a temporary folder, then hands them to verify.verify_chain().
+The first case is an honest chain and must pass, proving the other cases are not rejected only because the environment is broken.
+The last line KERI_FORGERIES|PASS|<n> is for machine checking.
 """
 import os, secrets, shutil, sys, tempfile
 
@@ -36,7 +36,7 @@ def anchor(hab, reg, serder, sn):
 
 def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge_o="I2I", pin_other=False,
           revoke_after_bundle=None, rogue_qvi=False, ecr_lei="WRITDEMO000000000017", no_rules=False, bad_edge_said=False, altered_rules=False):
-    """建一條鏈並寫出 bundle／registrar。參數決定哪裡造假。"""
+    """Build a chain and write the bundle/registrar. The parameters decide where to forge."""
     with habbing.openHby(name=name, temp=True) as hby:
         rgy = credentialing.Regery(hby=hby, name=name, temp=True)
         root = hby.makeHab(name="root")
@@ -60,7 +60,7 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
         anchor(qvi, reg_qv, reg_qv.vcp, "0")
         rgy.processEscrows()
 
-        # rogue_qvi：QVI 憑證是冒牌的根發的，不是驗證端釘住的根
+        # rogue_qvi: the QVI credential was issued by an imposter root, not the root the verifier pinned
         fake_root = hby.makeHab(name="fakeroot") if rogue_qvi else None
         reg_fr = rgy.makeRegistry(name="fake-reg", prefix=fake_root.pre, noBackers=True) if rogue_qvi else None
         if rogue_qvi:
@@ -74,7 +74,7 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
         iss_l = reg_qv.issue(said=lev.said); anchor(qvi, reg_qv, iss_l, "0")
         rgy.processEscrows()
 
-        # forge_ecr：員工用自己的登錄簿發一張 i = 真 LE 的 ECR，LE 什麼都沒簽
+        # forge_ecr: the employee issues an ECR with i = the real LE from their own registry, the LE signed nothing
         reg_e, hab_e = (reg_hu, human) if forge_ecr else (reg_le, le)
         sch = schema or ECR
         ecr = proving.credential(issuer=le.pre, schema=sch.said, recipient=human.pre, status=reg_e.regk, private=True,
@@ -84,7 +84,7 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
         iss_e = reg_e.issue(said=ecr.said)
         anchor(hab_e, reg_e, iss_e, "0")
 
-        # forge_amc：拿著 agent 鑰匙的人自己發一張 i = 員工 的 AMC，替自己加額度
+        # forge_amc: whoever holds the agent key issues an AMC with i = the employee, adding limit for themselves
         reg_a, hab_a = (reg_ag, agent) if forge_amc else (reg_hu, human)
         amc = proving.credential(issuer=human.pre, schema=AMC.said, recipient=agent.pre, status=reg_a.regk, private=True,
                                  data=dict(actionClass="supplier-payment", counterparties=["merchant.test.near"],
@@ -114,7 +114,7 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
         write_json(os.path.join(BUNDLE, "presentation.json"), dict(qvi_said=qvc.said, lev_said=lev.said, ecr_said=ecr.said, amc_said=amc.said, agent_aid=agent.pre))
         write_json(V.POLICY, dict(root_aid=("E" + secrets.token_urlsafe(32)[:43]) if pin_other else root.pre))
 
-        # 撤銷發生在持有人拿到 bundle 之後：只有 registrar 看得到
+        # revocation happened after the holder got the bundle: only the registrar shows it
         if revoke_after_bundle == "ecr":
             anchor(le, reg_le, reg_le.revoke(said=ecr.said), "1")
         elif revoke_after_bundle == "lev":
@@ -156,7 +156,7 @@ for i, (label, kw, expect_ok) in enumerate(CASES):
         accepted, why = True, ""
     except V.ChainError as e:
         accepted, why = False, str(e)
-    except Exception as e:  # 解析階段被 keripy 擋下也算拒絕，但要看得到原因
+    except Exception as e:  # rejection by keripy at the parsing stage also counts, but the reason must be visible
         accepted, why = False, f"{type(e).__name__}: {e}"
     good = accepted == expect_ok
     fails += not good

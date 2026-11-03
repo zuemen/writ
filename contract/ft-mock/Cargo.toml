@@ -2,7 +2,7 @@
 name = "ft-mock"
 version = "0.1.0"
 edition = "2021"
-# 測試用 NEP-141（模擬穩定幣 tUSDC）。只在 sandbox 測試與 demo 使用。
+# Test NEP-141 (mock stablecoin tUSDC). Used only in sandbox tests and the demo.
 
 [lib]
 crate-type = ["cdylib"]

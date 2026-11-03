@@ -1,6 +1,6 @@
 /**
- * make ui —— 本機網頁（http://localhost:8787），三個視角一頁：法人 HR／agent／商家（任何人）。
- * 只連本機 sandbox。每個按鈕呼叫 flow.ts 裡跟 CLI demo 相同的函式。
+ * make ui: local web UI (http://localhost:8787), three views on one page: legal entity HR / agent / merchant (anyone).
+ * Connects only to the local sandbox. Each button calls the same function in flow.ts as the CLI demo.
  */
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
@@ -77,7 +77,7 @@ async function act(path: string) {
     const v = verifierCheck();
     add({ who: "verifier", text: v.ok ? "chain valid" : "REFUSED — " + v.out[0], kind: v.ok ? "info" : "reject" });
   } else if (path === "/api/reset") {
-    // 乾淨重來：重啟本機 sandbox（鏈狀態歸零）再重新布置
+    // Clean restart: restart the local sandbox (chain state reset) and set up again
     execFileSync(join(ROOT, "scripts/sandbox.sh"), ["stop"], { stdio: "ignore" });
     execFileSync(join(ROOT, "scripts/sandbox.sh"), ["start"], { stdio: "ignore" });
     execFileSync("npx", ["tsx", "src/setup.ts"], { cwd: join(ROOT, "app"), stdio: "ignore" });

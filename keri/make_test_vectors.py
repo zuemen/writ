@@ -1,14 +1,14 @@
 """
-產生合約測試用的固定 KERI 向量（contract/tests/fixtures/）—— 用 keripy 直接建立 mock 鏈：
-  LE（法人 AID）→ 發 ECR 給 human（人 AID）→ human 發 AMC 給 agent（agent 是 human KEL 之下的委派 AID）
-  然後 human 撤銷 AMC，印出錨定撤銷的 ixn 事件與 seal {i, s, d}。
+Generate fixed KERI vectors for the contract tests (contract/tests/fixtures/), built directly with keripy as a mock chain:
+  LE (legal entity AID) -> issues ECR to human (person AID) -> human issues AMC to agent (the agent is a delegated AID under the human KEL)
+  then human revokes the AMC, prints the ixn event anchoring the revocation and the seal {i, s, d}.
 
-同時輸出三組「一把鑰匙兩個世界」的向量，給 Rust 合約的 ed25519_verify spike 用：
-  1. agent 委派 AID 的 Ed25519 原始公鑰（32 bytes）＋它對任意訊息的簽章（64 bytes）
-  2. human（AMC 簽發者）的 Ed25519 原始公鑰＋它對 ixn 原始序列化 bytes 的簽章
-  3. ixn 的原始 bytes 與 seal
+Also outputs three sets of "one key, two worlds" vectors for the Rust contract's ed25519_verify spike:
+  1. raw Ed25519 public key (32 bytes) of the agent's delegated AID + its signature (64 bytes) over any message
+  2. raw Ed25519 public key of the human (AMC issuer) + its signature over the raw serialized bytes of the ixn
+  3. raw bytes and seal of the ixn
 
-執行：/home/claude/keri-venv/bin/python spike7_keri.py
+Run: /home/claude/keri-venv/bin/python spike7_keri.py
 """
 import json, sys, os, hashlib
 from keri.app import habbing
@@ -20,62 +20,62 @@ from keri.core.eventing import SealEvent
 OUT = os.path.join(os.path.dirname(__file__), "..", "contract", "tests", "fixtures")
 
 def b58(b: bytes) -> str:
-    """Bitcoin/NEAR 的 base58（無 checksum）。"""
+    """Bitcoin/NEAR base58 (no checksum)."""
     A = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
     n = int.from_bytes(b, "big"); out = ""
     while n: n, r = divmod(n, 58); out = A[r] + out
     return "1" * (len(b) - len(b.lstrip(b"\0"))) + out
 os.makedirs(OUT, exist_ok=True)
 
-# vLEI 正式 schema SAID（ECR）。proving.credential() 不會抓 schema 內容，只把 SAID 寫進 ACDC 的 s 欄位，
-# 驗證端要查 schema 時才需要 schema 本體。spike 只需要 SAID。
+# Official vLEI schema SAID (ECR). proving.credential() does not fetch the schema content, it only writes the SAID into the ACDC s field,
+# the schema body is needed only when the verifier looks up the schema. The spike needs only the SAID.
 SCHEMA_ECR = "EEy9PkikFcANV1l7EHukCeXqrzT1hNZjGlUk7wuMO5jw"
-# AMC 還沒有正式 schema（GLEIF 討論稿 p.45 明寫「formal ACDC schema for the AMC needs to be defined」）。
-# 這裡用一個合法格式的占位 SAID；之後 D7 自己寫 schema 再換。
+# The AMC has no formal schema yet (GLEIF discussion paper p.45 states "formal ACDC schema for the AMC needs to be defined").
+# A placeholder SAID in a valid format is used here; replaced once D7 writes the schema ourselves.
 SCHEMA_AMC = "EAMCplaceholderplaceholderplaceholderplaceh"
 
 def anchor(hab, registry, serder, sn):
-    """把 TEL 事件（vcp / iss / rev）用 ixn 錨進 hab 的 KEL，回傳 ixn 的原始 msg bytes。"""
+    """Anchor a TEL event (vcp / iss / rev) into the hab's KEL with an ixn, return the raw msg bytes of the ixn."""
     seal = SealEvent(serder.pre, sn, serder.said)._asdict()
-    msg = hab.interact(data=[seal])          # 這裡產生 ixn 事件並簽章
+    msg = hab.interact(data=[seal])          # the ixn event is created and signed here
     seqner = coring.Seqner(sn=hab.kever.sn)
     saider = coring.Saider(qb64=hab.kever.serder.said)
     registry.anchorMsg(pre=serder.pre, regd=serder.said, seqner=seqner, saider=saider)
     return msg, seal
 
 def split_msg(msg: bytes):
-    """CESR 串流 = JSON 事件本體 + 附件（計數碼 + 索引簽章）。版本字串裡有長度，用它切。"""
+    """CESR stream = JSON event body + attachments (counter code + indexed signatures). The version string contains the length, use it to cut."""
     serder = serdering.SerderKERI(raw=msg)
     body = msg[:serder.size]
     attach = msg[serder.size:]
     return serder, body, attach
 
 with habbing.openHby(name="spike7", temp=True, salt=signing.Salter(raw=b"0123456789abcdef").qb64) as hby:
-    le = hby.makeHab(name="le")                      # 法人 AID（mock，實際應由 QVI 發 LE vLEI）
-    human = hby.makeHab(name="human")                # 職員 AID（ECR 持有人）
+    le = hby.makeHab(name="le")                      # legal entity AID (mock; in reality the QVI should issue the LE vLEI)
+    human = hby.makeHab(name="human")                # staff AID (ECR holder)
     print("LE    AID:", le.pre)
     print("human AID:", human.pre)
 
-    # ---- 1. agent 是 human KEL 之下的委派 AID（GLEIF 討論稿 Annex A p.44 / §6-3 p.36）----
+    # ---- 1. the agent is a delegated AID under the human KEL (GLEIF discussion paper Annex A p.44 / section 6-3 p.36)----
     agent = hby.makeHab(name="agent", delpre=human.pre)
-    # 委派者 human 以 ixn 錨定委派核准 seal {i: agent.pre, s: "0", d: agent 的 icp SAID}
+    # The delegator human anchors the delegation approval with an ixn seal {i: agent.pre, s: "0", d: the agent's icp SAID}
     approve_seal = dict(i=agent.pre, s="0", d=agent.kever.serder.said if agent.kever else None)
     if approve_seal["d"] is None:
-        # kever 尚未建立：從 db 取 icp
+        # kever not yet created: take the icp from the db
         icp = hby.db.getEvt(eventing.dgKey(agent.pre, hby.db.getKeLast(eventing.snKey(agent.pre, 0))))
         approve_seal["d"] = serdering.SerderKERI(raw=bytes(icp)).said
     human.interact(data=[approve_seal])
     hby.kvy.processEscrows()
     print("agent AID (delegated under human):", agent.pre, "| delegator:", agent.kever.delpre if agent.kever else "(pending)")
 
-    # ---- 2. 登錄簿與憑證 ----
+    # ---- 2. registry and credentials ----
     rgy = credentialing.Regery(hby=hby, name="spike7", temp=True)
     reg_le = rgy.makeRegistry(name="le-reg", prefix=le.pre)
     anchor(le, reg_le, reg_le.vcp, "0"); rgy.processEscrows()
     reg_hu = rgy.makeRegistry(name="human-reg", prefix=human.pre)
     anchor(human, reg_hu, reg_hu.vcp, "0"); rgy.processEscrows()
 
-    # LE → human：ECR（mock 欄位對齊 vLEI ECR schema 的 a 區塊）
+    # LE -> human: ECR (mock fields aligned with the a block of the vLEI ECR schema)
     ecr = proving.credential(issuer=le.pre, schema=SCHEMA_ECR, recipient=human.pre,
                              data=dict(LEI="WRITDEMO000000000017", personLegalName="Alex Example",
                                        engagementContextRole="Treasury Operations"),
@@ -83,7 +83,7 @@ with habbing.openHby(name="spike7", temp=True, salt=signing.Salter(raw=b"0123456
     iss = reg_le.issue(said=ecr.said); anchor(le, reg_le, iss, "0"); rgy.processEscrows()
     print("ECR SAID:", ecr.said, "| TEL state sn=0 (iss)")
 
-    # human → agent：AMC（欄位照 GLEIF 討論稿 p.44 四項：行動類別、上限、對手、有效期）＋ edge 指向 ECR
+    # human -> agent: AMC (fields follow the four items on GLEIF discussion paper p.44: action class, cap, counterparties, validity) + edge pointing to the ECR
     amc = proving.credential(issuer=human.pre, schema=SCHEMA_AMC, recipient=agent.pre,
                              data=dict(actionClass="supplier-payment", limitUnit="100000000000000000000000",
                                        limitN=20, scope=["merchant.testnet"], validUntil="2026-12-31T00:00:00Z",
@@ -91,13 +91,13 @@ with habbing.openHby(name="spike7", temp=True, salt=signing.Salter(raw=b"0123456
                              source=dict(ecr=dict(n=ecr.said, s=SCHEMA_ECR)),
                              status=reg_hu.regk)
     iss2 = reg_hu.issue(said=amc.said); iss_msg, iss_seal = anchor(human, reg_hu, iss2, "0"); rgy.processEscrows()
-    # 發行錨點（seal s="0"）：合約必須拒絕拿它當撤銷證據
+    # issuance anchor (seal s="0"): the contract must refuse to take it as revocation evidence
     iss_ixn = serdering.SerderKERI(raw=bytes(iss_msg))
     iss_body = bytes(iss_msg[:iss_ixn.size])
     iss_sig = indexing.Siger(qb64b=bytes(hby.db.getSigs(eventing.dgKey(human.pre, iss_ixn.said))[0])).raw
     print("AMC SAID:", amc.said, "| TEL state sn=0 (iss)")
 
-    # ---- 3. 撤銷 AMC：rev 事件 + human 的 ixn 錨定 ----
+    # ---- 3. revoke the AMC: rev event + human's ixn anchor ----
     rev = reg_hu.revoke(said=amc.said)
     ixn_msg, seal = anchor(human, reg_hu, rev, "1"); rgy.processEscrows()
     ixn, ixn_body, ixn_attach = split_msg(ixn_msg)
@@ -109,24 +109,24 @@ with habbing.openHby(name="spike7", temp=True, salt=signing.Salter(raw=b"0123456
     state = reg_hu.tever.vcState(amc.said)
     print("AMC TEL state after revoke:", state.et if state else None, "sn=", state.s if state else None)
 
-    # ---- 3b. HR 路徑：LE 撤銷員工的 ECR ----
+    # ---- 3b. HR path: the LE revokes the employee's ECR ----
     rev_e = reg_le.revoke(said=ecr.said)
     ixn_e_msg, seal_e = anchor(le, reg_le, rev_e, "1"); rgy.processEscrows()
     ixn_e = serdering.SerderKERI(raw=bytes(ixn_e_msg))
     ixn_e_body = bytes(ixn_e_msg[:ixn_e.size])
     ixn_e_sig = indexing.Siger(qb64b=bytes(hby.db.getSigs(eventing.dgKey(le.pre, ixn_e.said))[0])).raw
 
-    # ---- 4. 一把鑰匙兩個世界：原始 Ed25519 bytes ----
+    # ---- 4. one key, two worlds: raw Ed25519 bytes ----
     agent_pk = agent.kever.verfers[0].raw
     msg_for_agent = b"spend|cell=1|j=3|to=merchant.testnet"
     agent_sig = agent.sign(ser=msg_for_agent, indexed=False)[0].raw
     human_pk = human.kever.verfers[0].raw
-    # 真正附在 KEL 上的那個索引簽章（不是重簽）：從 db 取出，去掉索引碼只留 64 bytes 原始簽章
+    # the indexed signature actually attached to the KEL (not re-signed): take it from the db and strip the index code, leaving the 64-byte raw signature
     ixn_body = bytes(ixn_body)
     sigs = hby.db.getSigs(eventing.dgKey(human.pre, ixn.said))
     siger = indexing.Siger(qb64b=bytes(sigs[0]))
     human_sig_on_ixn = siger.raw
-    # 用純 Ed25519 驗一次，確認「原始 bytes + 原始簽章 + 原始公鑰」三者就是 NEAR 合約要收的東西
+    # verify once with plain Ed25519 to confirm that "raw bytes + raw signature + raw public key" are what the NEAR contract takes
     import pysodium
     pysodium.crypto_sign_verify_detached(human_sig_on_ixn, ixn_body, human_pk)
     pysodium.crypto_sign_verify_detached(agent_sig, msg_for_agent, agent_pk)
@@ -135,7 +135,7 @@ with habbing.openHby(name="spike7", temp=True, salt=signing.Salter(raw=b"0123456
 
     vectors = dict(
         agent=dict(aid=agent.pre, pk_hex=agent_pk.hex(), msg=msg_for_agent.decode(), sig_hex=agent_sig.hex(),
-                   near_pk="ed25519:" + b58(agent_pk)),   # NEAR 的公鑰字串格式：ed25519:<base58(32 bytes)>
+                   near_pk="ed25519:" + b58(agent_pk)),   # NEAR public key string format: ed25519:<base58(32 bytes)>
         issuer=dict(aid=human.pre, pk_hex=human_pk.hex()),
         ixn=dict(raw_hex=ixn_body.hex(), said=ixn.said, sn=ixn.ked["s"], seal=seal,
                  sig_hex=human_sig_on_ixn.hex(), attach_hex=ixn_attach.hex()),
@@ -150,7 +150,7 @@ with habbing.openHby(name="spike7", temp=True, salt=signing.Salter(raw=b"0123456
         json.dump(vectors, f, indent=1)
     with open(os.path.join(OUT, "ixn_revoke.cesr"), "wb") as f:
         f.write(ixn_msg)
-    # 匯出完整 KEL/TEL/ACDC 串流（給 TS verifier 讀的 fixture）
+    # export the full KEL/TEL/ACDC stream (a fixture for the TS verifier to read)
     stream = b""
     for h in (le, human, agent):
         stream += h.replay()

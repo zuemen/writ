@@ -1,6 +1,6 @@
 /**
- * make testnet —— 把同一個故事搬到 NEAR testnet（需要本人同意才執行：會簽 testnet 交易）。
- * 帳號由 testnet faucet（helper.testnet.near.org）建立，每個約 10 NEAR 測試幣，私鑰寫在 .demo-testnet/（.gitignore）。
+ * make testnet: move the same story to NEAR testnet (runs only with the owner's consent: it signs testnet transactions).
+ * Accounts are created by the testnet faucet (helper.testnet.near.org), about 10 NEAR test tokens each; private keys are written to .demo-testnet/ (.gitignore).
  */
 import { KeyPair, actions, type KeyPairString } from "near-api-js";
 import { readFileSync, rmSync, existsSync } from "node:fs";
@@ -24,7 +24,7 @@ for (const n of names) {
   if (res.ok) {
     accts[n] = { id, sk: kp.toString() as KeyPairString };
   } else if (res.status === 429 && accts.owner) {
-    // faucet 限流：由已領到測試幣的 owner 建子帳號
+    // Faucet rate limit: an owner that already has test tokens creates the sub-accounts
     const sub = `${n}.${accts.owner.id}`;
     await as(accts.owner.id, accts.owner.sk).signAndSendTransaction({
       receiverId: sub,

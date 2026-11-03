@@ -1,8 +1,8 @@
-# Writ —— 一鍵指令。除了 make testnet 以外都只碰本機 sandbox，不需要任何 API key。
-#   make setup   安裝依賴、建置合約、下載 sandbox（需網路一次）
-#   make test    合約攻擊台 → 重產 docs/bench.md
-#   make demo    起本機 sandbox → 布置帳號與 mock vLEI → 跑 60 秒故事 → 關 sandbox
-#   make ui      起 sandbox + 布置 + 開網頁（http://localhost:8787）
+# Writ: one-command targets. Everything except make testnet touches only the local sandbox; no API key needed.
+#   make setup   install dependencies, build the contract, download the sandbox (needs network once)
+#   make test    contract attack bench, regenerates docs/bench.md
+#   make demo    start local sandbox, set up accounts and mock vLEI, run the 60-second story, stop the sandbox
+#   make ui      start sandbox, set up, open the web UI (http://localhost:8787)
 PY ?= python3
 
 setup: keri/.venv/bin/python app/node_modules
@@ -31,45 +31,45 @@ ui: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && npx tsx src/setup.ts && npx tsx src/server.ts
 
-# 「誰負責」的完整故事：賒帳、按時付款、違約、保證人賠付、追償、揭露。用真 KERI 簽章，只碰本機 sandbox
+# The full "who is responsible" story: credit sale, on-time payment, default, guarantor payout, recovery, disclosure. Uses real KERI signatures; local sandbox only
 credit-demo: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && npx tsx src/setup.ts && npx tsx src/credit-demo.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
-# 同一個故事用穩定幣跑：本機 ft-mock（6 位小數），賣方付保證費。只碰本機 sandbox
+# Same story with a stablecoin: local ft-mock (6 decimals), seller pays the guarantee fee. Local sandbox only
 credit-usdc-demo: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && npx tsx src/setup.ts && npx tsx src/credit-usdc-demo.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
-# 選用：真 LLM 當 agent（需要 NEARAI_API_KEY）。只碰本機 sandbox。結果寫進 docs/attack-live.md
+# Optional: a real LLM as the agent (needs NEARAI_API_KEY). Local sandbox only. Results go to docs/attack-live.md
 attack-live: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && WRIT_N=500 WRIT_DAILY=500 WRIT_MAX_STRIKES=0 npx tsx src/setup.ts && npx tsx src/agent-live.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
-# 選用：真 LLM 讀採購單並賒帳。結果寫進 docs/attack-credit-live.md
+# Optional: a real LLM reads purchase orders and buys on credit. Results go to docs/attack-credit-live.md
 attack-credit-live: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && WRIT_N=500 WRIT_DAILY=500 WRIT_MAX_STRIKES=0 npx tsx src/setup.ts && npx tsx src/agent-credit.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
-# 用 Circle 的 testnet USDC 跑一筆真實付款（法人要先從 faucet 領幣）。結果寫進 docs/testnet-usdc.md
+# Run one real payment with Circle's testnet USDC (the legal entity must first get tokens from the faucet). Results go to docs/testnet-usdc.md
 testnet-usdc: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/usdc-setup.ts
 
-# 在 testnet 開「鑰匙公開」的格並組出網頁（要先跑過 make testnet）。私鑰只在 .demo-testnet/，不進 repo
+# Open a "public key" cell on testnet and build the web page (run make testnet first). Private keys stay in .demo-testnet/, not in the repo
 bounty: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/bounty-setup.ts
 	bash scripts/build_site.sh
 
-# 網站「Fool a live model」用的 agent：小額真預算（要先跑過 make testnet）。私鑰只在 .demo-testnet/，不進 repo
+# Agent for the site's "Fool a live model": small real budget (run make testnet first). Private keys stay in .demo-testnet/, not in the repo
 live-agent: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/live-setup.ts
 
-# 替網站預開一批委任格（訪客在瀏覽器走完整流程用）。私鑰只在 .demo-testnet/，不進 repo
+# Pre-open a batch of mandate cells for the site (visitors run the full flow in the browser). Private keys stay in .demo-testnet/, not in the repo
 pool: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/pool-setup.ts
 	bash scripts/build_site.sh
 
-# 一個指令重現所有主張，最後印成績單
+# One command reproduces every claim and prints a scorecard at the end
 verify:
 	PY=$(PY) bash scripts/verify_all.sh
 
@@ -77,12 +77,12 @@ clean:
 	scripts/sandbox.sh stop; rm -rf .demo .sandbox keri/.keystore keri/bundle keri/registrar
 .PHONY: setup test keri-check demo ui clean testnet testnet-usdc attack-live bounty pool live-agent verify credit-demo credit-usdc-demo credit-testnet attack-credit-live
 
-# 需要本人同意：會在 NEAR testnet 建帳號、部署、簽交易（測試幣，免費）。結果寫進 docs/testnet.md
+# Needs the owner's consent: creates accounts on NEAR testnet, deploys, signs transactions (test tokens, free). Results go to docs/testnet.md
 testnet: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/testnet-setup.ts \
 	 && NEAR_RPC=https://test.rpc.fastnear.com WRIT_UNSEAL_SECS=60 WRIT_DEMO_DIR=.demo-testnet npx tsx src/demo.ts \
 	 && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/testnet-report.ts
 
-# 賒帳故事在 testnet 跑一次，留交易連結（要先 make testnet）
+# Run the credit story once on testnet and keep the transaction links (run make testnet first)
 credit-testnet:
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet WRIT_RECOURSE_SECS=20 WRIT_CREDIT_REPORT=../docs/testnet-credit.md npx tsx src/credit-demo.ts

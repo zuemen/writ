@@ -1,4 +1,4 @@
-// 確定性測試：每條錢路核對精確金額，每個期限核對到奈秒。隨機 fuzz 和攻擊台抓不到的突變靠這裡。
+// Deterministic tests: every money path is checked for the exact amount, every deadline to the nanosecond. Catches mutations that random fuzz and the attack bench miss.
 mod exact {
     use super::*;
     use near_sdk::test_utils::get_logs;
@@ -255,29 +255,29 @@ mod exact {
 
     #[test]
     fn open_credit_boundaries() {
-        // 期限
+        // deadline
         let (mut cx, r) = world(opt());
         cx.now = VALID;
         opened(open(&mut cx, r, 1));
         cx.now = VALID + 1;
         assert_eq!(why(&open(&mut cx, r, 1)), "EXPIRED");
-        // 單筆上限
+        // per-order cap
         let mut o = opt(); o.maxl = 2;
         let (mut cx, r) = world(o);
         assert_eq!(why(&open(&mut cx, r, 3)), "PER_TX");
         opened(open(&mut cx, r, 2));
-        // 鏈長
+        // chain length
         let mut o = opt(); o.n = 3; o.maxl = 10;
         let (mut cx, r) = world(o);
         assert_eq!(why(&open(&mut cx, r, 0)), "LIMIT");
         assert_eq!(why(&open(&mut cx, r, 4)), "LIMIT");
         opened(open(&mut cx, r, 3));
-        // 信用額度
+        // credit limit
         let mut o = opt(); o.limit = 2 * U;
         let (mut cx, r) = world(o);
         opened(open(&mut cx, r, 2));
         assert_eq!(why(&open(&mut cx, r, 1)), "CREDIT_LIMIT");
-        // 天期
+        // term
         let (mut cx, r) = world(opt());
         let n = cx.now;
         assert_eq!(why(&open_at(&mut cx, r, 1, n + 10 * NS - 1)), "TENOR");
@@ -298,7 +298,7 @@ mod exact {
         assert_eq!(why(&open(&mut cx, c, 1)), "FUNDS", "the child's money does not count");
     }
 
-    /// 兩筆各 2U、保證金各 1U 都已接受。
+    /// Two orders of 2U each, bond of 1U each, both accepted.
     fn two_bonded(vault: u128) -> (Cx, u64, u64, u64) {
         let mut o = opt(); o.vault = vault; o.bond = 5000;
         let (mut cx, r) = world(o);
@@ -309,10 +309,10 @@ mod exact {
         (cx, r, a, b)
     }
 
-    /// 保證金是硬性要求：金庫少 1 yocto 就 BOND_SHORT，什麼都不動；剛好夠才成立。
+    /// The bond is a hard requirement: a vault short by 1 yocto gives BOND_SHORT and nothing moves; exactly enough stands.
     #[test]
     fn a_bond_is_hard_to_the_exact_yocto() {
-        // 5U 的 100%：金庫扣掉單據儲存後剛好 5U 減 1
+        // 100% of 5U: vault minus receipt storage is exactly 5U minus 1
         let mut o = opt(); o.vault = 5 * U + S - 1; o.bond = 10_000;
         let (mut cx, r) = world(o);
         let k = opened(open(&mut cx, r, 5));
@@ -320,12 +320,12 @@ mod exact {
         cx.run("accept", &acc("s1.near"), None, 0, |w| w.accept_credit(U64(k)));
         assert_eq!(cred(&cx, k).status, CreditStatus::Open, "BOND_SHORT leaves the order open");
         assert_eq!((cell(&cx, r).vault.0, stake(&cx).exposure.0, st0.exposure.0, outstanding(&cx, r).1), (v0, 0, 0, 0));
-        // 補 1 yocto 就剛好成立，曝險只有沒押保證金的部分
+        // Adding 1 yocto makes it just stand, and the exposure is only the part without a bond
         set_vault(&mut cx, r, v0 + 1);
         accept(&mut cx, k);
         let c = cred(&cx, k);
         assert_eq!((c.bond_locked.0, c.exposure.0), (5 * U, 0));
-        // 費用先扣：付完費用剩下的才算得上保證金
+        // Fee is deducted first: the bond can only be computed from what is left after the fee
         let mut o = opt(); o.vault = 5 * U + S - 1; o.bond = 8000; o.premium = 2000;
         let (mut cx, r) = world(o);
         let k = opened(open(&mut cx, r, 5));
@@ -333,7 +333,7 @@ mod exact {
         assert_eq!(cred(&cx, k).status, CreditStatus::Open, "1U fee + 4U bond is one yocto short");
     }
 
-    /// 接受時才算期數：差 1 奈秒就多一期。
+    /// Periods are counted at acceptance: 1 ns later means one more period.
     #[test]
     fn the_fee_is_per_started_thirty_days() {
         const P: u64 = 30 * 86_400 * NS;
@@ -361,7 +361,7 @@ mod exact {
         }
     }
 
-    /// 期數從賣方接受那一刻算，不是開單那一刻：晚接受可能少一期。
+    /// Periods count from the moment the seller accepts, not from when the order was opened: accepting late can mean one period fewer.
     #[test]
     fn the_periods_count_from_the_acceptance() {
         const P: u64 = 30 * 86_400 * NS;
@@ -381,7 +381,7 @@ mod exact {
         let v = cell(&cx, r).vault.0;
         accept(&mut cx, k);
         assert_eq!(cell(&cx, r).vault.0, v - 3 * U / 100, "exactly one period left");
-        // 到期日已過才接受，也只收一期
+        // Accepted after the due date has passed, it still collects only one period
         let mut o = opt(); o.premium = 100;
         let (mut cx, r) = world(o);
         let due = cx.now + 10 * NS;
@@ -392,7 +392,7 @@ mod exact {
         assert_eq!(cell(&cx, r).vault.0, v - 3 * U / 100);
     }
 
-    /// 賣方付費：接受時什麼都不收，費用定在單上。
+    /// Seller pays: nothing is collected at acceptance, the fee is fixed on the order.
     fn seller_pays(premium: u32, vault: u128) -> (Cx, u64, u64, u128) {
         let mut o = opt(); o.premium = premium; o.payer = FeePayer::Seller; o.vault = vault;
         let (mut cx, r) = world(o);
@@ -411,7 +411,7 @@ mod exact {
 
     #[test]
     fn a_seller_paid_fee_comes_out_of_every_way_the_seller_is_paid() {
-        // agent 結清
+        // agent settles
         let (mut cx, r, k, fee) = seller_pays(500, 100 * U);
         assert_eq!(cred(&cx, k).fee.0, fee);
         let (v, t) = (cell(&cx, r).vault.0, total(&cx));
@@ -419,21 +419,21 @@ mod exact {
         assert_eq!(cell(&cx, r).vault.0, v - 4 * U, "the buyer pays the invoice, no more");
         assert_eq!(total(&cx), t, "the fee moved between buckets");
         fee_went_to_the_guarantor(&cx, fee);
-        // 公司從金庫結清
+        // company settles from the vault
         let (mut cx, _, k, fee) = seller_pays(500, 100 * U);
         cx.run("sf", &acc("funder.near"), None, 0, |w| w.settle_by_funder(U64(k))).unwrap();
         fee_went_to_the_guarantor(&cx, fee);
-        // 公司帶錢結清
+        // company settles with its own funds
         let (mut cx, _, k, fee) = seller_pays(500, 100 * U);
         cx.run("sf", &acc("funder.near"), None, 4 * U, |w| w.settle_by_funder(U64(k))).unwrap();
         fee_went_to_the_guarantor(&cx, fee);
-        // 違約，金庫賠
+        // default, the vault pays
         let (mut cx, _, k, fee) = seller_pays(500, 100 * U);
         deliver(&mut cx, k);
         cx.now = cred(&cx, k).due_at.0 + 51 * NS;
         cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(k))).unwrap();
         fee_went_to_the_guarantor(&cx, fee);
-        // 爭議判賣方勝
+        // dispute ruled for the seller
         let (mut cx, _, k, fee) = seller_pays(500, 100 * U);
         cx.run("d", &acc("funder.near"), None, 4 * U, |w| w.dispute(U64(k), "cd".repeat(32))).unwrap();
         cx.run("r", &acc("arb.near"), None, 0, |w| w.resolve_dispute(U64(k), true)).unwrap();
@@ -456,13 +456,13 @@ mod exact {
 
     #[test]
     fn a_cancelled_order_charges_a_seller_paying_nothing() {
-        // 爭議判公司勝
+        // dispute ruled for the company
         let (mut cx, _, k, _) = seller_pays(500, 100 * U);
         cx.run("d", &acc("funder.near"), None, 4 * U, |w| w.dispute(U64(k), "cd".repeat(32))).unwrap();
         cx.run("r", &acc("arb.near"), None, 0, |w| w.resolve_dispute(U64(k), false)).unwrap();
         assert_eq!(claim(&cx, "s1.near"), None);
         assert_eq!((stake(&cx).amount.0, stake(&cx).earned.0), (10 * U, 0));
-        // 接受了沒交貨，過期取消
+        // accepted but nothing delivered, cancelled on expiry
         let (mut cx, _, k, _) = seller_pays(500, 100 * U);
         cx.now = cred(&cx, k).due_at.0 + 51 * NS;
         cx.run("x", &acc("x.near"), None, 0, |w| w.cancel_open(U64(k))).unwrap();
@@ -471,7 +471,7 @@ mod exact {
         assert_eq!((stake(&cx).amount.0, stake(&cx).earned.0), (10 * U, 0));
     }
 
-    /// 費用超過貨款（天期很長）：最多扣到零，不會倒扣賣方。
+    /// Fee exceeds the payment (very long term): deducted down to zero at most, never charged back to the seller.
     #[test]
     fn a_seller_paid_fee_stops_at_the_amount() {
         const P: u64 = 30 * 86_400 * NS;
@@ -517,10 +517,10 @@ mod exact {
         assert_eq!(stake(&cx).earned.0, paid, "a buyer-paid fee is not refunded");
         assert_eq!(cell(&cx, r).vault.0, v, "the released bond was never moved out of the vault");
         assert_eq!(cell(&cx, r).idx, idx, "the budget links stay spent");
-        // 額度放回去了：6U 上限還能再開 3U
+        // Limit restored: under the 6U cap another 3U can still be opened
         opened(open(&mut cx, r, 3));
         assert_eq!(why(&open(&mut cx, r, 1)), "CREDIT_LIMIT");
-        // 付的是實際金額
+        // The amount paid is the actual amount
         assert!(settle(&mut cx, r, k));
         assert_eq!(claim(&cx, "s1.near"), Some(3 * U));
         assert_eq!(cell(&cx, r).vault.0, v - S - 3 * U);
@@ -536,7 +536,7 @@ mod exact {
         assert_eq!(cred(&cx, k).status, CreditStatus::Accepted);
         assert!(deliver_final(&mut cx, k, 2 * U), "exactly the amount");
         assert_eq!((cred(&cx, k).amount.0, cred(&cx, k).exposure.0), (2 * U, 2 * U));
-        // 尚未接受、已爭議：都不能改金額
+        // Not yet accepted, already disputed: the amount cannot be changed
         let k = opened(open(&mut cx, r, 2));
         assert!(!deliver_final(&mut cx, k, U), "not accepted");
         accept(&mut cx, k);
@@ -544,7 +544,7 @@ mod exact {
         assert!(!deliver_final(&mut cx, k, U), "disputed");
         deliver(&mut cx, k);
         assert_eq!(cred(&cx, k).amount.0, 2 * U);
-        // 1 yocto 也行，保證金取整到 0，曝險 1
+        // 1 yocto is enough: the bond rounds down to 0, exposure 1
         let mut o = opt(); o.bond = 2500;
         let (mut cx, r) = world(o);
         let k = opened(open(&mut cx, r, 2));
@@ -613,7 +613,7 @@ mod exact {
         assert!(cx.peek(|w| w.seller_policy(acc("s1.near"))).is_none());
         assert!(!set_rule(&mut cx, p(), SELLER_POLICY_STORAGE - 1), "setting it again pays again");
         assert!(set_rule(&mut cx, p(), SELLER_POLICY_STORAGE));
-        // 上限與比例
+        // cap and ratio
         let many: Vec<AccountId> = (0..MAX_POLICY_GUARANTORS).map(|i| acc(&format!("g{}.near", i))).collect();
         let mut q = rule(U, 1, 10_000, 0, &[]);
         q.guarantors = many.clone();
@@ -625,7 +625,7 @@ mod exact {
 
     #[test]
     fn every_rule_refuses_at_its_exact_boundary() {
-        // 金額
+        // amount
         let (mut cx, r) = world(opt());
         let k = opened(open(&mut cx, r, 2));
         assert!(set_rule(&mut cx, Some(rule(2 * U - 1, 10_000, 0, 9, &[])), SELLER_POLICY_STORAGE));
@@ -635,7 +635,7 @@ mod exact {
         assert!(set_rule(&mut cx, Some(rule(2 * U, 10_000, 0, 9, &[])), 0));
         assert!(check(&cx, k, None).ok);
         accept(&mut cx, k);
-        // 天期
+        // term
         let (mut cx, r) = world(opt());
         let n = cx.now;
         let k = opened(open_at(&mut cx, r, 1, n + 100 * NS));
@@ -643,7 +643,7 @@ mod exact {
         assert_eq!(check(&cx, k, None).reasons, vec!["TENOR_TOO_LONG"]);
         assert!(set_rule(&mut cx, Some(rule(U, 100, 0, 9, &[])), 0));
         assert!(check(&cx, k, None).ok);
-        // 保證金
+        // bond
         let mut o = opt(); o.bond = 2500;
         let (mut cx, r) = world(o);
         let k = opened(open(&mut cx, r, 1));
@@ -651,7 +651,7 @@ mod exact {
         assert_eq!(check(&cx, k, None).reasons, vec!["BOND_TOO_LOW"]);
         assert!(set_rule(&mut cx, Some(rule(U, 10_000, 2500, 9, &[])), 0));
         assert!(check(&cx, k, None).ok);
-        // 違約數
+        // default count
         let (mut cx, r) = world(opt());
         let k = opened(open(&mut cx, r, 1));
         cx.run("rec", &writ(), None, 0, |w| { w.entities.insert("g.near:near:t".to_string(), EntityRecord { defaults: 2, ..Default::default() }); }).unwrap();
@@ -659,7 +659,7 @@ mod exact {
         assert_eq!(check(&cx, k, None).reasons, vec!["TOO_MANY_DEFAULTS"]);
         assert!(set_rule(&mut cx, Some(rule(U, 10_000, 0, 2, &[])), 0));
         assert!(check(&cx, k, None).ok);
-        // 保證人清單
+        // guarantor list
         assert!(set_rule(&mut cx, Some(rule(U, 10_000, 0, 2, &["other.near"])), 0));
         assert_eq!(check(&cx, k, None).reasons, vec!["GUARANTOR_NOT_APPROVED"]);
         assert!(set_rule(&mut cx, Some(rule(U, 10_000, 0, 2, &["other.near", "g.near"])), 0));
@@ -680,11 +680,11 @@ mod exact {
         assert_eq!(c.order["bond"], json_str(3 * U));
         assert_eq!(c.order["exposure"], json_str(0));
         assert_eq!(c.order["policy_applied"], true);
-        // 傳入的規則只是問問：沒有存，accept 不看它
+        // The rule passed in is only a query: nothing is stored, accept does not look at it
         assert!(cx.peek(|w| w.policies.get(&acc("s1.near")).is_none()));
         let g = cx.peek(|w| w.check_order(U64(k), None));
         assert_eq!((g.reasons, g.order["policy_applied"].clone()), (vec!["BOND_SHORT".to_string()], Value::Bool(false)));
-        // 存了之後 accept 用第一條理由報錯
+        // Once stored, accept reports the first reason as an error
         assert!(set_rule(&mut cx, Some(rule(U, 10, 0, 9, &[])), SELLER_POLICY_STORAGE));
         assert!(accept_err(&mut cx, k));
         assert!(cx.last_err.contains("POLICY:ORDER_TOO_LARGE"), "{}", cx.last_err);
@@ -692,17 +692,17 @@ mod exact {
 
     #[test]
     fn check_order_also_sees_what_the_money_and_the_state_would_refuse() {
-        // 沒質押
+        // no stake
         let mut o = opt(); o.stake = 0;
         let (mut cx, r) = world(o);
         let k = opened(open(&mut cx, r, 1));
         assert_eq!(check(&cx, k, None).reasons, vec!["GUARANTOR_CAPACITY"]);
-        // 付不起費用，也鎖不起保證金
+        // cannot afford the fee, cannot lock the bond
         let mut o = opt(); o.premium = 2000; o.vault = S + 1; o.bond = 5000;
         let (mut cx, r) = world(o);
         let k = opened(open(&mut cx, r, 1));
         assert_eq!(check(&cx, k, None).reasons, vec!["PREMIUM_SHORT", "BOND_SHORT"]);
-        // 過期的報價、已接受的單
+        // expired quote, already accepted order
         let (mut cx, r) = world(opt());
         let k = opened(open(&mut cx, r, 1));
         assert!(check(&cx, k, None).ok);
@@ -724,7 +724,7 @@ mod exact {
 
     #[test]
     fn the_seller_cap_is_exact_and_per_seller() {
-        // 質押 10U，上限 20%：同一個賣方最多 2U
+        // stake 10U, cap 20%: at most 2U for the same seller
         let mut o = opt(); o.cap = 2000;
         let (mut cx, r) = world(o);
         let (a, b, c) = (open_to(&mut cx, r, 1, "s1.near"), open_to(&mut cx, r, 1, "s1.near"), open_to(&mut cx, r, 1, "s1.near"));
@@ -736,17 +736,17 @@ mod exact {
         assert!(accept_err(&mut cx, c));
         assert!(cx.last_err.contains("SELLER_CONCENTRATION"), "{}", cx.last_err);
         assert_eq!((to_seller(&cx, "s1.near"), stake(&cx).exposure.0), (2 * U, 2 * U));
-        // 別的賣方不受影響
+        // other sellers are not affected
         let d = open_to(&mut cx, r, 2, "s2.near");
         cx.run("accept", &acc("s2.near"), None, 0, |w| w.accept_credit(U64(d))).expect("another seller has its own cap");
         assert_eq!(to_seller(&cx, "s2.near"), 2 * U);
-        // 結清一筆，額度回來
+        // settle one order, the limit comes back
         assert!(settle(&mut cx, r, a));
         assert_eq!(to_seller(&cx, "s1.near"), U);
         accept(&mut cx, c);
         assert_eq!(to_seller(&cx, "s1.near"), 2 * U);
 
-        // 上限 0 = 不限；保證金 100% 的單沒有曝險，不佔上限
+        // cap 0 = unlimited; an order with a 100% bond has no exposure and does not count toward the cap
         let mut o = opt(); o.cap = 0;
         let (mut cx, r) = world(o);
         let k = open_to(&mut cx, r, 5, "s1.near");
@@ -761,7 +761,7 @@ mod exact {
 
     #[test]
     fn the_seller_exposure_follows_every_way_an_order_ends() {
-        // 用量單縮小
+        // metered order shrinks
         let mut o = opt(); o.bond = 5000;
         let (mut cx, r) = world(o);
         let k = opened(open(&mut cx, r, 4));
@@ -769,19 +769,19 @@ mod exact {
         assert_eq!(to_seller(&cx, "s1.near"), 2 * U);
         assert!(deliver_final(&mut cx, k, 2 * U));
         assert_eq!(to_seller(&cx, "s1.near"), U);
-        // 違約：曝險結束，賠多少記在債上
+        // default: exposure ends, the amount paid out is recorded on the debt
         cx.now = cred(&cx, k).due_at.0 + 51 * NS;
         cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(k))).unwrap();
         assert_eq!(to_seller(&cx, "s1.near"), 0);
         assert!(cx.peek(|w| !w.seller_exposure.contains_key(&(acc("g.near"), None, acc("s1.near")))));
-        // 接受了沒交貨，過期取消
+        // accepted but nothing delivered, cancelled on expiry
         let (mut cx, r) = world(opt());
         let k = opened(open(&mut cx, r, 2));
         accept(&mut cx, k);
         cx.now = cred(&cx, k).due_at.0 + 51 * NS;
         cx.run("x", &acc("x.near"), None, 0, |w| w.cancel_open(U64(k))).unwrap();
         assert_eq!(to_seller(&cx, "s1.near"), 0);
-        // 爭議判公司勝
+        // dispute ruled for the company
         let (mut cx, r) = world(opt());
         let k = opened(open(&mut cx, r, 2));
         accept(&mut cx, k);
@@ -822,7 +822,7 @@ mod exact {
         assert_eq!(b["loss_ratio_bps"], Value::from((debt * 10_000 / fee) as u64));
         assert_eq!(b["exposure"], json_str(0));
         assert_eq!(b["top_sellers"], serde_json::json!([]), "no exposure left");
-        // 公司用金庫還一部分（enforce），再帶錢還清
+        // the company repays part from the vault (enforce), then repays the rest with its own funds
         set_vault(&mut cx, r, debt / 2);
         cx.now = cred(&cx, k).recourse_until.0 + 1;
         cx.run("e", &acc("g.near"), None, 0, |w| w.enforce_recourse(U64(k))).unwrap();
@@ -849,15 +849,15 @@ mod exact {
             }
             w.note_seller(&mut st, &g2, &None, &n2[0]);
             assert_eq!(st.sellers.len(), MAX_BOOK_SELLERS, "no duplicate");
-            // 比最小的（2）還小：不換
+            // smaller than the smallest (2): no replacement
             w.add_seller_exposure(&g2, &None, &acc("tiny.near"), 1);
             w.note_seller(&mut st, &g2, &None, &acc("tiny.near"));
             assert!(!st.sellers.contains(&acc("tiny.near")));
-            // 一樣大也不換
+            // equal size: no replacement either
             w.add_seller_exposure(&g2, &None, &acc("same.near"), 2);
             w.note_seller(&mut st, &g2, &None, &acc("same.near"));
             assert!(!st.sellers.contains(&acc("same.near")));
-            // 比最小的大：換掉最小的
+            // larger than the smallest: replaces the smallest
             w.add_seller_exposure(&g2, &None, &acc("big.near"), 100);
             w.note_seller(&mut st, &g2, &None, &acc("big.near"));
             assert_eq!(st.sellers.len(), MAX_BOOK_SELLERS);
@@ -872,11 +872,11 @@ mod exact {
         assert_eq!(b["top_sellers"][1]["exposure"], json_str(MAX_BOOK_SELLERS as u128 + 1), "largest first");
     }
 
-    // ---------------- 代幣樹：每條錢路用代幣再核一次 ----------------
+    // ---------------- Token tree: every money path checked again with tokens ----------------
 
-    const R: u128 = 100 * CREDIT_STORAGE; // 測試用的 NEAR 準備
+    const R: u128 = 100 * CREDIT_STORAGE; // NEAR reserve used in tests
 
-    /// 代幣世界：金庫 vault、質押 10U 都是代幣，帶 R 的 NEAR 準備。
+    /// Token world: the vault and the 10U stake are tokens, with R of NEAR reserve.
     fn tworld(mut o: Opt) -> (Cx, u64, Option<AccountId>) {
         o.stake = 0;
         let v = o.vault;
@@ -931,7 +931,7 @@ mod exact {
         assert_eq!(tclaim(&cx, "s1.near"), 4 * U);
         assert_eq!(claim(&cx, "s1.near"), None, "nothing in NEAR");
         assert_eq!(ttotal(&cx), t0);
-        // 提領走 ft_transfer，帳上少了就是錢出去了
+        // Withdrawal goes through ft_transfer; if the books went down, the money went out
         cx.run("w", &acc("s1.near"), None, 0, |w| { let _ = w.withdraw(Some(tok())); }).unwrap();
         assert_eq!((tclaim(&cx, "s1.near"), ttotal(&cx)), (0, t0 - 4 * U));
         cx.resolve(false);
@@ -952,7 +952,7 @@ mod exact {
         cx.resolve(true);
         assert_eq!((tclaim(&cx, "s1.near"), ttotal(&cx), cx.tbal), (2 * U, t, bal));
         assert_eq!(claim(&cx, "s1.near"), None, "credited in the same asset");
-        // 質押提領失敗也一樣，記進可提領
+        // A failed stake withdrawal is the same: recorded as withdrawable
         cx.run("r", &acc("g.near"), None, 0, |w| w.request_unstake(Some(tok()))).unwrap();
         cx.now += 31 * NS;
         let (t, st) = (ttotal(&cx), tstake(&cx).amount.0);
@@ -967,32 +967,32 @@ mod exact {
         let (mut cx, r, _) = tworld(opt());
         let k = opened(open(&mut cx, r, 2));
         accept(&mut cx, k);
-        // 2U 的 yoctoNEAR 在數字上等於 2U 的代幣，一定要擋
+        // 2U of yoctoNEAR equals 2U of tokens numerically; it must be rejected
         assert!(cx.run("x", &acc("funder.near"), None, 2 * U, |w| w.settle_by_funder(U64(k))).is_none());
         assert!(cx.last_err.contains("USE_FT_TRANSFER_CALL"), "{}", cx.last_err);
         assert!(cx.run("x", &acc("funder.near"), None, 2 * U, |w| w.dispute(U64(k), "cd".repeat(32))).is_none());
         assert!(cx.last_err.contains("USE_FT_TRANSFER_CALL"), "{}", cx.last_err);
-        // 別的代幣假冒
+        // a different token pretending to be it
         cx.token = Some(acc("fake.near"));
         ft_err(&mut cx, "funder.near", 2 * U, format!("settle:{}", k), "WRONG_ASSET");
         ft_err(&mut cx, "funder.near", 2 * U, format!("dispute:{}:{}", k, "cd".repeat(32)), "WRONG_ASSET");
-        // 假代幣開不了質押帳：不能白占儲存
+        // a fake token cannot open a stake account: it cannot take storage for free
         ft_err(&mut cx, "g.near", U, "stake".into(), "STAKE_ASSET_UNKNOWN");
         assert!(cx.peek(|w| w.stakes.get(&(acc("g.near"), Some(acc("fake.near")))).is_none()));
-        // 非驗證者
+        // non-verifier
         cx.token = Some(tok());
         ft_err(&mut cx, "x.near", U, "stake".into(), "NOT_A_VERIFIER");
-        // 陌生人、錯金額
+        // stranger, wrong amount
         ft_err(&mut cx, "x.near", 2 * U, format!("settle:{}", k), "ONLY_FUNDER");
         ft_err(&mut cx, "funder.near", U, format!("settle:{}", k), "PARTIAL_DEPOSIT");
         ft_err(&mut cx, "funder.near", U, format!("dispute:{}:{}", k, "cd".repeat(32)), "ESCROW_FULL_AMOUNT");
         ft_err(&mut cx, "funder.near", U, "settle:notanumber".into(), "BAD_MSG");
         ft_err(&mut cx, "funder.near", U, format!("dispute:{}", k), "BAD_MSG");
-        // 看不懂的 msg 全退，不 panic
+        // an unreadable msg is fully refunded, no panic
         let (t, bal) = (ttotal(&cx), cx.tbal);
         assert!(cx.ft("ft", &acc("funder.near"), U, "hello".into()));
         assert_eq!((ttotal(&cx), cx.tbal), (t, bal));
-        // NEAR 樹不收代幣
+        // a NEAR tree does not accept tokens
         let (mut cx, r) = world(opt());
         let k = opened(open(&mut cx, r, 2));
         accept(&mut cx, k);
@@ -1003,14 +1003,14 @@ mod exact {
 
     #[test]
     fn token_excess_comes_back_as_claimable_in_every_payable_path() {
-        // 結清
+        // settle
         let (mut cx, r, _) = tworld(opt());
         let k = opened(open(&mut cx, r, 2));
         accept(&mut cx, k);
         let t = ttotal(&cx);
         assert!(cx.ft("s", &acc("funder.near"), 2 * U + 7, format!("settle:{}", k)));
         assert_eq!((tclaim(&cx, "funder.near"), tclaim(&cx, "s1.near"), ttotal(&cx)), (7, 2 * U, t + 2 * U + 7));
-        // 爭議押金多的，判決後退
+        // a larger dispute deposit is refunded after the ruling
         let (mut cx, r, _) = tworld(opt());
         let k = opened(open(&mut cx, r, 2));
         accept(&mut cx, k);
@@ -1018,7 +1018,7 @@ mod exact {
         assert_eq!(cred(&cx, k).dispute_escrow.0, 2 * U + 3);
         cx.run("r", &acc("arb.near"), None, 0, |w| w.resolve_dispute(U64(k), true)).unwrap();
         assert_eq!((tclaim(&cx, "funder.near"), tclaim(&cx, "s1.near")), (3, 2 * U));
-        // 判公司勝：押金全退給公司
+        // ruled for the company: the deposit is fully refunded to the company
         let (mut cx, r, _) = tworld(opt());
         let k = opened(open(&mut cx, r, 2));
         accept(&mut cx, k);
@@ -1043,7 +1043,7 @@ mod exact {
         let st = tstake(&cx);
         assert_eq!((st.amount.0, st.earned.0, st.claims_paid.0, st.exposure.0), (10 * U - debt + fee, fee, debt, 0));
         assert_eq!(ttotal(&cx), t, "the money moved between books");
-        // 少付不行；多付的記進可提領
+        // underpaying is not allowed; any overpayment is recorded as withdrawable
         ft_err(&mut cx, "funder.near", debt - 1, format!("reimburse:{}", k), "PAY_FULL_DEBT");
         assert!(cx.ft("re", &acc("funder.near"), debt + 5, format!("reimburse:{}", k)));
         assert_eq!(tclaim(&cx, "funder.near"), 5);
@@ -1057,7 +1057,7 @@ mod exact {
 
     #[test]
     fn closing_a_token_tree_retains_per_asset_and_returns_the_reserve() {
-        // 沒有未結單：代幣走 ft_transfer 回法人，準備記進 NEAR 可提領
+        // no open orders: tokens go back to the legal entity via ft_transfer, the reserve is recorded as NEAR withdrawable
         let (mut cx, r, _) = tworld(opt());
         let (v, t, n) = (cell(&cx, r).vault.0, ttotal(&cx), total(&cx));
         cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
@@ -1066,7 +1066,7 @@ mod exact {
         assert_eq!((ttotal(&cx), total(&cx)), (t - v, n));
         assert_eq!(near_claim(&cx, "funder.near"), R);
         assert_eq!(cx.tbal, t - v, "the refund left in the token");
-        // 退款失敗：記在 unclaimed，領一次
+        // refund fails: recorded in unclaimed, claimed once
         cx.resolve(true);
         assert_eq!((cell(&cx, r).unclaimed.0, ttotal(&cx)), (v, t));
         cx.run("cr", &acc("funder.near"), None, 0, |w| w.claim_refund(U64(r))).unwrap();
@@ -1075,7 +1075,7 @@ mod exact {
         cx.run("w", &acc("funder.near"), None, 0, |w| { let _ = w.withdraw(None); }).unwrap();
         assert_eq!(total(&cx), n - R);
 
-        // 有未結單：代幣留在根格，準備照樣退（它不賠款），結清後才放
+        // open orders exist: tokens stay in the root cell, the reserve is still refunded (it does not pay claims), released after settlement
         let (mut cx, r, _) = tworld(opt());
         let k = opened(open(&mut cx, r, 2));
         accept(&mut cx, k);
@@ -1099,24 +1099,24 @@ mod exact {
         assert_eq!((rc.vault.0, rc.near_reserve.0, total(&cx), ttotal(&cx)), (v - 2 * U, R - fee, n - fee, t));
         let ch = cell(&cx, c);
         assert_eq!((ch.vault.0, ch.asset.clone(), ch.near_reserve.0), (2 * U, Some(tok()), 0));
-        // 子格再雇：預算從子格，費用還是根格的準備
+        // child cell hires again: budget from the child cell, fee still from the root cell's reserve
         let g = hired(hire(&mut cx, c, 1, |_| {}));
         assert_eq!(cell(&cx, r).near_reserve.0, R - fee - hire_fee(1));
         assert_eq!((cell(&cx, c).vault.0, cell(&cx, g).vault.0), (U, U));
-        // 子格開單：儲存從根格的準備
+        // child cell opens an order: storage from the root cell's reserve
         let rr = cell(&cx, r).near_reserve.0;
         opened(open(&mut cx, c, 1));
         assert_eq!(cell(&cx, r).near_reserve.0, rr - S);
-        // 準備不夠：RESERVE，錢沒動
+        // reserve too small: RESERVE, money does not move
         cx.run("poke", &writ(), None, 0, |w| { let mut x = w.cells.get(&r).cloned().unwrap(); w.vault_total -= x.near_reserve.0 - (S - 1); x.near_reserve = U128(S - 1); w.cells.insert(r, x); }).unwrap();
         assert_eq!(why(&open(&mut cx, r, 1)), "RESERVE");
         assert_eq!(why(&hire(&mut cx, r, 1, |_| {})), "RESERVE");
-        // 補準備：NEAR 走 top_up，子格不收
+        // top up the reserve: NEAR goes through top_up, the child cell does not accept it
         cx.run("top", &acc("funder.near"), None, S, |w| w.top_up(U64(r))).unwrap();
         assert_eq!(cell(&cx, r).near_reserve.0, 2 * S - 1);
         assert!(cx.run("top", &acc("funder.near"), None, S, |w| w.top_up(U64(c))).is_none());
         opened(open(&mut cx, r, 1));
-        // 沒有信用條款的代幣格維持 HIRE_TOKEN；有條款的不再是
+        // a token cell without credit terms stays HIRE_TOKEN; one with terms no longer does
         let (mut cx, r, _) = tworld(opt());
         cx.run("poke", &writ(), None, 0, |w| { w.terms.remove(&r); }).unwrap();
         assert_eq!(why(&hire(&mut cx, r, 1, |_| {})), "HIRE_TOKEN");
@@ -1130,7 +1130,7 @@ mod exact {
         assert_eq!((ttotal(&cx), cx.tbal), (t - U, bal - U));
         cx.resolve(true);
         assert_eq!((ttotal(&cx), cx.tbal, cell(&cx, r).vault.0), (t, bal, 100 * U));
-        // 撤銷途中失敗、還有未結單：留在根格
+        // fails during revocation, open orders remain: stays in the root cell
         let (mut cx, r, _) = tworld(opt());
         let (p, k2) = (link(&cx, r, 1), key(&cx, r));
         cx.run("spend", &writ(), Some(&k2), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), "aa".repeat(32)); }).unwrap();
@@ -1157,7 +1157,7 @@ mod exact {
         assert_eq!(rc["asset"], "usdc.near");
     }
 
-    /// 新帳號附 1 yocto 不能白占一列儲存（F1）。
+    /// A new account with 1 yocto attached cannot take a storage row for free (F1).
     #[test]
     fn a_stranger_cannot_create_a_row_for_one_yocto() {
         let (mut cx, _) = world(opt());
@@ -1168,7 +1168,7 @@ mod exact {
         assert_eq!((total(&cx), cx.bal), (t, bal));
     }
 
-    /// 規則不寫資產就開不了（F2）。
+    /// A rule without an asset cannot open (F2).
     #[test]
     fn a_rule_must_name_its_asset() {
         let base = serde_json::json!({"max_amount": "1", "max_tenor_secs": "1", "min_bond_bps": 0, "max_defaults": 0, "guarantors": [], "max_fee_bps": 0, "arbiters": []});
@@ -1183,14 +1183,14 @@ mod exact {
 
     #[test]
     fn the_new_rules_refuse_the_asset_the_fee_and_the_arbiter_alone() {
-        // 別種資產：NEAR 的上限數字套不到代幣單上，反過來也一樣
+        // different asset: the NEAR cap number does not apply to a token order, and the reverse is also true
         let (mut cx, r, _) = tworld(opt());
         let k = opened(open(&mut cx, r, 1));
         assert_eq!(check(&cx, k, Some(rule(10 * U, 10_000, 0, 9, &[]))).reasons, vec!["ASSET_NOT_APPROVED"]);
         let mut q = rule(10 * U, 10_000, 0, 9, &[]);
         q.asset = Some(tok());
         assert!(check(&cx, k, Some(q)).ok);
-        // 費用：5% 的費率，規則剛好 500 bps 過、499 不過；買方賣方付都算
+        // fee: 5% rate, a rule of exactly 500 bps passes, 499 does not; counts whether buyer or seller pays
         for payer in [FeePayer::Buyer, FeePayer::Seller] {
             let mut o = opt(); o.premium = 500; o.payer = payer;
             let (mut cx, r) = world(o);
@@ -1201,7 +1201,7 @@ mod exact {
             q.max_fee_bps = 500;
             assert!(check(&cx, k, Some(q)).ok);
         }
-        // 仲裁人
+        // arbiter
         let (mut cx, r) = world(opt());
         let k = opened(open(&mut cx, r, 1));
         let mut q = rule(10 * U, 10_000, 0, 9, &[]);
@@ -1209,7 +1209,7 @@ mod exact {
         assert_eq!(check(&cx, k, Some(q.clone())).reasons, vec!["ARBITER_NOT_APPROVED"]);
         q.arbiters.push(acc("arb.near"));
         assert!(check(&cx, k, Some(q.clone())).ok);
-        // 清單上限
+        // list cap
         let (mut cx, _) = world(opt());
         q.arbiters = (0..MAX_POLICY_GUARANTORS).map(|i| acc(&format!("a{}.near", i))).collect();
         assert!(set_rule(&mut cx, Some(q.clone()), SELLER_POLICY_STORAGE));
@@ -1218,7 +1218,7 @@ mod exact {
         assert!(cx.last_err.contains("POLICY_TOO_LONG"), "{}", cx.last_err);
     }
 
-    /// 假代幣灌不到真資產的紀錄；紀錄滿了也不會擋結清（F3）。
+    /// A fake token cannot inflate the record of a real asset; a full record does not block settlement (F3).
     #[test]
     fn the_entity_record_is_per_asset_and_cannot_overflow_a_settlement() {
         let (mut cx, r, _) = tworld(opt());
@@ -1234,7 +1234,7 @@ mod exact {
         assert_eq!(cx.peek(|w| w.risk_card(U64(r))).unwrap()["settled"], 1);
     }
 
-    /// 買方付的費用最多等於金額（F5）。
+    /// The fee paid by the buyer is at most the amount (F5).
     #[test]
     fn a_buyer_paid_fee_stops_at_the_amount() {
         const P: u64 = 30 * 86_400 * NS;
@@ -1250,7 +1250,7 @@ mod exact {
         assert_eq!(guarantee_fee(100, 2000, 4), 80);
     }
 
-    /// 移出白名單後不再接新單，已接的照常結束（F7）。
+    /// After removal from the allowlist no new orders are accepted; accepted ones end as usual (F7).
     #[test]
     fn a_delisted_guarantor_takes_no_new_orders() {
         let (mut cx, r) = world(opt());
@@ -1263,7 +1263,7 @@ mod exact {
         assert!(settle(&mut cx, r, old), "what it already backs still ends normally");
     }
 
-    /// 傳入的規則只是試算，would_accept 看存的規則；接受後回報單上定下來的值（F8）。
+    /// The rule passed in is only a trial; would_accept looks at the stored rule; after acceptance it reports the values fixed on the order (F8).
     #[test]
     fn check_order_separates_what_if_from_what_accept_will_do() {
         const P: u64 = 30 * 86_400 * NS;
@@ -1283,7 +1283,7 @@ mod exact {
         let quoted = 4 * U * 2 / 100;
         assert_eq!(check(&cx, k, None).order["fee"], json_str(quoted));
         accept(&mut cx, k);
-        // 期數過了一期，重新試算會少收；回報的是單上的
+        // One period has passed, a fresh trial would charge less; what is reported is the order's
         cx.now += 11 * NS;
         let c = check(&cx, k, None);
         assert_eq!((c.order["fee"].clone(), c.order["fee_periods"].clone()), (json_str(quoted), Value::from(2)));
@@ -1291,7 +1291,7 @@ mod exact {
         assert_eq!((c.ok, c.would_accept), (false, false));
     }
 
-    /// 準備用完不是 agent 的錯：不計 strike，鑰匙不會被刪（F9）。
+    /// Running out of reserve is not the agent's fault: no strike, the key is not deleted (F9).
     #[test]
     fn running_out_of_reserve_costs_no_strike() {
         let (mut cx, r, _) = tworld(opt());
@@ -1300,14 +1300,14 @@ mod exact {
         assert_eq!(why(&hire(&mut cx, r, 1, |_| {})), "RESERVE");
         let c = cell(&cx, r);
         assert_eq!((c.strikes, c.rejects, c.status.clone()), (0, 2, Status::Active));
-        // 代幣預算不夠仍是 FUNDS，照算 strike
+        // Insufficient token budget is still FUNDS, strike counted
         let mut o = opt(); o.vault = 0;
         let (mut cx, r, _) = tworld(o);
         assert_eq!(why(&hire(&mut cx, r, 1, |_| {})), "FUNDS");
         assert_eq!(cell(&cx, r).strikes, 1);
     }
 
-    /// 轉帳途中被回呼（惡意代幣）：簽名者還是 agent，但呼叫者不是合約自己（F12）。
+    /// Called back during a transfer (malicious token): the signer is still the agent, but the caller is not the contract itself (F12).
     #[test]
     fn agent_methods_refuse_a_call_coming_from_another_contract() {
         let (mut cx, r) = world(opt());
@@ -1329,7 +1329,7 @@ mod exact {
         assert!(cx.run("x", &evil, Some(&pk_), 0, |w| { let _ = w.hire(p4, 1, args); }).is_none());
         assert!(cx.last_err.contains("NOT_AGENT_KEY"));
         assert_eq!(cell(&cx, r).idx, before);
-        // 鑰匙自己直接簽（predecessor == signer == 合約）照常
+        // The key signing directly (predecessor == signer == contract) works as usual
         assert!(settle(&mut cx, r, k));
     }
 
@@ -1449,7 +1449,7 @@ mod exact {
         cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(a))).unwrap();
         assert_eq!(cred(&cx, a).debt.0, 0);
         assert_eq!(cell(&cx, r).vault.0, 2 * U - 2 * S);
-        // 金庫不夠時，別筆的 1U 保證金不能動，差額由保證人賠
+        // When the vault is short, the other order's 1U bond cannot be touched, the guarantor pays the difference
         let (mut cx, r, a, _) = two_bonded(3 * U);
         deliver(&mut cx, a);
         cx.now = cred(&cx, a).due_at.0 + 51 * NS;
@@ -1489,7 +1489,7 @@ mod exact {
         assert_eq!(stake(&cx).amount.0, st + 2 * U);
     }
 
-    /// 金庫不夠，保證人賠了 1U+S。
+    /// The vault is short, the guarantor paid 1U+S.
     fn in_debt() -> (Cx, u64, u64, u128) {
         let mut o = opt(); o.vault = U;
         let (mut cx, r) = world(o);
@@ -1563,26 +1563,26 @@ mod exact {
     #[test]
     fn an_invoice_counts_as_paid_only_when_money_moved() {
         let inv = "aa".repeat(32);
-        // 開單、接受：還沒付
+        // open order, accept: not paid yet
         let (mut cx, r) = world(opt());
         let k = opened(open_inv(&mut cx, r, &inv));
         assert!(!paid(&cx, r, &inv), "an open order is not a payment");
         accept(&mut cx, k);
         assert!(!paid(&cx, r, &inv));
         assert_eq!(why(&open_inv(&mut cx, r, &inv)), "DUPLICATE", "but it cannot be ordered twice");
-        // 結清：付了，也不能再開
+        // settle: paid, and cannot be opened again
         assert!(settle(&mut cx, r, k));
         assert!(paid(&cx, r, &inv));
         assert_eq!(why(&open_inv(&mut cx, r, &inv)), "DUPLICATE");
 
-        // 取消：沒人收到錢，發票放回去
+        // cancel: nobody received money, the invoice is put back
         let (mut cx, r) = world(opt());
         let k = opened(open_inv(&mut cx, r, &inv));
         cx.run("x", &acc("funder.near"), None, 0, |w| w.cancel_open(U64(k))).unwrap();
         assert!(!paid(&cx, r, &inv));
         opened(open_inv(&mut cx, r, &inv));
 
-        // 違約：賣方拿到錢了
+        // default: the seller got the money
         let (mut cx, r) = world(opt());
         let k = opened(open_inv(&mut cx, r, &inv));
         accept(&mut cx, k); deliver(&mut cx, k);
@@ -1591,7 +1591,7 @@ mod exact {
         assert!(paid(&cx, r, &inv), "the seller was paid");
         assert_eq!(why(&open_inv(&mut cx, r, &inv)), "DUPLICATE");
 
-        // 爭議判給公司：沒人收到錢
+        // dispute ruled for the company: nobody received money
         let (mut cx, r) = world(opt());
         let k = opened(open_inv(&mut cx, r, &inv));
         accept(&mut cx, k);
@@ -1612,7 +1612,7 @@ mod exact {
         cx.run("t", &acc("x.near"), None, 0, |w| w.resolve_timeout(U64(k))).unwrap();
         assert!(!paid(&cx, r, &inv));
         opened(open_inv(&mut cx, r, &inv));
-        // 有交貨的逾時算賣方贏：發票算已付
+        // A timeout with delivery counts as the seller winning: the invoice counts as paid
         let (mut cx, r) = world(opt());
         let k = opened(open_inv(&mut cx, r, &inv));
         accept(&mut cx, k);

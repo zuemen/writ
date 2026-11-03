@@ -1,4 +1,4 @@
-# 每次 push 依 README 順序跑：setup → 攻擊台 → 8 步 demo → 驗證端。只用本機 sandbox，不需要任何 secret。
+# Runs on every push in README order: setup, attack bench, 8-step demo, verifier. Local sandbox only; no secrets needed.
 name: reproduce
 on: [push, pull_request, workflow_dispatch]
 jobs:
@@ -34,7 +34,7 @@ jobs:
         with:
           name: bench
           path: docs/bench.md
-  # 同一個流程在 Dockerfile 裡再跑一次，證明沒有 Rust／Python 的環境也重現得出來
+  # Run the same flow again inside the Dockerfile, to show it reproduces without a Rust/Python environment
   docker:
     runs-on: ubuntu-24.04
     timeout-minutes: 60

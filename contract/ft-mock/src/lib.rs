@@ -1,4 +1,4 @@
-// 測試用 NEP-141 代幣（模擬 6 位小數的穩定幣 tUSDC）。標準實作，全部委派給 near-contract-standards。
+// Test NEP-141 token (mock 6-decimal stablecoin tUSDC). Standard implementation, fully delegated to near-contract-standards.
 use near_contract_standards::fungible_token::metadata::{FungibleTokenMetadata, FungibleTokenMetadataProvider, FT_METADATA_SPEC};
 use near_contract_standards::fungible_token::{FungibleToken, FungibleTokenCore, FungibleTokenResolver};
 use near_contract_standards::storage_management::{StorageBalance, StorageBalanceBounds, StorageManagement};
