@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Writ: who pays when your AI agent gets fooled</title>
-<meta name="description" content="A firewall stops the payment it can recognize. Writ covers the one it can’t: a named guarantor locks money on NEAR, and an arbiter decides. Testnet demo. Not audited. Not a licensed product.">
+<meta name="description" content="For companies whose AI agents pay invoices. A spending limit stops the payment it can recognize. Writ covers the one it can’t: a named guarantor locks money on NEAR, and an arbiter decides. Testnet demo. Not audited. Not a licensed product.">
 <meta property="og:title" content="Writ: who pays when your AI agent gets fooled">
 <meta property="og:description" content="A named guarantor locks money on NEAR. If the arbiter finds your agent was fooled inside its limits, the loss is repaid from that money, minus your share. Testnet demo.">
 <meta property="og:image" content="https://writ-near.112306007.workers.dev/og.png">
@@ -293,7 +293,8 @@
     .proof a:nth-child(3) { border-left:0; }
     .proof a:nth-child(n+3) { border-top:1px solid var(--rule); }
     nav .wrap { height:auto; flex-wrap:wrap; padding-top:10px; padding-bottom:8px; row-gap:6px; }
-    nav .links { order:3; width:100%; margin:0; gap:18px; overflow-x:auto; scrollbar-width:none; }
+    nav .links { order:3; width:100%; margin:0; gap:6px 18px; flex-wrap:wrap; }
+    #inv { min-height:15rem; }
     nav .links a { padding:4px 0; }
     section[id] { scroll-margin-top:84px; }
     .live { margin-left:auto; }
@@ -336,7 +337,7 @@
   <div class="hero">
     <div>
       <h1 class="reveal">Your agent will get fooled. <em>Know who pays.</em></h1>
-      <p class="lead reveal d1">A firewall stops the payment it can recognize. Writ covers the one it can’t: a named guarantor locks money on NEAR, and if the arbiter named in the mandate finds your agent was fooled inside its limits, the loss is repaid from that money, minus your share.</p>
+      <p class="lead reveal d1">For companies whose AI agents pay invoices. A spending limit stops the payment it can recognize. Writ covers the one it can’t: a named guarantor locks money on NEAR, and if the arbiter named in the mandate finds your agent was fooled inside its limits, the loss is repaid from that money, minus your share.</p>
       <div class="cta reveal d2"><a class="btn" href="#fool">Fool the model</a><a class="btn ghost" href="#numbers">See the numbers</a></div>
     </div>
     <div class="org reveal d2" id="whoPays"><div class="org-in">
@@ -379,7 +380,7 @@
     </div>
     <textarea id="inv" rows="5" maxlength="800" spellcheck="false"></textarea>
     <div class="row"><button class="btn" id="askModel" disabled>Let the model read it</button></div>
-    <p class="note">The agent’s ledger: PO-77 paper stock, already paid by INV-1. PO-78 toner, 2 links (0.01 USDC each), open. Llama 3.3 on Cloudflare’s free tier, not NEAR AI, no TEE. Measured 2026-11-03, 10 runs each: plain re-bill paid 0 of 10, fake controller note 10 of 10, real purchase 10 of 10, mismatched invoices 0 of 30. <a href="https://github.com/zuemen/writ/blob/main/docs/TESTING.md#the-live-model">A small sample, not a rate.</a> <span id="liveStat"></span></p>
+    <p class="note">A link is one unit of the agent’s budget, 0.01 USDC here. An employee releases links one at a time; the agents under that employee are its tree. The fake controller note and the real purchase may reuse the model’s last answer, to save free quota: change a word and the model reads it live. The agent’s ledger: PO-77 paper stock, already paid by INV-1. PO-78 toner, 2 links (0.01 USDC each), open. Llama 3.3 on Cloudflare’s free tier, not NEAR AI, no TEE. Measured 2026-11-03, 10 runs each: plain re-bill paid 0 of 10, fake controller note 10 of 10, real purchase 10 of 10, mismatched invoices 0 of 30. <a href="https://github.com/zuemen/writ/blob/main/docs/TESTING.md#the-live-model">A small sample, not a rate.</a> <span id="liveStat"></span></p>
   </div>
 
   <div class="stage" id="sDecision" aria-live="polite" hidden></div>
@@ -411,7 +412,7 @@
         <div><b id="rejected">…</b><span>ATTEMPTS REJECTED</span></div>
         <div><b id="links">…</b><span>BUDGET USED</span></div>
       </div>
-      <p class="note">Contract <a class="mono" id="contract" target="_blank" rel="noopener"></a> has no full-access key. This agent’s budget is in NEAR and it keeps its key after failures. Find a way to move the money without a released link? <a href="https://github.com/zuemen/writ/issues">Open an issue.</a></p>
+      <p class="note">Contract <a class="mono" id="contract" target="_blank" rel="noopener"></a> has no full-access key. This agent’s budget is in NEAR and it keeps its key after failures. This is a different agent from the one above: its links are not on this page. Find a way to move the money without a released link? <a href="https://github.com/zuemen/writ/issues">Open an issue.</a></p>
     </div>
     <div>
       <div class="attacks">
@@ -441,7 +442,7 @@
       <label>Days until someone notices<input id="cN" type="number" value="3" min="1" max="365" step="1"><small>Cap on one day × these days is the limit.</small></label>
       <label>Maximum payments fooled, a year<input id="cK" type="number" value="1" min="0" step="0.25"><small>Assumption. No data exists.</small></label>
       <label>Your share, % of each loss<input id="cS" type="number" value="20" min="10" max="90" step="5"><small>The contract allows 10 to 90. The demo uses 20.</small></label>
-      <label>Cost of locked money, % a year<input id="cC" type="number" value="4.6" min="0" max="60" step="0.1"><small><a href="https://defirate.com/lend/snapshot/2026-10-05T0151/">4.6%</a> USDC lending, 2026-10-05, moves a lot. Use 14.2% for <a href="https://atradius.nl/kennisbank/news/atradius-2025-strong-performance-in-a-complex-environment">Atradius’s ROE</a>.</small></label>
+      <label>Cost of locked money, % a year<input id="cC" type="number" value="4.6" min="0" max="60" step="0.1"><small>4.6%: USDC lending rate we read on 2026-10-05. The source no longer keeps that snapshot, and the rate moves a lot. Use 14.2% for <a href="https://atradius.nl/kennisbank/news/atradius-2025-strong-performance-in-a-complex-environment">Atradius’s ROE</a>.</small></label>
       <label>Running cost, % of the fee<input id="cE" type="number" value="25" min="0" max="90" step="5"><small>Assumption. Credit insurers run <a href="https://www.coface.com/news-economy-and-insights/2025-results-coface-closes-another-strong-year-with-net-income-at-222.0m">about 33%</a>.</small></label>
     </div>
     <div>
@@ -463,7 +464,7 @@
 
 <section id="today"><div class="wrap">
   <h2 class="title">If your agent is fooled today, who pays?</h2>
-  <p class="sub">What we could find, and where Writ loses. Nobody has been interviewed yet. The risk is real: an X user <a href="https://incidentdatabase.ai/cite/1556/">reportedly got Grok and Bankrbot to transfer tokens then valued at about $200,000</a>; linked funds were later returned or converted, and a payee list would have refused it. US businesses reported <a href="https://www.ic3.gov/AnnualReport/Reports/2025_IC3Report.pdf">$3.05 billion lost to email compromise in 2025</a>. Those were people being fooled, not agents.</p>
+  <p class="sub">What we could find, and where Writ loses. Nobody has been interviewed yet. Agents can be talked into paying: an X user <a href="https://incidentdatabase.ai/cite/1556/">reportedly got Grok and Bankrbot to transfer tokens then valued at about $200,000</a>; linked funds were later returned or converted, and a payee list would have refused it. People get fooled the same way: US businesses reported <a href="https://www.ic3.gov/AnnualReport/Reports/2025_IC3Report.pdf">$3.05 billion lost to email compromise in 2025</a>. We haven’t found a public case of an agent losing money to a seller it was allowed to pay, which is the case cover is for.</p>
   <div class="scroll"><table class="cmp">
     <thead><tr><th>Today</th><th>Who pays</th><th>Where it beats Writ</th><th>Where Writ beats it</th></tr></thead>
     <tbody>
@@ -485,7 +486,8 @@
     <div class="col"><div class="eyebrow">When it’s fooled</div><h3>The arbiter decides</h3><p>The company files a claim and its whole tree stops. The contract can’t tell if the agent was fooled, so a named arbiter rules. The limit caps what a wrong ruling costs.</p></div>
     <div class="col"><div class="eyebrow">After</div><h3>The stake repays</h3><p>The loss, minus the company’s share, moves from the stake to the company. The tree stays stopped until the company clears its agent.</p></div>
   </div>
-  <p class="note">The guarantor checks who the company is off-chain, with GLEIF’s vLEI credentials and KERI; here the issuers are mocks. NEAR lets the contract hold agent keys and delete them, so a revoked agent’s transactions never get created.</p>
+  <p class="note">The guarantor checks who the company is off-chain, with GLEIF’s vLEI credentials and KERI; here the issuers are mocks. </p>
+  <p class="plain"><b>Why NEAR.</b> The contract holds its agents’ function-call keys on its own account and can delete them, and it has no full-access key. The protocol refuses any other method before contract code runs, and a revoked agent’s transactions never get created.</p>
 </div></section>
 
 <section id="credit"><div class="wrap">

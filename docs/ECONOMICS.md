@@ -14,7 +14,7 @@ F = (c + p × (1 − s)) / (1 − e)      lowest yearly fee that does not lose m
 
 | Symbol | Meaning | Value | Basis |
 |---|---|---|---|
-| c | cost of locked money | 4.6% to 14.2% a year | USDC lending, 2026-10-05 ([DeFi Rate](https://defirate.com/lend/snapshot/2026-10-05T0151/), moves a lot); Atradius 2025 ROE ([report](https://atradius.nl/kennisbank/news/atradius-2025-strong-performance-in-a-complex-environment)) |
+| c | cost of locked money | 4.6% to 14.2% a year | USDC lending rate we read on 2026-10-05 (the source no longer keeps that snapshot, and the rate moves a lot); Atradius 2025 ROE ([report](https://atradius.nl/kennisbank/news/atradius-2025-strong-performance-in-a-complex-environment)) |
 | p | loss rate, share of the limit lost to fooled payments a year | scenario | assumption; **no data exists** |
 | s | the company's share of each loss | 20% | the demo's terms; the contract allows 10% to 90% |
 | e | running cost, share of the fee | 25% | assumption; credit insurers run 32.8% ([Coface FY2025](https://www.coface.com/news-economy-and-insights/2025-results-coface-closes-another-strong-year-with-net-income-at-222.0m)) |
@@ -94,7 +94,7 @@ c* = F × 365 / (D × (1 − b))     buyer's cost of cash above which a buyer-pa
 |---|---|---|---|
 | b | bond, share of the order | 20% | assumption; `bond_bps` in the mandate |
 | D | terms plus inspection | 37 days | assumption; net-30 plus 7 |
-| c | cost of locked money | 4.6% to 14.2% a year | USDC lending, 2026-10-05 ([DeFi Rate](https://defirate.com/lend/snapshot/2026-10-05T0151/), moves a lot); Atradius 2025 ROE ([report](https://atradius.nl/kennisbank/news/atradius-2025-strong-performance-in-a-complex-environment)) |
+| c | cost of locked money | 4.6% to 14.2% a year | USDC lending rate we read on 2026-10-05 (the source no longer keeps that snapshot, and the rate moves a lot); Atradius 2025 ROE ([report](https://atradius.nl/kennisbank/news/atradius-2025-strong-performance-in-a-complex-environment)) |
 | e | running cost, share of the fee | 25% | assumption; credit insurers run 32.8% ([Coface FY2025](https://www.coface.com/news-economy-and-insights/2025-results-coface-closes-another-strong-year-with-net-income-at-222.0m)) |
 | p | loss rate | scenario | assumption |
 | u | share of stake in use | 60% | assumption |

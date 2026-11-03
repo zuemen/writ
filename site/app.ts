@@ -605,8 +605,8 @@ function calc() {
   const absorb = (demo * (1 - e) - c) / (1 - s);
   const usdN = (x: number) => `$${Math.round(x).toLocaleString("en-US")}`;
   const fee = lowest * L;
-  $("rF").textContent = pct(lowest);
-  $("rL").textContent = usdN(L) + (L < 10 * M ? " (the contract needs 10 maximum payments)" : "");
+  $("rF").textContent = pct(lowest) + (lowest > 1 ? " (more than the limit: nobody would buy this)" : "");
+  $("rL").textContent = usdN(L) + (L < 10 * M ? " (the contract needs a limit of at least 10 maximum payments)" : "");
   $("rV").textContent = V > 0 ? pct(fee / V) : "n/a";
   $("rBack").textContent = fee > 0 ? `$${(p * L * (1 - s) / fee).toFixed(2)}` : "n/a";
   $("rFee").textContent = usdN(fee);
@@ -709,7 +709,7 @@ function setCell(id: string, text: string, cls = "") {
 function paintCover() {
   const [word, cls] = agentState();
   $("wpNo").textContent = `mandate no. ${COV.root}`;
-  setCell("wpGuarantor", `${cover.guarantor} (demo)`);
+  setCell("wpGuarantor", "Demo guarantor");
   setCell("wpLocked", `${usd(cover.remaining).replace(/ \S+$/, "")} of ${usd(cover.limit)}`);
   setCell("wpShare", `${cover.deductible_bps / 100}% of each loss`);
   setCell("wpArbiter", cover.arbiter);
@@ -736,15 +736,15 @@ function paintState() {
   btn("askModel").disabled = busy;
   if (allowanceOut) {
     btn("askModel").disabled = true;
-    return setState(`One of this demo’s restricted keys has run out of its gas allowance, so this page can’t sign that step until the owner adds a new key. That is a limit of a public demo, not a security failure: no money moved. The whole story is recorded in <a href="${EVIDENCE}">CI run 41617290940</a>; <span class="mono">make cover-demo</span> reruns it.`);
+    return setState(`One of this demo’s restricted keys has run out of its gas allowance, so this page can’t sign that step until the owner adds a new key. That is a limit of a public demo, not a security failure: no money moved. The whole story is recorded in <a href="${EVIDENCE}">the latest CI run</a>; <span class="mono">make cover-demo</span> reruns it.`);
   }
   if (rootCell.n - rootCell.idx < 1) {
     btn("askModel").disabled = true;
-    return setState(`All ${rootCell.n} budget links on this mandate are spent, so this page can’t sign a new payment. The whole story is recorded in <a href="${EVIDENCE}">CI run 41617290940</a> (<span class="mono">COVER_RESULT|PASS</span>); <span class="mono">make cover-demo</span> reruns it.`);
+    return setState(`All ${rootCell.n} budget links on this mandate are spent, so this page can’t sign a new payment. The whole story is recorded in <a href="${EVIDENCE}">the latest CI run</a> (<span class="mono">COVER_RESULT|PASS</span>); <span class="mono">make cover-demo</span> reruns it.`);
   }
   if (cover.state !== "Active") {
     btn("askModel").disabled = true;
-    return setState(`Cover on this mandate is ${esc(String(cover.state))}, so nothing here can be claimed. The whole story is recorded in <a href="${EVIDENCE}">CI run 41617290940</a>.`);
+    return setState(`Cover on this mandate is ${esc(String(cover.state))}, so nothing here can be claimed. The whole story is recorded in <a href="${EVIDENCE}">the latest CI run</a>.`);
   }
   if (BigInt(cover.remaining) === 0n) return setState(`The guarantor’s lock is used up: visitors upheld ${cover.upheld} claims. The agent can still pay, and no more claims can be filed. That is the limit doing its job.`);
   if (cover.needs_clear && !busy && !document.getElementById("clearAgent")) {
@@ -1004,7 +1004,7 @@ async function fileClaim() {
     await refreshCover().catch(() => setLive(false));
     return;
   }
-  stage("sClaim", `<h3>Claim filed. The whole tree stopped.</h3><div class="verdict no">UNDER_CLAIM</div><p>The agent and anything it hired are refused until the arbiter rules, with no strike against the key. ${txLink(o.hash)}</p>
+  stage("sClaim", `<h3>Claim filed. Every agent under this mandate stopped.</h3><div class="verdict no">UNDER_CLAIM</div><p>The agent and anything it hired are refused until the arbiter rules, with no strike against the key. ${txLink(o.hash)}</p>
     <div class="row"><button class="btn ghost" id="tryPay">Try to pay anyway</button></div><div id="tryOut"></div>`);
   btn("tryPay").addEventListener("click", async () => {
     btn("tryPay").disabled = true;
@@ -1042,6 +1042,7 @@ async function showArbiter(invoiceHash: string) {
       <dt>Model’s decision</dt><dd>${mine ? `<span class="mono">${esc(mine.decisionText)}</span>${mine.model === NO_MODEL ? " (sent without a model)" : ""}` : "Not available on this page."}</dd>
       <dt>Payment</dt><dd>${rec ? `${usd(rec.amount)} to <span class="mono">${esc(rec.to)}</span>` : "reading…"}${mine?.tx ? ` ${txLink(mine.tx)}` : ""}</dd>
       <dt>Hash on the payment</dt><dd><span class="hashmono">${esc(rec?.context_hash ?? "")}</span><br>${match}</dd>
+      <dt>Did the seller refund?</dt><dd>The contract can’t see this. In a real claim the company states it in writing, and the terms make it repay if that’s false. In this demo the seller hasn’t refunded.</dd>
       <dt>Was INV-1 already paid?</dt><dd><span class="mono">invoice_paid</span> says <b>${inv1Paid === null ? "unknown" : inv1Paid ? "yes" : "no"}</b>.${inv1Tx}</dd>
     </dl>
     <div class="row"><button class="btn danger" id="uphold">Uphold: the agent was fooled</button><button class="btn ghost" id="deny">Deny: it was a real purchase</button></div>
@@ -1123,9 +1124,9 @@ async function rule(invoiceHash: string, rec: any, uphold: boolean) {
   stage("sResult", `${lede}<div class="moved">
       <div><span>Guarantor’s stake</span><b>${before && after ? `${usd(before[0])} → ${usd(after[0])}` : `−${usd(payout)}`}</b></div>
       <div><span>Company can withdraw</span><b>+${usd(payout)}</b></div>
-      <div><span>You absorb</span><b>${usd(absorbed)}</b></div>
+      <div><span>Company absorbs</span><b>${usd(absorbed)}</b></div>
     </div>
-    <p>The agent stays stopped: <span class="mono">NOT_CLEARED</span>. ${txLink(o.hash)}</p>
+    <p><span id="stoppedLine">The agent stays stopped: <span class="mono">NOT_CLEARED</span>.</span> ${txLink(o.hash)}</p>
     <div class="row"><button class="btn" id="clearAgent">Company clears the agent</button></div><div id="clearOut"></div>`);
   btn("clearAgent").addEventListener("click", () => clearAgent());
   busy = false;
@@ -1147,7 +1148,11 @@ async function clearAgent() {
   }
   if (inResult) {
     b.remove();
-    setOut(`<div class="out show good"><b>Cleared.</b> ${txLink(o.hash)}<div>The company says it dealt with its agent. That is a record, not a control. The next visitor can play.</div></div>`);
+    const line = document.getElementById("stoppedLine");
+    if (line) line.textContent = "The agent was stopped until this clear.";
+    setOut(o.verdict === "NOTHING_TO_CLEAR"
+      ? `<div class="out show good"><b>Already cleared</b><div>Another open page cleared it first. The next visitor can play.</div></div>`
+      : `<div class="out show good"><b>Cleared.</b> ${txLink(o.hash)}<div>The company says it dealt with its agent. That is a record, not a control. The next visitor can play.</div></div>`);
   }
   await refreshCover().catch(() => setLive(false));
 }
