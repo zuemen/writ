@@ -8,6 +8,16 @@ Trust isn't proving an AI won't fail. It's knowing who pays when it does.
 
 **Demo:** <https://writ-near.112306007.workers.dev> Fool a real model, then rule on the claim yourself. Your browser signs testnet transactions.
 
+A live model paid a re-billed invoice with a fake controller note 10 of 10 times, and the same invoice without the note 0 of 10 (small sample, [how to re-run it](docs/TESTING.md)). Every on-chain check passed on the paid ones. That's the payment a limit can't stop.
+
+| The hackathon's FAQ names | Where to check it |
+|---|---|
+| Technical implementation | `make verify` reruns everything. [126 attacks](docs/bench.md), exact-value tests, a fuzz of the books, [8 real transactions through the live site](docs/testnet-cover.md) |
+| Design | [The demo](https://writ-near.112306007.workers.dev): the visitor is the arbiter, and the checks, the stake and the claim are on screen |
+| Impact | Unproven. No guarantor or customer yet, and nobody has been asked. We found no public case of the loss cover is for. [What you'd have to believe](docs/ECONOMICS.md#what-you-would-have-to-believe) |
+| Originality | It doesn't try to stop the fooled payment. It settles who repays it, before the agent spends |
+| Sustainability | MIT. Writ takes no fee today; a business would need a share of the fee or tools sold to guarantors. [Who might pay](docs/ECONOMICS.md#who-would-pay-if-not-the-company) |
+
 ## How cover works
 
 ```mermaid
