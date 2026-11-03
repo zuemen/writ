@@ -26,8 +26,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: deployed-writ-cover
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.97.0"
