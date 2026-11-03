@@ -4,5 +4,6 @@
   "compatibility_date": "2026-10-01",
   "assets": { "directory": "../.demo-testnet/site", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
   "ai": { "binding": "AI" },
+  "vars": { "SELLER": "writ-credit-merchant.testnet" },
   "ratelimits": [{ "name": "LIMIT", "namespace_id": "1001", "simple": { "limit": 8, "period": 60 } }]
 }
