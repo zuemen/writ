@@ -101,6 +101,7 @@ mod exact {
         cx.now = VALID + 1;
         let p = link(&cx, r, 1);
         cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), "bb".repeat(32)); }).unwrap();
+        assert!(get_logs().iter().any(|l| l.contains("EXPIRED")));
         assert_eq!(cell(&cx, r).idx, 1, "expired one nanosecond later");
         assert_eq!(cell(&cx, r).rejects, 1);
     }
@@ -422,6 +423,44 @@ mod exact {
         cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(a))).unwrap();
         assert_eq!(cred(&cx, a).debt.0, 0);
         assert_eq!(cell(&cx, r).vault.0, 2 * U - 2 * S);
+        // 金庫不夠時，別筆的 1U 保證金不能動，差額由保證人賠
+        let (mut cx, r, a, _) = two_bonded(3 * U);
+        deliver(&mut cx, a);
+        cx.now = cred(&cx, a).due_at.0 + 51 * NS;
+        cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(a))).unwrap();
+        assert_eq!(cred(&cx, a).debt.0, 2 * S);
+        assert_eq!(cell(&cx, r).vault.0, U, "the other order's bond stays");
+        assert_eq!(outstanding(&cx, r).1, U);
+    }
+
+    #[test]
+    fn cancelling_an_offer_does_not_invent_a_stake() {
+        let mut o = opt(); o.stake = 0;
+        let (mut cx, r) = world(o);
+        let k = opened(open(&mut cx, r, 1));
+        cx.run("x", &acc("funder.near"), None, 0, |w| w.cancel_open(U64(k))).unwrap();
+        assert!(cx.peek(|w| w.stakes.get(&acc("g.near")).is_none()), "a guarantor that never staked has no stake entry");
+    }
+
+    #[test]
+    fn enforce_collects_the_childs_money_too() {
+        let mut o = opt(); o.vault = 4 * U;
+        let (mut cx, r) = world(o);
+        let c = hired(hire(&mut cx, r, 2, |_| {}));
+        let k = opened(open(&mut cx, r, 5));
+        accept(&mut cx, k); deliver(&mut cx, k);
+        cx.now = cred(&cx, k).due_at.0 + 51 * NS;
+        cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(k))).unwrap();
+        let (d, st) = (cred(&cx, k).debt.0, stake(&cx).amount.0);
+        assert!(d > 2 * U);
+        assert_eq!(cell(&cx, c).vault.0, 2 * U, "a default does not reach into a sibling's budget");
+        cx.now = cred(&cx, k).recourse_until.0 + 1;
+        cx.run("e", &acc("g.near"), None, 0, |w| w.enforce_recourse(U64(k))).unwrap();
+        assert!(matches!(cell(&cx, c).status, Status::Revoked { .. }));
+        assert_eq!(cell(&cx, c).vault.0, 0);
+        assert_eq!(cell(&cx, r).vault.0, 0);
+        assert_eq!(cred(&cx, k).debt.0, d - 2 * U);
+        assert_eq!(stake(&cx).amount.0, st + 2 * U);
     }
 
     /// 金庫不夠，保證人賠了 1U+S。
