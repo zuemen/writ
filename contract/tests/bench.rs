@@ -1453,6 +1453,7 @@ async fn b19_buy_on_credit_pay_on_time_identity_stays_sealed() -> anyhow::Result
     assert_eq!(card["legal_entity"], "sealed");
     assert_eq!(card["guarantor"], w.verifier.id().as_str());
     assert_eq!(card["bond_bps"], 5000);
+    assert_ne!(card["first_seen"], "0", "the record starts when the company registers");
     let id = cw.delivered(3, 3, 3600, "INV-A").await;
     let c = cw.credit(&id).await;
     assert_eq!(c["bond_locked"], (UNIT * 3 / 2).to_string());
