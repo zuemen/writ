@@ -1,4 +1,4 @@
-**78 attacks, 78 blocked as expected, attacker gain 0 yoctoNEAR.**
+**86 attacks, 86 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -80,6 +80,14 @@
 | A76 | while the company owes, a sub-agent settles a friendly order from its own vault | REPAY_GUARANTOR_FIRST | REPAY_GUARANTOR_FIRST | 0 |
 | A77 | guarantor or company sells to the agent to manufacture a default | SELLER_NOT_INDEPENDENT | SELLER_NOT_INDEPENDENT | 0 |
 | A78 | a company with an empty vault takes a guarantee without paying for it | PREMIUM_SHORT | PREMIUM_SHORT | 0 |
+| A79 | company with a thin vault gets an order accepted with less bond than the risk card says | BOND_SHORT | BOND_SHORT | 0 |
+| A80 | a long order pays the fee of a short one | PREMIUM_SHORT | PREMIUM_SHORT | 0 |
+| A81 | company swaps who pays the fee after the guarantor signed | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
+| A82 | seller bills more than the order when it marks delivery | BAD_FINAL_AMOUNT | BAD_FINAL_AMOUNT | 0 |
+| A83 | seller makes the contract store a rule without paying for the storage | POLICY_STORAGE | POLICY_STORAGE | 0 |
+| A84 | an order outside the seller's own rule gets accepted anyway | POLICY:ORDER_TOO_LARGE | POLICY:ORDER_TOO_LARGE | 0 |
+| A85 | a straw seller takes the whole stake through collusive orders | SELLER_CONCENTRATION | SELLER_CONCENTRATION | 0 |
+| A86 | throwaway sellers grow the guarantor's record until every accept runs out of gas | list stays at 8 | list stays at 8 | 0 |
 | B00 | legit payment 3+2 links to in-scope merchant | Paid | Paid | 0 |
 | B01 | AMC revoked in KERI TEL, ixn submitted by anyone | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
 | B02 | payment to a non-existent account | Rejected:TRANSFER_FAILED, vault refunded | Rejected:TRANSFER_FAILED, vault refunded | 0 |
@@ -93,7 +101,7 @@
 | B10 | deploy + init + delete full-access key in one batch; owner still manages the whitelist | 0 keys on the contract account | 0 keys on the contract account | 0 |
 | B11 | token cell: NEAR above the fee is returned | excess returned | excess returned | 0 |
 | B12 | refund fails because the funder left the token; funder re-registers and claims | tokens recovered | tokens recovered | 0 |
-| B13 | gas burnt by a payment, whole transaction | under 30 Tgas | 1 link 5 Tgas, 100 links 7 Tgas | 0 |
+| B13 | gas burnt by a payment, whole transaction | under 30 Tgas | 1 link 6 Tgas, 100 links 7 Tgas | 0 |
 | B14 | boundaries: j == cap pays, unpaid invoice not on record, maxStrikes 0 never trips, solvency counts storage | all exact | all exact | 0 |
 | B15 | NEAR refund fails because the funder account is gone; it is kept, and claimable after the account returns | refund recovered | refund recovered | 0 |
 | B16 | agent hires a sub-agent with a narrower mandate; it pays inside it | Paid, parent's links spent | Paid, parent's links spent | 0 |
@@ -111,3 +119,7 @@
 | B28 | released bond repays the guarantor; a silent seller cannot hold exposure open | collected, unblocked | collected, unblocked | 0 |
 | B29 | the legal entity rotates its key after signing the terms | reveal still works | reveal still works | 0 |
 | B30 | the guarantor earns its fee when the seller accepts; nothing is refunded | fee on the risk card and in the stake | fee on the risk card and in the stake | 0 |
+| B31 | the seller pays the fee: nothing at accept, deducted from the invoice when paid | seller -fee, guarantor +fee | seller -fee, guarantor +fee | 0 |
+| B32 | usage order: limit 10, seller bills 7.3, bond and exposure follow, only 7.3 settles | 7.3 paid | 7.3 paid | 0 |
+| B33 | seller rule: refused with reasons, rule adjusted, order ships | refused, adjusted, accepted | refused, adjusted, accepted | 0 |
+| B34 | guarantor book: stake, exposure, earned, claims, recovered, loss ratio, top sellers | adds up | adds up | 0 |

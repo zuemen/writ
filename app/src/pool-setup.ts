@@ -16,8 +16,17 @@ import { keriPrivate, py, releaseLink } from "./keri.js";
 const a = A();
 const COUNT = Number(process.env.WRIT_POOL ?? 6);
 const DEMO_COMPANY = "Demo Trading Ltd (fictional)";
+// 信用以穩定幣計價：Circle 的 testnet USDC。保證人的質押、公司的金庫都是 USDC；儲存與雇用費走根格的 NEAR 準備金
+const USDC = process.env.WRIT_POOL_ASSET ?? "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af";
+const MICRO = 1_000_000n;
+async function ft(from: { id: string; sk: KeyPairString }, method: string, args: object, gas = "120") {
+  const r = await call(as(from.id, from.sk), USDC, method, args, { deposit: method === "storage_deposit" ? NEAR("0.0125") : 1n, gas: teraToGas(gas) });
+  if (r.error) throw new Error(`${method}: ${r.error}`);
+  return r;
+}
 const path = join(DEMO, "pool.json");
 const pool: any = existsSync(path) ? readJson(path) : { rpc: RPC, contract: a.writ.id, merchant: a.merchant.id, cells: [] };
+pool.asset = { id: USDC, symbol: "USDC", decimals: 6 };
 
 if (!pool.relayer) {
   const kp = KeyPair.fromRandom("ed25519");
@@ -61,28 +70,34 @@ if (!pool.seller) {
   pool.seller = await scopedKey(a.merchant, ["accept_credit", "mark_delivered", "claim_default", "withdraw", "set_seller_policy"], "1.5");
   pool.guarantor = await scopedKey(a.verifier, ["enforce_recourse", "credit_unseal"], "1.5");
   pool.company = DEMO_COMPANY;
-  // 賣方規則先存一條寬鬆的（押金要帶錢，鑰匙帶不了），之後訪客用受限鑰匙調整不用再付
-  const sp = await call(as(a.merchant.id, a.merchant.sk), a.writ.id, "set_seller_policy", { policy: { max_amount: NEAR("1").toString(), max_tenor_secs: "86400", min_bond_bps: 0, max_defaults: 1000, guarantors: [], asset: null, max_fee_bps: 10000, arbiters: [] } }, { deposit: NEAR("0.015") });
+  // 賣方規則先存一條寬鬆的（押金要帶錢，受限鑰匙帶不了），之後訪客的規則用受限鑰匙改
+  const sp = await call(as(a.merchant.id, a.merchant.sk), a.writ.id, "set_seller_policy", { policy: { max_amount: (100n * MICRO).toString(), max_tenor_secs: "86400", min_bond_bps: 0, max_defaults: 1000, guarantors: [], asset: USDC, max_fee_bps: 10000, arbiters: [] } }, { deposit: NEAR("0.015") });
   if (sp.error) throw new Error("set_seller_policy: " + sp.error);
-  const st = await call(as(a.verifier.id, a.verifier.sk), a.writ.id, "stake", {}, { deposit: NEAR(process.env.WRIT_STAKE ?? "4") });
-  if (st.error) throw new Error("stake: " + st.error);
+  await ft(a.acme, "storage_deposit", { account_id: a.writ.id }, "30");
+  await ft(a.acme, "ft_transfer", { receiver_id: a.verifier.id, amount: (BigInt(process.env.WRIT_STAKE_USDC ?? "1500000")).toString() }, "30");
   writeJson(path, pool);
 }
 
 for (let i = 0; i < COUNT; i++) {
   for (const d of ["keri/.keystore", "keri/bundle", "keri/registrar"]) rmSync(join(ROOT, d), { recursive: true, force: true });
   // 員工 → 應付帳款 agent（兩個收款對象）
-  const init = py("issuer.py", "init", "--scope", `${a.merchant.id},${a.supplier.id}`, "--rail", a.acme.id, "--n", "20", "--unit", "2e22", "--daily", "20", "--days", "30",
-    "--credit-limit", "3e23", "--bond-bps", "2500", "--premium-bps", "200", "--min-tenor", "5", "--max-tenor", "86400", "--arbiter", a.owner.id, "--contract", a.writ.id);
+  const init = py("issuer.py", "init", "--scope", `${a.merchant.id},${a.supplier.id}`, "--rail", a.acme.id, "--n", "20", "--unit", "10000", "--daily", "20", "--days", "30", "--asset", USDC, "--fee-payer", "Seller", "--seller-cap-bps", "5000",
+    "--credit-limit", "300000", "--bond-bps", "2500", "--premium-bps", "200", "--min-tenor", "5", "--max-tenor", "86400", "--arbiter", a.owner.id, "--contract", a.writ.id);
   py("verify.py", "pin", "--root", JSON.parse(init.slice(init.indexOf("{"), init.lastIndexOf("}") + 1)).root);
-  // 保證金是硬性要求：開格費 0.37 + 兩次雇用 0.369 + 預算 0.12 + 單據儲存 0.007 + 費用 0.004 + 25% 保證金 0.05，再留 0.01
-  const reg = await register(process.env.WRIT_POOL_DEPOSIT ?? "0.81");
+  // NEAR 準備金：開格費 0.37 + 兩次雇用 + 單據儲存
+  const reg = await register(process.env.WRIT_POOL_DEPOSIT ?? "0.78");
   if (!reg.ok) throw new Error("register failed: " + reg.error);
+  // 金庫 0.095 USDC：雇用撥走 0.06，留 0.035 夠鎖 25% 保證金；不付時大單賠完、子格收回後還欠保證人 0.005，揭露走得到
+  await ft(a.acme, "ft_transfer_call", { receiver_id: a.writ.id, amount: "95000", msg: `fund:${reg.cell}` });
+  if (!pool.staked) {
+    await ft(a.verifier, "ft_transfer_call", { receiver_id: a.writ.id, amount: process.env.WRIT_STAKE_USDC ?? "1500000", msg: "stake" });
+    pool.staked = true;
+    writeJson(path, pool);
+  }
   const rootSk = keriPrivate().agent_near_secret_key;
   const c: any = await view(a.writ.id, "get_cell", { cell: reg.cell });
   const { lei, salt } = JSON.parse(py("verify.py", "reveal", "--amc", c.amc_said));
-  // 大單 10 節（0.2 NEAR）：根格只剩約 0.06（扣單據儲存與 2% 保證費，含 0.05 保證金），子格收回 0.12，還清前保證人仍有約 0.02 要追，揭露走得到
-  const orderLinks = { small: releaseLink(7), large: releaseLink(16) };
+    const orderLinks = { small: releaseLink(7), large: releaseLink(16) };
 
   // 應付帳款 agent → 採購 agent（只能付一個對象、6 節）
   const midKey = KeyPair.fromRandom("ed25519");

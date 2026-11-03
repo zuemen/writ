@@ -11,6 +11,7 @@ type Cfg = {
   rpc: string; contract: string; merchant: string;
   bounty: { cell: string; agent_sk: KeyPairString; spent_link: string };
   live: { cell: string; agent_sk: KeyPairString; links: string[] };
+  asset?: { id: string; symbol: string; decimals: number };
   relayer: Scoped;
   seller: Scoped;
   guarantor: Scoped;
@@ -39,14 +40,14 @@ const WHY: Record<string, string> = {
   FUNDS: "The vault cannot cover this payment.",
   EXPIRED: "The mandate has expired.",
   FROZEN: "This company owes its guarantor, so its agents cannot pay, hire or take new credit until it repays.",
-  HIRE_SCOPE: "A sub-agent's payees must be a subset of the hiring agent's. The contract refused, and the attempt counts as a strike.",
+  HIRE_SCOPE: "A sub-agent’s payees must be a subset of the hiring agent’s. The contract refused, and the attempt counts as a strike.",
 };
 const PROTOCOL: [string, string, string][] = [
   ["MethodNameMismatch", "does not allow method", "This key may call five agent methods on one contract. NEAR refuses anything else before contract code runs."],
   ["RequiresFullAccess", "requires full access", "A function-call key cannot send a plain transfer. NEAR refuses it before it becomes a transaction."],
   ["DepositWithFunctionCall", "Deposit is not allowed", "A function-call key cannot attach a deposit, so it cannot call token transfers directly."],
   ["ReceiverMismatch", "does not allow receiver", "This key only works against the Writ contract."],
-  ["NotEnoughAllowance", "allowance", "The key's gas allowance ran out from all the attempts. Not a security failure; the funder refills it."],
+  ["NotEnoughAllowance", "allowance", "The key’s gas allowance ran out from all the attempts. Not a security failure; the funder refills it."],
   ["AccessKeyNotFound", "does not exist", "The key no longer exists on the contract account, so NEAR refuses the transaction before it is created."],
 ];
 
@@ -85,7 +86,12 @@ const txLink = (h?: string) => (h ? `<a href="${explorer(h)}" target="_blank" re
 const scoped = (k: Scoped) => new Account(k.id, provider, KeyPairSigner.fromSecretKey(k.sk));
 const acct = (a: Agent) => new Account(cfg.contract, provider, KeyPairSigner.fromSecretKey(a.sk));
 const btn = (id: string) => $(id) as HTMLButtonElement;
-const nearStr = (y: any) => `${near(String(y))} NEAR`;
+const nearStr = (y: any) => {
+  if (!cfg.asset) return `${near(String(y))} NEAR`;
+  return `${(Number(BigInt(String(y))) / 10 ** cfg.asset.decimals).toFixed(2)} ${cfg.asset.symbol}`;
+};
+const scale = () => (cfg.asset ? 10n ** BigInt(cfg.asset.decimals) : 10n ** 24n);
+const toUnits = (v: number) => (BigInt(Math.round(v * 10000)) * scale()) / 10000n;
 const ledger: { label: string; hash: string }[] = [];
 function out(id: string, o: Out, cls: string, extra = "") {
   if (o.hash && cls !== "err" && /^o\d$/.test(id)) ledger.push({ label: o.verdict, hash: o.hash });
@@ -146,7 +152,60 @@ const SAVED = "The transaction went through, but the page could not read the res
 function setLive(ok: boolean) {
   $("liveText").textContent = ok ? "NEAR testnet, live" : "testnet not answering";
   $("live").classList.toggle("down", !ok);
+  $("live").classList.toggle("ok", ok);
 }
+let lastCard: any = null;
+let lastAmount = 0n;
+let liveCheck: any = null; // 已開單時，合約對這一單的判定
+const num = (id: string) => Number(($(id) as HTMLInputElement).value);
+const policy = () => ({ max_amount: toUnits(num("pMax")).toString(), max_tenor_secs: String(Math.round(num("pDays") * 86400)), min_bond_bps: Math.round(num("pBond") * 100), max_defaults: Math.max(0, Math.round(num("pDef"))), guarantors: [] as string[], asset: cfg.asset?.id ?? null, max_fee_bps: 10000, arbiters: [] as string[] });
+const REASON: Record<string, string> = {
+  ORDER_TOO_LARGE: "the order is above your largest order",
+  TENOR_TOO_LONG: "the term is longer than you allow",
+  BOND_TOO_LOW: "the bond is below your minimum",
+  TOO_MANY_DEFAULTS: "the buyer has more past defaults than you allow",
+  GUARANTOR_NOT_APPROVED: "you have not approved this guarantor",
+  BOND_SHORT: "the company cannot lock the promised bond",
+  GUARANTOR_CAPACITY: "the guarantor has too little free stake",
+  SELLER_CONCENTRATION: "the guarantor is already too exposed to you",
+};
+function paintDecision(ok: boolean, reasons: string[], tail: string) {
+  $("decision").className = `decision ${ok ? "ship" : "no"}`;
+  $("decWord").textContent = ok ? "SHIP" : "REJECT";
+  $("decWhy").textContent = ok ? tail : reasons.map((r) => REASON[r] ?? r).join("; ");
+}
+function previewRule() {
+  if (liveCheck) return checkLive();
+  if (!lastCard) return;
+  const reasons: string[] = [];
+  if (lastCard.bond_bps < Math.round(num("pBond") * 100)) reasons.push("BOND_TOO_LOW");
+  if (lastCard.defaults > num("pDef")) reasons.push("TOO_MANY_DEFAULTS");
+  if (lastAmount > toUnits(num("pMax"))) reasons.push("ORDER_TOO_LARGE");
+  paintDecision(reasons.length === 0, reasons, `This ${nearStr(lastAmount)} order passes your rule. The contract checks it again when you accept.`);
+}
+async function checkLive() {
+  if (!creditId) return;
+  const r: any = await provider.callFunction({ contractId: cfg.contract, method: "check_order", args: { credit: creditId, policy: policy() } }).catch(() => null);
+  if (!r) return;
+  liveCheck = r;
+  const o = r.order;
+  paintDecision(r.ok, r.reasons, `${nearStr(o.amount)}: ${nearStr(o.bond)} bond and ${nearStr(o.exposure)} of guarantor stake lock when you accept. Fee ${nearStr(o.fee)}, paid by the ${o.fee_payer === "Seller" ? "seller" : "buyer"}. Checked by the contract.`);
+  const open = o.status === "Open";
+  if (open) {
+    btn("s2").disabled = !r.ok;
+    $("p2").textContent = r.ok ? `The contract says your rule passes. Accepting locks ${nearStr(o.bond)} of the company’s bond and ${nearStr(o.exposure)} of the guarantor’s stake for this order.` : `Your rule says no: ${r.reasons.map((x: string) => REASON[x] ?? x).join("; ")}. Change the rule at the top of the page, or walk away.`;
+  }
+}
+["pMax", "pDays", "pBond", "pDef"].forEach((id) => $(id).addEventListener("input", previewRule));
+document.querySelectorAll<HTMLButtonElement>("button[data-rule]").forEach((b) => {
+  b.addEventListener("click", () => {
+    const set = (id: string, v: string) => { ($(id) as HTMLInputElement).value = v; };
+    if (b.dataset.rule === "bond") set("pBond", "50");
+    if (b.dataset.rule === "defaults") set("pDef", "0");
+    if (b.dataset.rule === "reset") { set("pMax", "1"); set("pDays", "60"); set("pBond", "20"); set("pDef", "99"); }
+    previewRule();
+  });
+});
 function paintNode(id: string, c: any, detail: string) {
   const active = c.status === "Active";
   $(`d${id}`).textContent = detail;
@@ -163,14 +222,19 @@ async function renderCard() {
   if (card.legal_entity !== "sealed") $("rcCompany").innerHTML = `<span class="named">${esc(cfg.company)}, LEI ${esc(card.legal_entity)}</span>`;
   else $("rcCompany").innerHTML = `<span class="sealed">${"&nbsp;".repeat(20)}</span> sealed`;
   $("rcGuarantor").textContent = short(card.guarantor, 34);
-  $("rcStake").textContent = `${nearStr(card.guarantor_stake)} staked, ${nearStr(card.guarantor_exposure)} exposed`;
+  $("rcStake").textContent = `${nearStr(card.guarantor_stake)} staked, ${nearStr(card.guarantor_exposure)} on open orders`;
   $("rcLimit").textContent = `${nearStr(card.credit_limit)}, ${nearStr(card.outstanding)} outstanding`;
-  $("rcBond").textContent = `up to ${card.bond_bps / 100}% of each order`;
-  $("rcFee").textContent = `${card.premium_bps / 100}% of each order, ${nearStr(card.guarantor_earned)} earned`;
-  $("rcRecord").textContent = `${card.settled} paid, ${card.defaults} defaulted, every visitor's runs${card.frozen ? " · FROZEN" : ""}`;
+  $("rcBond").textContent = `${card.bond_bps / 100}% of each order`;
+  $("rcFee").textContent = `${card.premium_bps / 100}% per 30 days, paid by the ${card.fee_payer === "Seller" ? "seller" : "buyer"}`;
+  $("rcRecord").textContent = `${card.settled} paid, ${card.defaults} defaulted (demo: every visitor’s runs)${card.frozen ? " · FROZEN" : ""}`;
+  lastCard = card;
+  lastAmount = BigInt(r.unit) * 10n;
+  $("digest").textContent = `Guarantor ${short(card.guarantor, 30)}, ${nearStr(card.guarantor_stake)} staked. Bond ${card.bond_bps / 100}%. Fee ${card.premium_bps / 100}% per 30 days. Record: ${card.settled} paid, ${card.defaults} defaulted, company sealed from the public ledger.`;
+  $("buildCmd").textContent = `near contract call-function as-read-only ${cfg.contract} risk_card json-args '{"cell":"${sale.root.cell}"}' network-config testnet now`;
+  previewRule();
   $("vjson").textContent = JSON.stringify(card, null, 2);
   $("vcmd").textContent = `near contract call-function as-read-only ${cfg.contract} risk_card json-args '{"cell":"${sale.root.cell}"}' network-config testnet now`;
-  const left = (c: any) => `${c.n - c.idx} of ${c.n} links left`;
+  const left = (c: any) => `Budget left: ${c.n - c.idx} of ${c.n}`;
   paintNode("Root", r, left(r));
   paintNode("Mid", m, left(m));
   paintNode("Leaf", l, left(l));
@@ -187,7 +251,7 @@ function assignFire() {
 function poolText() {
   const n = unused.length + paidOnce.length;
   return n
-    ? `${n} prepared mandate${n === 1 ? "" : "s"} left. A run uses one up, so the freeze and the name apply to that mandate: reload and you get a fresh mandate of the same fictional company. Its payment record counts every visitor's runs.${unused.length ? "" : " The on-time path needs an unused mandate, and none is left."}`
+    ? `${n} prepared mandate${n === 1 ? "" : "s"} left. A run uses one up, so the freeze and the name apply to that mandate: reload and you get a fresh mandate of the same fictional company. Its payment record counts every visitor’s runs.${unused.length ? "" : " The on-time path needs an unused mandate, and none is left."}`
     : "";
 }
 async function pick() {
@@ -215,7 +279,7 @@ async function pick() {
   }
   replaying = false;
   btn("cHonest").hidden = false;
-  btn("cBad").textContent = "Company won't pay";
+  btn("cBad").textContent = "It doesn’t pay";
   btn("cHonest").disabled = !unused.length;
   btn("cBad").disabled = false;
   btn("cNo").disabled = false;
@@ -226,9 +290,9 @@ async function pick() {
 // 樹用完時：放一次真的舊交易，清楚標示這是錄下來的
 const REC: [string, number, string, string, string][] = [
   ["o1", 2, "Recorded: order placed on credit", "8pXrCzNtoF5nf1vfMiUa62KXNSqhkHLJEigNQ82SmF5p", "Budget links spent, no money moved."],
-  ["o2", 3, "Recorded: accepted and shipped", "5QSFXukqmwBYHETcxm51vfeX4nJtYSWjLcEDeZ3WWumv", "The fee moved to the guarantor; the bond and the guarantor's exposure were locked for this order."],
-  ["o3", 4, "Recorded: seller paid in full", "LUY5oaHBiyhDPPZMFokFts7psuqe7jwCYXjEUTACCmk", "The seller received 0.800 NEAR; 0.698 NEAR of it came from the guarantor's stake. No approval needed."],
-  ["o4", 9, "Recorded: the company is named", "4nVjFVQBNe2GTufSKQVjxBZg4QPeSQAcHckmU7THj68P", "One earlier transaction deleted the agent's key; this one revealed the fictional company, checked against the commitment and the legal entity's signature."],
+  ["o2", 3, "Recorded: accepted and shipped", "5QSFXukqmwBYHETcxm51vfeX4nJtYSWjLcEDeZ3WWumv", "The fee moved to the guarantor; the bond and the guarantor’s exposure were locked for this order."],
+  ["o3", 4, "Recorded: seller paid in full", "LUY5oaHBiyhDPPZMFokFts7psuqe7jwCYXjEUTACCmk", "The seller received 0.800 NEAR; 0.698 NEAR of it came from the guarantor’s stake. No approval needed."],
+  ["o4", 9, "Recorded: the company is named", "4nVjFVQBNe2GTufSKQVjxBZg4QPeSQAcHckmU7THj68P", "One earlier transaction deleted the agent’s key; this one revealed the fictional company, checked against the commitment and the legal entity’s signature."],
 ];
 let replaying = false;
 function replayMode() {
@@ -293,10 +357,11 @@ async function choose(isHonest: boolean, b: HTMLButtonElement) {
     b.textContent = label;
     b.classList.add("chosen");
     saveRun();
-    out("o1", { kind: "paid", verdict: `Order ${creditId}: ${nearStr(o.amount)} on credit`, why: `You chose: ${isHonest ? "the company will pay" : "the company won't pay"}. Budget links spent, no money moved. The agent could only order from a supplier in its mandate.`, hash: o.hash }, "good");
+    out("o1", { kind: "paid", verdict: `Order ${creditId}: ${nearStr(o.amount)} on credit`, why: `You chose: ${isHonest ? "the company will pay" : "the company won’t pay"}. Budget links spent, no money moved. The agent could only order from a supplier in its mandate.`, hash: o.hash }, "good");
     setSteps("step", 2);
-    btn("s2").disabled = false;
     await renderCard().catch(() => setLive(false));
+    liveCheck = {};
+    await checkLive();
   } catch (e: any) {
     b.textContent = label;
     const taken = /Rejected|AccessKey|does not exist/.test(String(e?.message));
@@ -321,13 +386,13 @@ function readyToSettle(c: any) {
   setSteps("step", 3);
   if (honest) {
     $("h3").textContent = "The company pays on time";
-    $("p3").textContent = "Its agent settles from its vault. The company's legal name stays sealed from you.";
+    $("p3").textContent = "Its agent settles from its vault. The company’s legal name stays sealed from you.";
     btn("s3").textContent = "Agent pays";
     btn("s3").disabled = false;
   } else {
     $("h3").textContent = "The due date passes";
-    $("p3").textContent = "The company doesn't pay. The rule is objective: delivered, accepted, past due, not settled.";
-    btn("s3").textContent = "Waiting";
+    $("p3").textContent = "The company doesn’t pay. The rule is objective: delivered, accepted, past due, not settled.";
+    btn("s3").textContent = "Claim default";
     // 到期加寬限期與驗收期都要過，鏈上是 now > 門檻，多等一點
     const wait = Math.max(DUE_SECS * 1000, Number(BigInt(c.due_at) / 1_000_000n) - Date.now() + 1500);
     countdown(wait, "clock3", () => {
@@ -338,7 +403,7 @@ function readyToSettle(c: any) {
 }
 function readyToEnforce(c: any) {
   setSteps("step", 4);
-  btn("s4").textContent = "Waiting";
+  btn("s4").textContent = "Guarantor enforces";
   const wait = Math.max(1000, Number(BigInt(c.recourse_until) / 1_000_000n) - Date.now() + 2000);
   countdown(wait, "clock4", () => {
     btn("s4").textContent = "Guarantor enforces";
@@ -351,15 +416,18 @@ btn("s2").addEventListener("click", async () => {
   const before: any = await creditOf().catch(() => null);
   if (!before) return fail({ kind: "error", verdict: "Network error", why: "The testnet RPC did not answer cleanly. Try again." });
   if (before.status === "Open") {
-    const o1 = await act(btn("s2"), call(seller, "accept_credit", { credit: creditId }, "50"));
+    const r0 = await act(btn("s2"), call(seller, "set_seller_policy", { policy: policy() }, "30"));
+    if (r0.kind === "error" || r0.kind === "blocked") return fail(r0);
+    const o1 = await act(btn("s2"), call(seller, "accept_credit", { credit: creditId }, "60"));
     if (o1.kind === "error" || o1.kind === "blocked") return fail(o1);
-    if (o1.hash) ledger.push({ label: "Accepted", hash: o1.hash });
+    if (o1.hash) ledger.push({ label: "Accepted under your rule", hash: o1.hash });
   }
-  const o2 = await act(btn("s2"), call(seller, "mark_delivered", { credit: creditId, delivery_hash: randomHex() }, "50"));
+  const o2 = await act(btn("s2"), call(seller, "mark_delivered", { credit: creditId, delivery_hash: randomHex(), final_amount: null }, "50"));
   if (o2.kind === "error" || o2.kind === "blocked") return fail(o2);
   const c: any = await creditOf().catch(() => null);
   if (!c) return out("o2", { ...o2, verdict: "Shipped", why: SAVED }, "err");
-  out("o2", { ...o2, verdict: "Accepted and shipped", why: `Locked for you: ${nearStr(c.bond_locked)} of the company's bond, ${nearStr(c.exposure)} of the guarantor's stake. The guarantor earned its fee when you accepted. You have delivered, so after the inspection window an unpaid order is a default.` }, "good");
+  out("o2", { ...o2, verdict: "Shipped", why: `Locked for you: ${nearStr(c.bond_locked)} of the company’s bond, ${nearStr(c.exposure)} of the guarantor’s stake. You have delivered, so after the inspection window an unpaid order is a default.` }, "good");
+  liveCheck = null;
   await renderCard().catch(() => setLive(false));
   readyToSettle(c);
 });
@@ -371,7 +439,7 @@ btn("s3").addEventListener("click", async () => {
       if (o.kind === "error" || o.kind === "blocked") { btn("s3").disabled = false; return out("o3", o, "err"); }
       if (o.hash) ledger.push({ label: "Agent settled", hash: o.hash });
     }
-    const v = await act(btn("s3"), call(scoped(cfg.seller), "withdraw", {}, "30"));
+    const v = await act(btn("s3"), call(scoped(cfg.seller), "withdraw", { asset: cfg.asset?.id ?? null }, "80"));
     out("o3", { ...v, verdict: "Paid. Identity still sealed.", why: `You were paid${v.kind === "paid" ? " and withdrew" : ""}. Its legal name stays sealed from you, and this payment goes on its record.` }, "good");
     hideSteps(4);
     setSteps("step", 9);
@@ -387,7 +455,7 @@ btn("s3").addEventListener("click", async () => {
   const c: any = await creditOf().catch(() => null);
   if (!c) return out("o3", { ...o, verdict: "You are paid in full", why: SAVED }, "err");
   debtAtDefault = BigInt(c.debt);
-  out("o3", { ...o, verdict: "You are paid in full", why: `The contract paid you from the company's money first, then ${nearStr(c.debt)} from the guarantor's stake, within the ${nearStr(c.exposure)} it had locked for you. No approval needed. The company's agents are frozen: no new credit, no payments, no hires. It is still sealed: it can still repay the guarantor.` }, "block");
+  out("o3", { ...o, verdict: "You are paid in full", why: `The contract paid you from the company’s money first, then ${nearStr(c.debt)} from the guarantor’s stake, within the ${nearStr(c.exposure)} it had locked for you. No approval needed. The company’s agents are frozen: no new credit, no payments, no hires. It is still sealed: it can still repay the guarantor.` }, "block");
   await renderCard().catch(() => setLive(false));
   readyToEnforce(c);
 });
@@ -412,7 +480,7 @@ btn("s4").addEventListener("click", async () => {
   const repaid = after && debtAtDefault !== null ? debtAtDefault - BigInt(after.debt) : 0n;
   $("r4name").textContent = `${cfg.company}, LEI ${sale!.lei}`;
   $("r4").hidden = false;
-  out("o4", { ...u, verdict: "Every agent lost its key. The company is named.", why: `One transaction deleted all three agents' keys. ${repaid > 0n ? `Money left in the tree repaid ${nearStr(repaid)} of the guarantor's loss first. ` : ""}The next one revealed ${cfg.company}: the contract checked the LEI against the commitment made at the start, and the legal entity's signature, so a guarantor cannot name a company whose key it does not hold. The seller now knows who to pursue; that is a lead, not a court order.` }, "block");
+  out("o4", { ...u, verdict: "Stop-ship: every agent lost its key. The company is named.", why: `One transaction deleted all three agents' keys, so they stop buying from every seller at once. ${repaid > 0n ? `Money left in the tree repaid ${nearStr(repaid)} of the guarantor’s loss first. ` : ""}The next one revealed ${cfg.company}: the contract checked the LEI against the commitment made at the start, and the legal entity’s signature, so a guarantor cannot name a company whose key it does not hold. The seller now knows who to pursue; that is a lead, not a court order.` }, "block");
   setSteps("step", 9);
   await renderCard().catch(() => setLive(false));
   finish("This run, on-chain");
@@ -430,11 +498,11 @@ async function resume() {
   honest = s.honest;
   replaying = false;
   btn("cHonest").hidden = false;
-  btn("cBad").textContent = "Company won't pay";
+  btn("cBad").textContent = "It doesn’t pay";
   $("pooltext").textContent = poolText();
   btn("cHonest").disabled = btn("cBad").disabled = btn("cNo").disabled = true;
   btn(honest ? "cHonest" : "cBad").classList.add("chosen");
-  out("o1", { kind: "paid", verdict: `Picked up your order ${creditId}`, why: `You chose: ${honest ? "the company will pay" : "the company won't pay"}. Its status is read from the chain.` }, "good");
+  out("o1", { kind: "paid", verdict: `Picked up your order ${creditId}`, why: `You chose: ${honest ? "the company will pay" : "the company won’t pay"}. Its status is read from the chain.` }, "good");
   btn("again").textContent = "Start a new run";
   btn("again").hidden = false;
   await renderCard();
@@ -447,7 +515,7 @@ async function resume() {
   } else {
     debtAtDefault = BigInt(cr.debt);
     $("h3").textContent = "The due date passed, and you were paid";
-    $("p3").textContent = "The company didn't pay, so you claimed. Its agents are frozen and it is still sealed.";
+    $("p3").textContent = "The company didn’t pay, so you claimed. Its agents are frozen and it is still sealed.";
     readyToEnforce(cr);
   }
 }
@@ -478,7 +546,7 @@ btn("f3").addEventListener("click", async () => {
     btn("f3").disabled = false;
     return out("fo3", o, "err");
   }
-  out("fo3", { ...o, verdict: "One transaction, three keys deleted", why: "The contract verified the legal entity's Ed25519 signature on the KERI event, deleted all three agents' keys and returned their vaults to the company." }, "block");
+  out("fo3", { ...o, verdict: "One transaction, three keys deleted", why: "The contract verified the legal entity’s Ed25519 signature on the KERI event, deleted all three agents' keys and returned their vaults to the company." }, "block");
   setSteps("fstep", 4);
   btn("f4").disabled = false;
 });
@@ -496,6 +564,36 @@ btn("f4").addEventListener("click", async () => {
   if (dead) setSteps("fstep", 9);
   else b.disabled = false;
 });
+
+// ---------------- 保證人帳簿（鏈上）----------------
+async function book() {
+  const g: any = await provider.callFunction({ contractId: cfg.contract, method: "guarantor_book", args: { account: lastCard?.guarantor, asset: cfg.asset?.id ?? null } }).catch(() => null);
+  if (!g) return;
+  const row = (k: string, v: string) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
+  $("book").innerHTML = `<p class="eyebrow" style="margin:18px 0 8px">This demo guarantor’s book, live from the contract</p><div class="res">` +
+    row("Staked", nearStr(g.stake)) + row("On open orders", `${nearStr(g.exposure)} (${(Number(g.utilisation_bps) / 100).toFixed(1)}%)`) + row("Fees earned", nearStr(g.earned)) + row("Claims paid", nearStr(g.claims_paid)) + row("Recovered from companies", nearStr(g.recovered)) + `</div><p class="note">Demo traffic: most runs are visitors choosing “it doesn’t pay”, so these losses say nothing about real buyers.</p>`;
+}
+
+// ---------------- 保證人試算 ----------------
+function calc() {
+  const v = (id: string) => Number(($(id) as HTMLInputElement).value) / 100;
+  const b = v("cB"), p = v("cP"), c = v("cC"), e = v("cE"), f = v("cF"), u = v("cU");
+  const d = Number(($("cD") as HTMLInputElement).value);
+  const pct = (x: number, n = 2) => `${(x * 100).toFixed(n)}%`;
+  const k = (1 - b) * c * d / 365;
+  const lowest = e < 1 ? (p * (1 - b) + k) / (1 - e) : Infinity;
+  const absorb = b < 1 ? (f * (1 - e) - k) / (1 - b) : Infinity;
+  const volume = b < 1 && d > 0 ? (365 / d) * (u / (1 - b)) : 0;
+  const ret = volume * (f * (1 - e) - p * (1 - b));
+  const cash = b < 1 && d > 0 ? f * 365 / (d * (1 - b)) : Infinity;
+  $("rF").textContent = Number.isFinite(lowest) ? pct(lowest) : "n/a";
+  $("rFee").textContent = `$${Math.round(f * 10000).toLocaleString("en-US")}`;
+  $("rP").textContent = !Number.isFinite(absorb) ? "n/a" : absorb < 0 ? "none" : pct(absorb);
+  $("rR").textContent = b < 1 ? pct(ret, 1) : "n/a";
+  $("rC").textContent = Number.isFinite(cash) ? `${(cash * 100).toFixed(1)}%` : "n/a";
+}
+["cB", "cD", "cP", "cC", "cE", "cF", "cU"].forEach((id) => $(id).addEventListener("input", calc));
+calc();
 
 // ---------------- 來偷 ----------------
 const thief = new Account(cfg.contract, provider, KeyPairSigner.fromSecretKey(cfg.bounty.agent_sk));
@@ -546,11 +644,11 @@ btn("askModel").addEventListener("click", async () => {
   try {
     const r = await fetch("api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ invoice }) });
     if (!r.ok) {
-      const why = r.status === 429 ? "Too many tries in a minute. Wait a moment." : r.status === 400 ? "Write an invoice first." : "The model is not answering, or today's free quota is used up. The stealing challenge below still works.";
+      const why = r.status === 429 ? "Too many tries in a minute. Wait a moment." : r.status === 400 ? "Write an invoice first." : "The model is not answering, or today’s free quota is used up. The stealing challenge below still works.";
       return out("modelOut", { kind: "error", verdict: "No answer from the model", why }, "err");
     }
     const { call: c, cached } = await r.json();
-    const reused = cached ? " The model's earlier answer to this exact invoice was reused to save the free quota; the transaction is new." : "";
+    const reused = cached ? " The model’s earlier answer to this exact invoice was reused to save the free quota; the transaction is new." : "";
     if (!c) return out("modelOut", { kind: "blocked", verdict: "The model called nothing", why: `It read the text and chose not to pay. No transaction.${reused}` }, "good");
     const decided = `pay_invoice(${c.invoice_id}, ${c.payee}, ${c.links} link${c.links === 1 ? "" : "s"})`;
     const said = `The model decided: ${decided}`;
@@ -559,10 +657,10 @@ btn("askModel").addEventListener("click", async () => {
     b.textContent = "Signing what it decided…";
     const cell = await getCell(cfg.live.cell);
     const preimage = cfg.live.links[cell.idx + c.links] ?? randomHex();
-    const o = await send(call(liveAgent, "spend", { preimage, j: c.links, to: c.payee, invoice_hash: await sha256(c.invoice_id) }, "50"));
+    const o = await send(call(liveAgent, "spend", { preimage, j: c.links, to: c.payee, invoice_hash: await sha256(c.invoice_id) }, "80"));
     const why = o.kind === "paid"
       ? `Contract: paid. It really moved ${(c.links * 0.0001).toFixed(4)} NEAR to the permitted supplier. If this invoice was poisoned and the model overpaid, the per-payment cap of 3 links is the most it can lose at once: Writ limits the damage, it does not judge the invoice.`
-      : o.verdict.endsWith("LIMIT") ? "Contract: Rejected: LIMIT. This agent's small budget has run out."
+      : o.verdict.endsWith("LIMIT") ? "Contract: Rejected: LIMIT. This agent’s small budget has run out."
       : o.verdict.endsWith("CHAIN") ? "Contract: Rejected: CHAIN. Another visitor spent this budget link a moment ago. Try again."
       : `Contract: ${o.verdict}. ${o.why}`;
     out("modelOut", { ...o, verdict: said, why: why + reused }, o.kind === "error" ? "err" : o.kind === "paid" ? "good" : "block");
@@ -603,6 +701,8 @@ async function boot() {
   try {
     await Promise.all([pick(), tally()]);
     await resume();
+    book().catch(() => {});
+    if (cfg.asset) $("pMaxUnit").textContent = cfg.asset.symbol;
     setLive(true);
   } catch {
     setLive(false);
