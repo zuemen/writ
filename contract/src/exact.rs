@@ -789,6 +789,87 @@ mod exact {
         assert_eq!(to_seller(&cx, "s1.near"), 0);
     }
 
+    fn book(cx: &Cx) -> Value { cx.peek(|w| w.guarantor_book(acc("g.near"))).unwrap() }
+
+    #[test]
+    fn the_book_adds_up_through_a_default_and_a_repayment() {
+        assert!({ let (cx, _) = world({ let mut o = opt(); o.stake = 0; o }); cx.peek(|w| w.guarantor_book(acc("g.near"))).is_none() }, "no stake, no book");
+        let mut o = opt(); o.vault = U; o.premium = 1000;
+        let (mut cx, r) = world(o);
+        let b0 = book(&cx);
+        assert_eq!(b0["loss_ratio_bps"], Value::Null, "nothing earned yet");
+        assert_eq!((b0["stake"].clone(), b0["utilisation_bps"].clone()), (json_str(10 * U), Value::from(0)));
+        let k = opened(open(&mut cx, r, 2));
+        accept(&mut cx, k);
+        let fee = 2 * U / 10;
+        deliver(&mut cx, k);
+        let b = book(&cx);
+        assert_eq!(b["earned"], json_str(fee));
+        assert_eq!(b["exposure"], json_str(2 * U));
+        assert_eq!(b["stake"], json_str(10 * U + fee));
+        assert_eq!(b["utilisation_bps"], Value::from((2 * U * 10_000 / (10 * U + fee)) as u64));
+        assert_eq!(b["loss_ratio_bps"], Value::from(0));
+        assert_eq!(b["top_sellers"][0]["seller"], "s1.near");
+        assert_eq!(b["top_sellers"][0]["exposure"], json_str(2 * U));
+        cx.now = cred(&cx, k).due_at.0 + 51 * NS;
+        let v = cell(&cx, r).vault.0;
+        cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(k))).unwrap();
+        let debt = 2 * U - v;
+        let b = book(&cx);
+        assert_eq!((b["claims_paid"].clone(), b["recovered"].clone(), b["net_loss"].clone()), (json_str(debt), json_str(0), json_str(debt)));
+        assert_eq!(b["loss_ratio_bps"], Value::from((debt * 10_000 / fee) as u64));
+        assert_eq!(b["exposure"], json_str(0));
+        assert_eq!(b["top_sellers"], serde_json::json!([]), "no exposure left");
+        // 公司用金庫還一部分（enforce），再帶錢還清
+        set_vault(&mut cx, r, debt / 2);
+        cx.now = cred(&cx, k).recourse_until.0 + 1;
+        cx.run("e", &acc("g.near"), None, 0, |w| w.enforce_recourse(U64(k))).unwrap();
+        let b = book(&cx);
+        assert_eq!((b["recovered"].clone(), b["net_loss"].clone()), (json_str(debt / 2), json_str(debt - debt / 2)));
+        let left = cred(&cx, k).debt.0;
+        cx.run("re", &acc("funder.near"), None, left, |w| w.reimburse(U64(k))).unwrap();
+        let b = book(&cx);
+        assert_eq!((b["recovered"].clone(), b["net_loss"].clone(), b["loss_ratio_bps"].clone()), (json_str(debt), json_str(0), Value::from(0)));
+        assert_eq!(b["stake"], json_str(10 * U + fee));
+    }
+
+    #[test]
+    fn the_book_keeps_a_bounded_list_of_the_largest_sellers() {
+        let (mut cx, _) = world(opt());
+        let g = acc("g.near");
+        let names: Vec<AccountId> = (0..MAX_BOOK_SELLERS).map(|i| acc(&format!("b{}.near", i))).collect();
+        let (n2, g2) = (names.clone(), g.clone());
+        let out = cx.run("book", &writ(), None, 0, move |w| {
+            let mut st = Stake::default();
+            for (i, s) in n2.iter().enumerate() {
+                w.add_seller_exposure(&g2, s, i as u128 + 2);
+                w.note_seller(&mut st, &g2, s);
+            }
+            w.note_seller(&mut st, &g2, &n2[0]);
+            assert_eq!(st.sellers.len(), MAX_BOOK_SELLERS, "no duplicate");
+            // 比最小的（2）還小：不換
+            w.add_seller_exposure(&g2, &acc("tiny.near"), 1);
+            w.note_seller(&mut st, &g2, &acc("tiny.near"));
+            assert!(!st.sellers.contains(&acc("tiny.near")));
+            // 一樣大也不換
+            w.add_seller_exposure(&g2, &acc("same.near"), 2);
+            w.note_seller(&mut st, &g2, &acc("same.near"));
+            assert!(!st.sellers.contains(&acc("same.near")));
+            // 比最小的大：換掉最小的
+            w.add_seller_exposure(&g2, &acc("big.near"), 100);
+            w.note_seller(&mut st, &g2, &acc("big.near"));
+            assert_eq!(st.sellers.len(), MAX_BOOK_SELLERS);
+            assert_eq!(st.sellers[0], acc("big.near"));
+            st.amount = U128(1000);
+            w.stakes.insert(g2.clone(), st);
+        });
+        assert!(out.is_some(), "{}", cx.last_err);
+        let b = book(&cx);
+        assert_eq!(b["top_sellers"].as_array().unwrap().len(), 5, "only the top five");
+        assert_eq!(b["top_sellers"][0]["seller"], "big.near");
+        assert_eq!(b["top_sellers"][1]["exposure"], json_str(MAX_BOOK_SELLERS as u128 + 1), "largest first");
+    }
+
     #[test]
     fn settle_may_use_only_its_own_bond() {
         let (mut cx, r, a, _) = two_bonded(3 * U);

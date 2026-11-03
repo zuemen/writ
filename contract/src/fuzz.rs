@@ -155,6 +155,10 @@ mod fuzz {
                 }
                 for k in &credits { let c = w.credits.get(k).unwrap(); if c.status == CreditStatus::Disputed { sum += c.dispute_escrow.0; } }
                 if st.exposure.0 != exp { e.push(format!("exposure {} vs {}", st.exposure.0, exp)); }
+                // 帳簿：已賠 - 已追回 = 所有單還欠保證人的錢；賣方清單有上限
+                let owed: u128 = credits.iter().map(|k| w.credits.get(k).unwrap().debt.0).sum();
+                if st.claims_paid.0 < st.recovered.0 || st.claims_paid.0 - st.recovered.0 != owed { e.push(format!("book claims {} recovered {} owed {}", st.claims_paid.0, st.recovered.0, owed)); }
+                if st.sellers.len() > MAX_BOOK_SELLERS { e.push("book sellers over the cap".into()); }
                 // 每個賣方的曝險 = 它所有未結單的曝險；歸零就不留紀錄
                 for s in ["s1.near", "s2.near"] {
                     let s = acc(s);

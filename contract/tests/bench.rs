@@ -1352,6 +1352,7 @@ struct CreditWorld {
     le: SigningKey,
     le_aid: String,
     ecr_said: String,
+    extra: Vec<Account>,
 }
 
 /// 短時間窗的合約，一棵可賒帳的格。保證人質押 stake NEAR。金庫 30 節。
@@ -1374,15 +1375,15 @@ async fn credit_world_fee(bond_bps: u32, premium_bps: u32, stake: u128, grace: u
 }
 
 /// 信用世界的所有選項。預設：沒保證金、沒費用、質押 5 NEAR、金庫 30 節。
-struct CwOpts { bond: u32, premium: u32, stake: u128, grace: u64, recourse: u64, vault: u128, lei: String, inspect: u64, max_tenor: u64, fee_payer: &'static str, accept_ttl: u64, cap: u32 }
+struct CwOpts { bond: u32, premium: u32, stake: u128, grace: u64, recourse: u64, vault: u128, lei: String, inspect: u64, max_tenor: u64, fee_payer: &'static str, accept_ttl: u64, cap: u32, extra_sellers: u32 }
 impl Default for CwOpts {
     fn default() -> Self {
-        Self { bond: 0, premium: 0, stake: 5, grace: 0, recourse: 1, vault: 30 * UNIT, lei: LEI.to_string(), inspect: 0, max_tenor: 3600, fee_payer: "Buyer", accept_ttl: 2, cap: 0 }
+        Self { bond: 0, premium: 0, stake: 5, grace: 0, recourse: 1, vault: 30 * UNIT, lei: LEI.to_string(), inspect: 0, max_tenor: 3600, fee_payer: "Buyer", accept_ttl: 2, cap: 0, extra_sellers: 0 }
     }
 }
 
 async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
-    let CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei, inspect, max_tenor, fee_payer, accept_ttl, cap } = x;
+    let CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei, inspect, max_tenor, fee_payer, accept_ttl, cap, extra_sellers } = x;
     let worker = near_workspaces::sandbox().await?;
     let writ = worker.dev_deploy(&wasm_bytes()?).await?;
     writ.call("new").args_json(json!({"owner": writ.id(), "unseal_delay_secs": 5,
@@ -1407,6 +1408,12 @@ async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
     let mut o = default_opts(&w);
     o.amc_said = "EAMC_CREDIT".into();
     o.scope = vec![w.merchant.id().clone(), w.verifier.id().clone(), w.funder.id().clone()];
+    let mut extra = vec![];
+    for _ in 0..extra_sellers {
+        let s = w.worker.dev_create_account().await?;
+        o.scope.push(s.id().clone());
+        extra.push(s);
+    }
     o.ecr_commit = hex::encode(Sha256::digest(format!("{}|{}|{}|{}", le_aid, le_pk, ecr_said, ECR_COMMIT_SALT)));
     o.max_links = 10;
     let agent_sk = SecretKey::from_random(KeyType::ED25519);
@@ -1434,7 +1441,7 @@ async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
     }
     let id: String = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_yoctonear(fee(20) + vault)).max_gas().transact().await?.into_result()?.json()?;
     let agent = Account::from_secret_key(w.writ.id().clone(), agent_sk, &w.worker);
-    Ok(CreditWorld { w, cell: id.parse()?, agent, pw, arbiter, le, le_aid, ecr_said })
+    Ok(CreditWorld { w, cell: id.parse()?, agent, pw, arbiter, le, le_aid, ecr_said, extra })
 }
 
 impl CreditWorld {
@@ -2326,6 +2333,56 @@ async fn a85_a_colluding_seller_can_only_reach_its_share_of_the_stake() -> anyho
     cw.funder("settle_by_funder", json!({"credit": first}), 0).await.unwrap();
     cw.seller("accept_credit", json!({"credit": second})).await.unwrap();
     assert_eq!(cw.credit(&second).await["status"], "Accepted");
+    Ok(())
+}
+
+#[tokio::test]
+async fn b34_the_guarantor_sees_its_book() -> anyhow::Result<()> {
+    let cw = credit_world_x(CwOpts { premium: 1000, vault: 2 * UNIT, ..Default::default() }).await?;
+    let w = &cw.w;
+    let book = || async { w.writ.view("guarantor_book").args_json(json!({"account": w.verifier.id()})).await.unwrap().json::<Value>().unwrap() };
+    assert_eq!(book().await["loss_ratio_bps"], Value::Null);
+    let id = cw.delivered(5, 5, 1, "INV-BOOK").await;
+    let b = book().await;
+    let fee = 5 * UNIT / 10;
+    assert_eq!(b["earned"], fee.to_string());
+    assert_eq!(b["exposure"], (5 * UNIT).to_string());
+    assert_eq!(b["top_sellers"][0]["seller"], w.merchant.id().as_str());
+    wait_secs(2).await;
+    cw.seller("claim_default", json!({"credit": id})).await.unwrap();
+    let debt: u128 = cw.credit(&id).await["debt"].as_str().unwrap().parse()?;
+    let b = book().await;
+    assert_eq!(b["claims_paid"], debt.to_string());
+    assert_eq!(b["net_loss"], debt.to_string());
+    assert_eq!(b["loss_ratio_bps"].as_u64().unwrap() as u128, debt * 10_000 / fee);
+    cw.funder("reimburse", json!({"credit": id}), debt).await.unwrap();
+    let b = book().await;
+    assert_eq!(b["recovered"], debt.to_string());
+    assert_eq!(b["net_loss"], "0");
+    bench("B34", "guarantor book: stake, exposure, earned, claims, recovered, loss ratio, top sellers", "adds up", "adds up", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a86_throwaway_sellers_cannot_grow_the_book_without_limit() -> anyhow::Result<()> {
+    let extra: u32 = 10;
+    let cw = credit_world_x(CwOpts { extra_sellers: extra, accept_ttl: 3600, ..Default::default() }).await?;
+    let w = &cw.w;
+    let mut link = 0;
+    for (i, s) in cw.extra.iter().enumerate() {
+        link += 1;
+        let due = now_ns(w).await? + 3_000 * SEC;
+        let v: Value = cw.agent.call(w.writ.id(), "open_credit").args_json(json!({"preimage": cw.pw.link(link), "j": 1, "to": s.id(), "invoice_hash": hex::encode(Sha256::digest(format!("INV-{}", i))), "due_at": due.to_string()}))
+            .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
+        let id = v["CreditOpened"]["credit"].as_str().unwrap_or_else(|| panic!("{}", v)).to_string();
+        s.call(w.writ.id(), "accept_credit").args_json(json!({"credit": id})).gas(near_workspaces::types::Gas::from_tgas(100)).transact().await?.into_result()?;
+    }
+    let st: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
+    assert_eq!(st["sellers"].as_array().unwrap().len(), 8, "the list has a cap");
+    assert_eq!(st["exposure"], (extra as u128 * UNIT).to_string(), "the exposure is still all there");
+    let b: Value = w.writ.view("guarantor_book").args_json(json!({"account": w.verifier.id()})).await?.json()?;
+    assert_eq!(b["top_sellers"].as_array().unwrap().len(), 5);
+    bench("A86", "throwaway sellers grow the guarantor's record until every accept runs out of gas", "list stays at 8", "list stays at 8", gain(w).await);
     Ok(())
 }
 

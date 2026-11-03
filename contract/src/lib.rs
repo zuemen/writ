@@ -77,6 +77,9 @@ const GAS_FOR_FT: Gas = Gas::from_tgas(10);
 /// 賣方規則的儲存押金（1000 bytes，夠放 MAX_POLICY_GUARANTORS 個帳號）。第一次設定時收，刪除規則不退。
 pub const SELLER_POLICY_STORAGE: u128 = 10_000_000_000_000_000_000_000;
 pub const MAX_POLICY_GUARANTORS: usize = 8;
+/// 保證人帳簿最多記幾個賣方。滿了就換掉曝險最小的，所以 top_sellers 只是前幾大，不是完整清單。
+pub const MAX_BOOK_SELLERS: usize = 8;
+const TOP_SELLERS: usize = 5;
 
 #[derive(BorshStorageKey)]
 #[near]
@@ -273,6 +276,9 @@ pub struct Stake {
     pub exposure: U128,
     pub unstake_at: U64, // 0 = 沒有申請提領
     pub earned: U128,    // 累計收到的保證費
+    pub claims_paid: U128, // 累計用質押賠給賣方的金額
+    pub recovered: U128,   // 累計從公司追回的金額
+    pub sellers: Vec<AccountId>, // 曝險來源的賣方（有上限，見 MAX_BOOK_SELLERS）
 }
 
 /// 賣方的自動授信規則：訂單符合就出貨，不符合就回傳原因。
@@ -1302,6 +1308,24 @@ impl Contract {
         self.stakes.get(&account).cloned()
     }
 
+    /// 保證人的帳簿：承擔多少、賺多少、賠多少、追回多少。
+    /// net_loss = 已賠 - 已追回；loss_ratio_bps = net_loss / 累計費用，還沒賺過費用時是 null。
+    pub fn guarantor_book(&self, account: AccountId) -> Option<Value> {
+        let st = self.stakes.get(&account)?;
+        let net_loss = st.claims_paid.0.saturating_sub(st.recovered.0);
+        let utilisation = if st.amount.0 == 0 { 0 } else { st.exposure.0.saturating_mul(10_000) / st.amount.0 };
+        let loss_ratio = if st.earned.0 == 0 { None } else { Some(net_loss.saturating_mul(10_000) / st.earned.0) };
+        let mut top: Vec<(u128, &AccountId)> = st.sellers.iter().map(|s| (self.seller_exposure_of(&account, s), s)).filter(|x| x.0 > 0).collect();
+        top.sort_by(|a, b| b.0.cmp(&a.0));
+        top.truncate(TOP_SELLERS);
+        Some(serde_json::json!({
+            "stake": st.amount, "exposure": st.exposure, "utilisation_bps": utilisation.min(u64::MAX as u128) as u64,
+            "earned": st.earned, "claims_paid": st.claims_paid, "recovered": st.recovered, "net_loss": U128(net_loss),
+            "loss_ratio_bps": loss_ratio.map(|r| r.min(u64::MAX as u128) as u64),
+            "top_sellers": top.iter().map(|(e, s)| serde_json::json!({"seller": s, "exposure": U128(*e)})).collect::<Vec<_>>(),
+        }))
+    }
+
     pub fn claimable_of(&self, account: AccountId) -> U128 {
         U128(self.claimable.get(&account).copied().unwrap_or(0))
     }
@@ -1535,8 +1559,11 @@ impl Contract {
         st.amount = U128(st.amount.0 + q.charge);
         st.earned = U128(st.earned.0 + q.charge);
         st.exposure = U128(st.exposure.0 + q.exposure);
-        self.stakes.insert(t.guarantor.clone(), st);
         self.add_seller_exposure(&t.guarantor, &cr.seller, q.exposure);
+        if q.exposure > 0 {
+            self.note_seller(&mut st, &t.guarantor, &cr.seller);
+        }
+        self.stakes.insert(t.guarantor.clone(), st);
         t.bond_locked = U128(t.bond_locked.0 + q.bond);
         self.terms.insert(cr.root.0, t);
         cr.bond_locked = U128(q.bond);
@@ -1888,6 +1915,7 @@ impl Contract {
         st.exposure = U128(st.exposure.0 - cr.exposure.0);
         require!(st.amount.0 >= left, "GUARANTOR_SHORT");
         st.amount = U128(st.amount.0 - left);
+        st.claims_paid = U128(st.claims_paid.0 + left);
         self.stakes.insert(t.guarantor.clone(), st);
         self.sub_seller_exposure(&t.guarantor, &cr.seller, cr.exposure.0);
         self.pay_seller(&cr);
@@ -1928,6 +1956,7 @@ impl Contract {
         self.cells.insert(cr.root.0, r);
         let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
         st.amount = U128(st.amount.0 + cr.debt.0);
+        st.recovered = U128(st.recovered.0 + cr.debt.0);
         self.stakes.insert(t.guarantor.clone(), st);
         self.vault_total += due;
         if d > due {
@@ -1966,6 +1995,7 @@ impl Contract {
             self.cells.insert(cr.root.0, root);
             let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
             st.amount = U128(st.amount.0 + pay);
+            st.recovered = U128(st.recovered.0 + pay);
             self.stakes.insert(t.guarantor.clone(), st);
             cr.debt = U128(cr.debt.0 - pay);
         }
@@ -2048,6 +2078,24 @@ impl Contract {
         cr.amount = U128(final_amount);
         cr.bond_locked = U128(bond);
         cr.exposure = U128(exposure);
+    }
+
+    /// 帳簿記下這個賣方。滿了就換掉曝險最小的，前提是它比這個賣方小。
+    fn note_seller(&self, st: &mut Stake, guarantor: &AccountId, seller: &AccountId) {
+        if st.sellers.contains(seller) {
+            return;
+        }
+        if st.sellers.len() < MAX_BOOK_SELLERS {
+            st.sellers.push(seller.clone());
+            return;
+        }
+        let cur = self.seller_exposure_of(guarantor, seller);
+        let low = st.sellers.iter().enumerate().map(|(i, s)| (self.seller_exposure_of(guarantor, s), i)).min();
+        if let Some((e, i)) = low {
+            if e < cur {
+                st.sellers[i] = seller.clone();
+            }
+        }
     }
 
     fn seller_exposure_of(&self, guarantor: &AccountId, seller: &AccountId) -> u128 {
