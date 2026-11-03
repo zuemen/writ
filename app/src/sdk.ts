@@ -1,5 +1,5 @@
 /**
- * 給 agent 開發者用的最小介面：把付款結果分成四種，不用自己解析 nearcore 錯誤。
+ * Minimal interface for agent developers: payment results come in a few kinds, so you do not have to parse nearcore errors.
  *
  *   const agent = new WritAgent({ contract, rpc, agentKey });
  *   const r = await agent.pay({ invoice: "INV-0042", to: "supplier.near", links: 1, preimage });
@@ -10,22 +10,22 @@ import { Account, JsonRpcProvider, KeyPairSigner, actions, teraToGas, type KeyPa
 
 export type PayResult =
   | { outcome: "paid"; amount: string; remainingLinks: number; txHash: string }
-  /** 合約拒絕：交易成功、有 hash，理由是 EXPIRED／SCOPE／INVOICE／DUPLICATE／PER_TX／LIMIT／CHAIN／RATE／FUNDS／TRANSFER_FAILED */
+  /** The contract refused: the transaction succeeded and has a hash. reason is EXPIRED, SUSPENDED, FROZEN, SCOPE, INVOICE, DUPLICATE, PER_TX, LIMIT, CHAIN, RATE, FUNDS or TRANSFER_FAILED. */
   | { outcome: "rejected"; reason: string; strikes: number; tripped: boolean; txHash: string }
-  /** 鑰匙已被撤銷或 tripwire 刪除，連交易都送不出去 */
+  /** The key was revoked or deleted by the tripwire, so no transaction can be sent. */
   | { outcome: "revoked"; detail: string }
-  /** gas 額度用完：不是政策事件，法人 refresh_key 後可繼續 */
+  /** The gas allowance ran out. Not a policy event; the funder can call refresh_key and the agent continues. */
   | { outcome: "out_of_gas"; detail: string }
-  /** 其他錯誤（網路、協定層拒絕）：不要當成付款已失敗或已成功 */
+  /** Any other error (network, protocol refusal). Do not treat it as the payment having failed or succeeded. */
   | { outcome: "error"; detail: string };
 
 export type PayRequest = { invoice: string; to: string; links: number; preimage: string };
 
-/** 賣方的自動授信規則。guarantors 空陣列 = 任何保證人都接受。 */
+/** A seller's automatic credit rule. asset is required (null means NEAR). Empty guarantors or arbiters means any. */
 export type SellerPolicy = { max_amount: string; max_tenor_secs: string; min_bond_bps: number; max_defaults: number; guarantors: string[]; asset: string | null; max_fee_bps: number; arbiters: string[] };
-/** check_order 的回傳。ok = 現在 accept_credit 會成功；reasons 列出所有不符合的（ORDER_TOO_LARGE、BOND_SHORT、...）。 */
+/** Result of check_order. ok: the rule asked about, order state and money all pass. would_accept: accept_credit would succeed now, under the stored rule. reasons lists every failure (ORDER_TOO_LARGE, BOND_SHORT, ...). */
 export type OrderCheck = { ok: boolean; would_accept: boolean; reasons: string[]; order: Record<string, unknown> };
-/** 代幣樹帶錢進來的 ft_transfer_call msg，與合約 ft_on_transfer 的格式一致。 */
+/** The ft_transfer_call msg for bringing money into a token tree; the same format as the contract's ft_on_transfer. */
 export const ftMsg = {
   fund: (cell: string) => `fund:${cell}`,
   stake: () => "stake",
@@ -34,7 +34,7 @@ export const ftMsg = {
   reimburse: (credit: string) => `reimburse:${credit}`,
 };
 
-/** 賣方這邊的三個動作：問規則、設規則、接受或交貨（finalAmount = 用量單的實際金額）。 */
+/** The seller's actions: ask about a rule, set a rule, accept, or deliver (finalAmount is a usage order's actual amount). */
 export class WritSeller {
   private account: Account;
   private provider: JsonRpcProvider;
@@ -48,7 +48,7 @@ export class WritSeller {
   check(credit: string, policy?: SellerPolicy): Promise<OrderCheck> {
     return this.provider.callFunction({ contractId: this.cfg.contract, method: "check_order", args: policy ? { credit, policy } : { credit } }) as Promise<OrderCheck>;
   }
-  /** 第一次設定要附 0.015 NEAR 儲存押金（deposit），之後改規則不用。 */
+  /** The first time needs the 0.015 NEAR storage deposit (deposit); later changes do not, and any excess is sent back. */
   setPolicy(policy: SellerPolicy | null, deposit = 0n) {
     return this.send("set_seller_policy", { policy }, deposit);
   }
