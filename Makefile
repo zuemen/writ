@@ -65,7 +65,7 @@ bounty: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/bounty-setup.ts
 	bash scripts/build_site.sh
 
-# Agent for the site's "Fool a live model": small real budget (run make testnet first). Private keys stay in .demo-testnet/, not in the repo
+# The covered mandate behind the site's "Fool the model": USDC, cover only, restricted company and arbiter keys (run make testnet first; acme needs testnet USDC). WRIT_LIVE_N sets the budget links. Private keys stay in .demo-testnet/, not in the repo
 live-agent: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/live-setup.ts
 
