@@ -3165,7 +3165,7 @@ async fn b44_the_storage_fee_pays_for_the_largest_record() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn a101_one_open_claim_one_claim_per_payment_inside_the_window() -> anyhow::Result<()> {
-    let cw = cover_world(CvOpts { window: 14, dispute: 2, ..Default::default() }).await?;
+    let cw = cover_world(CvOpts { window: 14, dispute: 4, ..Default::default() }).await?;
     cw.activate().await.unwrap();
     cw.paid(1, 1, "INV-1").await;
     cw.paid(2, 1, "INV-2").await;
