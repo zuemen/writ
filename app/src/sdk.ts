@@ -55,6 +55,18 @@ export class WritSeller {
   accept(credit: string) {
     return this.send("accept_credit", { credit });
   }
+  /** What a seller reads before anything else. `cell` is the mandate id the agent gives you. */
+  riskCard(cell: string): Promise<Record<string, unknown> | null> {
+    return this.provider.callFunction({ contractId: this.cfg.contract, method: "risk_card", args: { cell } }) as Promise<Record<string, unknown> | null>;
+  }
+  /** After delivery, the due date and the inspection window, with no approval needed. */
+  claimDefault(credit: string) {
+    return this.send("claim_default", { credit });
+  }
+  /** Pass the token account for a token order, or null for NEAR. */
+  withdraw(asset: string | null = null) {
+    return this.send("withdraw", { asset });
+  }
   deliver(credit: string, deliveryHash: string, finalAmount?: string) {
     return this.send("mark_delivered", finalAmount ? { credit, delivery_hash: deliveryHash, final_amount: finalAmount } : { credit, delivery_hash: deliveryHash });
   }
@@ -64,6 +76,16 @@ export class WritAgent {
   private account: Account;
   constructor(private cfg: { contract: string; rpc: string; agentKey: KeyPairString }) {
     this.account = new Account(cfg.contract, new JsonRpcProvider({ url: cfg.rpc }), KeyPairSigner.fromSecretKey(cfg.agentKey));
+  }
+
+  /** Order on credit: spends budget links, moves no money. dueAt is Unix nanoseconds as a string. */
+  openCredit(req: { invoice: string; to: string; links: number; preimage: string; dueAt: string }) {
+    const invoice_hash = createHash("sha256").update(req.invoice).digest("hex");
+    return this.account.signAndSendTransaction({ receiverId: this.cfg.contract, actions: [actions.functionCall("open_credit", { preimage: req.preimage, j: req.links, to: req.to, invoice_hash, due_at: req.dueAt }, teraToGas("50"), 0n)], throwOnFailure: false, waitUntil: "FINAL" } as any);
+  }
+  /** Settle an accepted order from this agent's vault. */
+  settle(credit: string) {
+    return this.account.signAndSendTransaction({ receiverId: this.cfg.contract, actions: [actions.functionCall("settle", { credit }, teraToGas("50"), 0n)], throwOnFailure: false, waitUntil: "FINAL" } as any);
   }
 
   async pay({ invoice, to, links, preimage }: PayRequest): Promise<PayResult> {

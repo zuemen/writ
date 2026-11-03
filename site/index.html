@@ -200,9 +200,10 @@
     .hero > div:first-child { display:contents; }
     .hero h1 { order:1; margin:0; font-size:clamp(34px,10vw,46px); }
     .hero .eyebrow.reveal { order:0; margin:0; }
-    .hero .org { order:2; }
-    .hero .lead { order:3; margin:0; }
+    .hero .lead { order:2; margin:0; }
+    .hero .scope { order:3; margin:0; }
     .hero .cta { order:4; margin:0; }
+    .hero .org { order:5; }
     .verdict4 { grid-column:1 / -1; }
     .big { gap:4px; }
     .big .num { font-size:64px; }
@@ -227,6 +228,17 @@
   }
 
   /* v2 */
+  .scope { font-size:14px; color:var(--soft); max-width:52ch; margin:-14px 0 24px; }
+  .final { max-width:320px; margin:10px 0 0; font-size:14px; }
+  .final input { margin-top:4px; }
+  @media (max-width:700px) {
+    .cmp thead { display:none; } .scroll .cmp { min-width:0; }
+    .cmp, .cmp tbody, .cmp tr, .cmp td { display:block; width:100%; }
+    .cmp tr { border-top:1px solid var(--rule-strong); padding:6px 0; }
+    .cmp td { border:0; padding:4px 13px; white-space:normal; }
+    .cmp td:empty { display:none; }
+    .cmp td[data-l]::before { content:attr(data-l) ": "; font-weight:600; }
+  }
   .rule { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
   .rule label { margin:0; font-size:12px; line-height:1.25; display:flex; flex-direction:column; justify-content:flex-end; gap:4px; color:var(--soft); position:relative; }
   .rule input { padding:6px 7px; font-size:14px; }
@@ -276,7 +288,8 @@
     <div>
       <div class="eyebrow reveal">Payment guarantees for AI agents, on NEAR</div>
       <h1 class="reveal d1">Net-30 for AI agents <em>you’ve never met.</em></h1>
-      <p class="lead reveal d2">Set one rule. If a guarantor has enough locked for this order, ship. If the buyer doesn’t pay, claim it, with no one’s approval.</p>
+      <p class="lead reveal d2">An API or compute bill isn’t known until the month ends, so it can’t be prepaid exactly. Set one rule: if a guarantor has staked enough to back this order, ship. If the buyer doesn’t pay, claim it, with no one’s approval.</p>
+      <p class="scope reveal d2">You don’t need to know the buyer. The guarantor does, and it must have approved your account in that company’s mandate first, up to 16 sellers.</p>
       <div class="cta reveal d3"><a class="btn" href="#run">Try it as a seller</a><a class="btn ghost" href="#numbers">Run the guarantor’s numbers</a></div>
     </div>
     <div class="org reveal d2" id="org"><div class="org-in">
@@ -289,11 +302,12 @@
       </div>
       <div class="decision" id="decision" aria-live="polite"><b id="decWord">…</b><span id="decWhy"></span></div>
       <div class="presets" style="margin:8px 0 14px"><button class="chip" data-rule="bond">Require a 50% bond</button><button class="chip" data-rule="defaults">Allow no past defaults</button><button class="chip" data-rule="reset">Reset</button></div>
-      <div class="eyebrow" style="margin-bottom:10px">This order · live on testnet · <span id="treeNo">…</span></div>
+      <div class="eyebrow" style="margin-bottom:10px">Next order · live on testnet · <span id="treeNo">…</span></div>
       <dl class="card-row">
         <dt>Company</dt><dd id="rcCompany"><span class="sealed">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span> sealed</dd>
         <dt>Guarantor</dt><dd id="rcGuarantor">…</dd>
-        <dt>Locked by guarantor</dt><dd id="rcStake">…</dd>
+        <dt>Staked by guarantor</dt><dd id="rcStake">…</dd>
+        <dt>Term</dt><dd id="rcTerm">…</dd>
         <dt>Credit limit</dt><dd id="rcLimit">…</dd>
         <dt>Bond from company</dt><dd id="rcBond">…</dd>
         <dt>Guarantee fee</dt><dd id="rcFee">…</dd>
@@ -326,7 +340,8 @@
     </div>
     <div class="step" data-step="2">
       <div class="n">2</div>
-      <div><h3>Your rule decides</h3><p id="p2">Accepting locks the bond and the guarantor’s money for this order, so no other seller can drain them. The contract checks your rule again when you accept.</p></div>
+      <div><h3>Your rule decides</h3><p id="p2">Accepting locks the bond and the guarantor’s money for this order, so no other seller can drain them. The contract checks your rule again when you accept.</p>
+        <label class="final">Usage-priced? Final bill, optional, at most the order<input id="finalBill" type="number" min="0" step="0.01" placeholder="the full order"></label></div>
       <div class="act"><button class="btn" id="s2" disabled>Accept and ship</button></div>
       <div class="out" id="o2"></div>
     </div>
@@ -360,15 +375,15 @@
   <div class="scroll"><table class="cmp">
     <thead><tr><th>Option</th><th>Cost</th><th>Seller gets paid</th><th>It beats Writ when</th><th>Writ beats it when</th></tr></thead>
     <tbody>
-      <tr class="us"><td>Writ</td><td>$156&ndash;260 <small>(model, 1% loss)</small></td><td>On the due date</td><td></td><td></td></tr>
+      <tr class="us"><td>Writ</td><td>$190&ndash;363 <small>(model: 1% loss, 60% of stake in use), plus the buyer’s $2,000 bond locked for 37 days</small></td><td>Due date if the buyer pays; day 37 if not</td><td></td><td></td></tr>
       <tr><td>Non-recourse B2B BNPL</td><td>$261&ndash;350 <small><a href="https://resolvepay.com/blog/best-b2b-payment-solutions">vendor claim</a></small></td><td>Within a day, about 90%</td><td>You want the cash now. <b>This is the strongest alternative.</b></td><td>Stablecoin settlement, machine orders, a seller who can only write a rule</td></tr>
       <tr><td>Corporate card</td><td>$290 <small><a href="https://stripe.com/pricing">Stripe list price</a></small></td><td>Soon after</td><td>The buyer already has a card</td><td>Agent disputes: <a href="https://worldpay.com/insights/articles/agentic-commerce-liability-is-still-being-written">“no liability shift exists yet”</a>, and issuers tend to side with the cardholder</td></tr>
       <tr><td>Bank standby L/C</td><td>$10&ndash;30 by the day <small><a href="https://www.lawinsider.com/clause/standby-letter-of-credit-fee">1&ndash;3% a year, samples</a></small> plus minimums</td><td>On presentation</td><td>Large orders, and a buyer with a bank line. <b>Much cheaper.</b></td><td>Small orders under the minimum fee; a decision in seconds</td></tr>
-      <tr><td>Credit insurance + net-30</td><td>0.05&ndash;1% of annual turnover <small><a href="https://www.iwoca.co.uk/trade-credit/trade-credit-insurance-cost">secondary source</a></small></td><td>When the buyer pays</td><td>You insure a whole book of known buyers. <b>Cheapest.</b></td><td>A first order from an unknown buyer; stop-ship reaches every seller at once</td></tr>
+      <tr><td>Credit insurance + net-30</td><td>0.05&ndash;1% of annual turnover <small><a href="https://www.iwoca.co.uk/trade-credit/trade-credit-insurance-cost">secondary source</a></small></td><td>When the buyer pays</td><td>You insure a whole book of known buyers. <b>Cheapest.</b></td><td>A first order from an unknown buyer; stop-ship reaches every seller of the mandate at once</td></tr>
       <tr><td>Escrow or prepay</td><td>The buyer’s cost of cash</td><td>Up front or on release</td><td>You know the amount, and the buyer has cash. <b>Often the right answer.</b></td><td>Usage-priced orders, where the amount is unknown until delivery</td></tr>
     </tbody>
   </table></div>
-  <p class="note">What is genuinely on-chain: reserves you can verify for this exact order, agent authority checked before it can commit, and one stop-ship for every seller. We found no insurer covering agent non-payment, which may mean a gap or no demand. Nobody has been interviewed yet; treat all of this as a hypothesis.</p>
+  <p class="note">What is genuinely on-chain: reserves you can verify for this exact order, agent authority checked before it can commit, and one stop-ship across every seller of that mandate. We found no insurer covering agent non-payment, which may mean a gap or no demand. Nobody has been interviewed yet; treat all of this as a hypothesis.</p>
 </div></section>
 
 <section id="numbers"><div class="wrap">
@@ -393,7 +408,7 @@
         <div><span>Guarantor’s yearly return on stake</span><b id="rR">…</b></div>
         <div><span>Buyer needs a cost of cash above this for it to beat escrow, if the buyer pays the fee</span><b id="rC">…</b></div>
       </div>
-      <p class="note"><span class="mono">fee = (p(1−b) + (1−b)·c·D/365) / (1−e)</span>. Our read: fully reserved, this earns less than an insurer, so the first guarantor is more likely a platform that already hosts the buyer’s agents and bills them than a financial investor. That is a hypothesis; nobody has signed up. A <a href="https://github.com/zuemen/writ/blob/main/docs/ECONOMICS.md">worked example with sources</a> is in the repo.</p>
+      <p class="note"><span class="mono">fee = (p(1−b) + (1−b)·c·D/365/u) / (1−e)</span>. Our read: fully reserved, this earns less than an insurer, so the first guarantor is more likely a platform that already hosts the buyer’s agents and bills them than a financial investor. That is a hypothesis; nobody has signed up. A <a href="https://github.com/zuemen/writ/blob/main/docs/ECONOMICS.md">worked example with sources</a> is in the repo.</p>
       <div id="book"></div>
     </div>
   </div>
@@ -426,7 +441,7 @@
     <div class="presets"><button class="chip" data-preset="inflate">Inflate the amount</button><button class="chip" data-preset="swap">Swap the payee</button><button class="chip" data-preset="again">Pay a paid invoice again</button><button class="chip" data-preset="clean">A clean invoice</button></div>
     <button class="btn" id="askModel" disabled>Let the model read it</button>
     <div class="out" id="modelOut"></div>
-    <p class="note"><span id="liveStat"></span> It has a small real budget: its next budget links ship with this page, so a clean invoice really pays the supplier, and anyone can spend them, but only to that supplier and at most 3 links at a time. The model is Llama 3.3 on Cloudflare Workers AI’s free tier with a plain prompt: not NEAR AI, no TEE. The server only asks the model; it holds no key.</p>
+    <p class="note"><span id="liveStat"></span> It has a small real budget: its next budget links ship with this page, so a clean invoice really pays the seller, and anyone can spend them, but only to that seller and at most 3 links at a time. The model is Llama 3.3 on Cloudflare Workers AI’s free tier with a plain prompt: not NEAR AI, no TEE. The server only asks the model; it holds no key.</p>
   </div>
   <div class="big"><div class="num">0</div><p>injected payments went through, in 13 attacks where a real model did what the invoice told it to. Clean invoices were still paid, 4 of 4.</p></div>
   <div class="scroll"><table>
@@ -443,7 +458,7 @@
 <section id="steal"><div class="wrap">
   <div class="eyebrow">Open challenge</div>
   <h2 class="title">This is an AI agent’s private key. Steal its money.</h2>
-  <p class="sub">With a plain spending limit, a thief holding the key can spend up to that limit. Here, without the employee’s next budget link, the key alone moves nothing. This agent keeps its key after failures so you can keep trying.</p>
+  <p class="sub">With a plain spending limit, a thief holding the key can spend up to that limit. Here, without the employee’s next budget link, the key alone moves nothing. A thief who also takes released links can spend those, to permitted payees only. This agent’s budget is in NEAR, and it keeps its key after failures so you can keep trying.</p>
   <div class="steal">
     <div>
       <div class="key" id="key">loading…</div>
@@ -456,7 +471,7 @@
     </div>
     <div>
       <div class="attacks">
-        <button data-attack="guess">Pay the supplier with a guessed budget link</button>
+        <button data-attack="guess">Pay the seller with a guessed budget link</button>
         <button data-attack="replay">Replay the budget link already on-chain</button>
         <button data-attack="drain">Drain 50 links at once</button>
         <button data-attack="transfer">Send NEAR directly with this key</button>
@@ -507,10 +522,10 @@
   <div class="eyebrow">Check it yourself</div>
   <h2 class="title">Every number has a command.</h2>
   <div class="proof">
-    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>78 / 78</b><span>attacks blocked in the bench; 0 gained by the attacker account</span></a>
-    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>16 agents, 1 tx</b><span>a full tree shut off in one transaction (17 Tgas)</span></a>
+    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>96 / 96</b><span>attacks blocked in the bench (<span class="mono">make test</span>)</span></a>
+    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>16 agents, 1 tx</b><span>a full tree shut off in one transaction (18 Tgas)</span></a>
     <a href="https://github.com/zuemen/writ/blob/main/keri/test_forgeries.py"><b>14</b><span>forged or stale credential chains the verifier refuses</span></a>
-    <a href="https://github.com/zuemen/writ/blob/main/docs/testnet-usdc.md"><b>0.1 USDC</b><span>paid in Circle’s testnet USDC, injection rejected</span></a>
+    <a href="https://github.com/zuemen/writ/blob/main/docs/testnet-usdc.md"><b>USDC</b><span>credit orders settle in Circle’s testnet USDC on this page</span></a>
   </div>
   <ul class="limits">
     <li>Testnet only, no real users, and no real guarantor has underwritten anything.</li>
@@ -519,7 +534,7 @@
   </ul>
   <details class="limits-more"><summary>All known limits</summary><ul class="limits">
     <li>The vLEI schemas are GLEIF’s; the issuers are mocks with a fictional LEI, and no real QVI issued anything. The Agent Mandate Credential schema is a proposal, since GLEIF has not published one.</li>
-    <li>Testnet only, no real users, and no real guarantor has underwritten anything. The fee here is a demo number: 2%. Who would guarantee an agent, and at what price, is an open commercial question. Credit is in NEAR only; the terms text is a placeholder no lawyer has reviewed.</li>
+    <li>Testnet only, no real users, and no real guarantor has underwritten anything. The fee here is a demo number: 2%. Who would guarantee an agent, and at what price, is an open commercial question. The selling story here runs in Circle’s testnet USDC; the terms text is a placeholder no lawyer has reviewed.</li>
     <li>A guarantor that also holds the company’s legal-entity key could name that company falsely: the contract checks the signature, and the link between that key and the LEI is checked off-chain.</li>
     <li>This page’s config holds the fictional company’s LEI and salt so the guarantor’s step runs in your browser; a real guarantor keeps them private.</li>
     <li>The company’s LEI stays a commitment until it is disclosed, but funding accounts and payments are public and linkable.</li>

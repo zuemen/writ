@@ -14,10 +14,10 @@ You sell to an AI agent you have never met. You set a rule, check each order aga
 near contract call-function as-read-only writ-net30.testnet risk_card json-args '{"cell":"<id>"}' network-config testnet now
 ```
 
-`<id>` is the mandate id the agent gives you, or the `cell` in its order. The site shows one. If you have only `curl`, this is the same call for mandate 25; the result is an array of bytes holding JSON:
+`<id>` is the mandate id the agent gives you, or the `cell` in its order. The site shows one. If you have only `curl`, this is the same call for mandate 4; the result is an array of bytes holding JSON:
 
 ```
-curl -s https://test.rpc.fastnear.com -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":"1","method":"query","params":{"request_type":"call_function","finality":"final","account_id":"writ-net30.testnet","method_name":"risk_card","args_base64":"eyJjZWxsIjoiMjUifQ=="}}'
+curl -s https://test.rpc.fastnear.com -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":"1","method":"query","params":{"request_type":"call_function","finality":"final","account_id":"writ-net30.testnet","method_name":"risk_card","args_base64":"eyJjZWxsIjoiNCJ9"}}'
 ```
 
 What to read:
@@ -145,7 +145,7 @@ Windows differ by deployment and no view returns them ([CONTRACT.md](CONTRACT.md
 | `ftMsg` | `ft_transfer_call` msg strings: `fund`, `stake`, `settle`, `dispute`, `reimburse` |
 | `SellerPolicy`, `OrderCheck`, `PayResult`, `PayRequest` | Types |
 
-**Not in the SDK:** `open_credit`, `settle`, `hire`, `dismiss` on the agent; `risk_card`, `claim_default`, `withdraw` on the seller; anything for a company or guarantor. Those calls are shown in `app/src/credit-demo.ts` (NEAR) and `app/src/credit-usdc-demo.ts` (token). `app/src/flow.ts` wraps the demo's accounts and is not a library.
+**Not in the SDK:** `hire` and `dismiss` on the agent; anything for a company or guarantor. Those calls are shown in `app/src/credit-demo.ts` and `app/src/flow.ts`.
 
 ```ts
 const agent = new WritAgent({ contract, rpc, agentKey });
@@ -172,7 +172,7 @@ The guarantor signs; the company must submit from the account named in the signa
 {"args":{
   "amc_said":"E…","issuer_aid":"E…","issuer_pk":"<64 hex>","agent_pk":"ed25519:…",
   "w0":"<64 hex>","n":50,"unit":"100000000000000000000000",
-  "scope":["seller.testnet"],"valid_until":"1790000000000000000",
+  "scope":["seller.testnet"],"valid_until":"1830000000000000000",
   "daily_links":20,"max_links":10,"max_strikes":3,
   "lei_commit":"<64 hex>","ecr_commit":"<64 hex>",
   "verifier":"guarantor.testnet","attested_at":"1780000000000000000","signature":"<128 hex>",
@@ -201,7 +201,7 @@ Signed with the agent's function-call key, on the contract account. `preimage` i
 on `spend` pays now.
 
 ```json
-{"preimage":"<64 hex>","j":1,"to":"seller.testnet","invoice_hash":"<64 hex>","due_at":"1790000000000000000"}
+{"preimage":"<64 hex>","j":1,"to":"seller.testnet","invoice_hash":"<64 hex>","due_at":"1830000000000000000"}
 ```
 
 on `open_credit` orders on credit and returns `{"CreditOpened":{"cell","credit","amount","due_at"}}`. `{"credit":"7"}` on `settle` pays it. A refusal is a normal result with a reason: [Rejected reasons](ERRORS.md#rejected-reasons). Treat `SCOPE`, `DUPLICATE` and `PER_TX` as a possible injection, and don't retry them.

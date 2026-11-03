@@ -66,7 +66,7 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 
 | What | Result | Where |
 |---|---|---|
-| Attack bench | 96 attacks blocked, attacker's balance measured at the end of each test; 75 unit, exact-value and fuzz tests; 80 sandbox tests | [`docs/bench.md`](docs/bench.md) |
+| Attack bench | 96 attacks blocked, each ending in the expected refusal; 75 unit, exact-value and fuzz tests; 80 sandbox tests | [`docs/bench.md`](docs/bench.md) |
 | Mutation testing | {MUTANTS}, and why the bench alone was not enough | [`docs/TESTING.md`](docs/TESTING.md#mutation-testing) |
 | Live on NEAR testnet | contract [`writ-net30.testnet`](https://testnet.nearblocks.io/address/writ-net30.testnet), no full-access key; every step of both stories with its transaction; one payment in Circle's testnet USDC | [`docs/testnet-credit.md`](docs/testnet-credit.md), [`docs/testnet.md`](docs/testnet.md), [`docs/testnet-usdc.md`](docs/testnet-usdc.md) |
 | Real models get fooled; the money doesn't move | two Gemini models followed injections in 13 of 20 payment attacks and 8 of 12 credit-order attacks; none of those went through. Small samples on a local sandbox, not a benchmark | [`docs/attack-live.md`](docs/attack-live.md), [`docs/attack-credit-live.md`](docs/attack-credit-live.md) |
@@ -74,12 +74,13 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 
 ## Economics
 
-- The lowest fee that does not lose money is 1.56–2.60% of the order at a 1% loss rate, a 20% bond and 37 days.
+- The lowest fee that does not lose money is 1.90–3.63% of the order at a 1% loss rate, a 20% bond, 37 days and 60% of stake in use. That overlaps B2B BNPL.
 - At a 2.25% fee, per $1M staked for a year: 6.6–10.9% return at a 1% loss rate, −23.0% at 6%.
 - This is a model, not a market: nobody has underwritten anything on Writ, and Writ takes no protocol fee. [`docs/ECONOMICS.md`](docs/ECONOMICS.md)
 
 ## Not implemented / limits
 
+- **"Never met" has a condition.** You don't need to know the buyer. The guarantor does, and it must have approved your account in that company's mandate first, up to 16 sellers per mandate; adding one means a new mandate.
 - **Collusion is capped, not stopped.** A company and a straw seller inside the mandate can take an order's value minus the bond and fee from the guarantor's stake, up to `seller_cap_bps` per seller account.
 - **The delivery proof is a hash.** The contract cannot tell a real delivery from a false one; a dispute handles that, and the arbiter is one account.
 - **Naming recovers no money.** Disclosure is only a public default record, and `terms_hash` commits to demo text no lawyer has reviewed.

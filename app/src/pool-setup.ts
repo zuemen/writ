@@ -71,7 +71,7 @@ if (!pool.seller) {
   pool.guarantor = await scopedKey(a.verifier, ["enforce_recourse", "credit_unseal"], "1.5");
   pool.company = DEMO_COMPANY;
   // 賣方規則先存一條寬鬆的（押金要帶錢，受限鑰匙帶不了），之後訪客的規則用受限鑰匙改
-  const sp = await call(as(a.merchant.id, a.merchant.sk), a.writ.id, "set_seller_policy", { policy: { max_amount: (100n * MICRO).toString(), max_tenor_secs: "86400", min_bond_bps: 0, max_defaults: 1000, guarantors: [], asset: USDC, max_fee_bps: 10000, arbiters: [] } }, { deposit: NEAR("0.015") });
+  const sp = await call(as(a.merchant.id, a.merchant.sk), a.writ.id, "set_seller_policy", { policy: { max_amount: (100n * MICRO).toString(), max_tenor_secs: "5184000", min_bond_bps: 0, max_defaults: 1000, guarantors: [], asset: USDC, max_fee_bps: 10000, arbiters: [] } }, { deposit: NEAR("0.015") });
   if (sp.error) throw new Error("set_seller_policy: " + sp.error);
   for (const id of [a.writ.id, a.verifier.id, a.merchant.id]) await ft(a.acme, "storage_deposit", { account_id: id, registration_only: true }, "30");
   await ft(a.acme, "ft_transfer", { receiver_id: a.verifier.id, amount: (BigInt(process.env.WRIT_STAKE_USDC ?? "1500000")).toString() }, "30");
@@ -82,7 +82,7 @@ for (let i = 0; i < COUNT; i++) {
   for (const d of ["keri/.keystore", "keri/bundle", "keri/registrar"]) rmSync(join(ROOT, d), { recursive: true, force: true });
   // 員工 → 應付帳款 agent（兩個收款對象）
   const init = py("issuer.py", "init", "--scope", `${a.merchant.id},${a.supplier.id}`, "--rail", a.acme.id, "--n", "20", "--unit", "10000", "--daily", "20", "--days", "30", "--asset", USDC, "--fee-payer", "Seller", "--seller-cap-bps", "5000",
-    "--credit-limit", "300000", "--bond-bps", "2500", "--premium-bps", "200", "--min-tenor", "5", "--max-tenor", "86400", "--arbiter", a.owner.id, "--contract", a.writ.id);
+    "--credit-limit", "300000", "--bond-bps", "2500", "--premium-bps", "200", "--min-tenor", "5", "--max-tenor", "5184000", "--arbiter", a.regulator.id, "--contract", a.writ.id);
   py("verify.py", "pin", "--root", JSON.parse(init.slice(init.indexOf("{"), init.lastIndexOf("}") + 1)).root);
   // NEAR 準備金：開格費 0.37 + 兩次雇用 + 單據儲存
   const reg = await register(process.env.WRIT_POOL_DEPOSIT ?? "0.78");

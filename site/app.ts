@@ -65,7 +65,7 @@ async function send(act: () => Promise<any>): Promise<Out> {
       const raw = atob(st.SuccessValue);
       const v = raw ? JSON.parse(raw) : null;
       if (v?.Rejected) return { kind: "blocked", verdict: `Rejected: ${v.Rejected.reason}`, why: WHY[v.Rejected.reason] ?? "Rejected by the contract.", hash };
-      if (v?.Paid) return { kind: "paid", verdict: "Paid", why: `${near(v.Paid.amount)} NEAR reached the supplier.`, hash };
+      if (v?.Paid) return { kind: "paid", verdict: "Paid", why: `${near(v.Paid.amount)} NEAR reached the seller.`, hash };
       return { kind: "paid", verdict: "Done", why: "", hash };
     }
     return { ...protocolOut(JSON.stringify(st?.Failure ?? st ?? "")), hash };
@@ -182,7 +182,8 @@ function previewRule() {
   if (lastCard.bond_bps < Math.round(num("pBond") * 100)) reasons.push("BOND_TOO_LOW");
   if (lastCard.defaults > num("pDef")) reasons.push("TOO_MANY_DEFAULTS");
   if (lastAmount > toUnits(num("pMax"))) reasons.push("ORDER_TOO_LARGE");
-  paintDecision(reasons.length === 0, reasons, `This ${nearStr(lastAmount)} order passes your rule. The contract checks it again when you accept.`);
+  if (!(num("pDays") > 0)) reasons.push("TENOR_TOO_LONG");
+  paintDecision(reasons.length === 0, reasons, `An order of up to ${nearStr(lastAmount)} passes your rule. The contract checks it again when you accept.`);
 }
 async function checkLive() {
   if (!creditId) return;
@@ -229,7 +230,9 @@ async function renderCard() {
   $("rcFee").textContent = `${card.premium_bps / 100}% per 30 days, paid by the ${card.fee_payer === "Seller" ? "seller" : "buyer"}`;
   $("rcRecord").textContent = `${card.settled} paid, ${card.defaults} defaulted (demo: every visitor’s runs)${card.frozen ? " · FROZEN" : ""}`;
   lastCard = card;
-  lastAmount = BigInt(r.unit) * 10n;
+  lastAmount = BigInt(r.unit) * BigInt(16 - Math.min(Number(r.idx), 15));
+  const maxDays = Math.floor(Number(card.max_tenor) / 86400);
+  $("rcTerm").textContent = `15 s in this demo; this mandate allows up to ${maxDays} day${maxDays === 1 ? "" : "s"}`;
   $("digest").textContent = `Guarantor ${short(card.guarantor, 30)}, ${nearStr(card.guarantor_stake)} staked. Bond ${card.bond_bps / 100}%. Fee ${card.premium_bps / 100}% per 30 days. Record: ${card.settled} paid, ${card.defaults} defaulted, company sealed from the public ledger.`;
   $("buildCmd").textContent = `near contract call-function as-read-only ${cfg.contract} risk_card json-args '{"cell":"${sale.root.cell}"}' network-config testnet now`;
   previewRule();
@@ -387,7 +390,7 @@ function readyToSettle(c: any) {
   setSteps("step", 3);
   if (honest) {
     $("h3").textContent = "The company pays on time";
-    $("p3").textContent = "Its agent settles from its vault. The company’s legal name stays sealed from you.";
+    $("p3").textContent = "Its agent settles from its vault. The company’s legal name stays off the public ledger.";
     btn("s3").textContent = "Agent pays";
     btn("s3").disabled = false;
   } else {
@@ -411,6 +414,12 @@ function readyToEnforce(c: any) {
     btn("s4").disabled = false;
   });
 }
+function finalAmount(cr: any): string | null {
+  const v = Number(($("finalBill") as HTMLInputElement).value);
+  if (!(v > 0)) return null;
+  const a = toUnits(v);
+  return a < BigInt(cr.amount) ? a.toString() : null;
+}
 btn("s2").addEventListener("click", async () => {
   const seller = scoped(cfg.seller);
   const fail = (o: Out) => { btn("s2").disabled = false; out("o2", o, "err"); };
@@ -423,11 +432,12 @@ btn("s2").addEventListener("click", async () => {
     if (o1.kind === "error" || o1.kind === "blocked") return fail(o1);
     if (o1.hash) ledger.push({ label: "Accepted under your rule", hash: o1.hash });
   }
-  const o2 = await act(btn("s2"), call(seller, "mark_delivered", { credit: creditId, delivery_hash: randomHex(), final_amount: null }, "50"));
+  const o2 = await act(btn("s2"), call(seller, "mark_delivered", { credit: creditId, delivery_hash: randomHex(), final_amount: finalAmount(before) }, "50"));
   if (o2.kind === "error" || o2.kind === "blocked") return fail(o2);
   const c: any = await creditOf().catch(() => null);
   if (!c) return out("o2", { ...o2, verdict: "Shipped", why: SAVED }, "err");
-  out("o2", { ...o2, verdict: "Shipped", why: `Locked for you: ${nearStr(c.bond_locked)} of the company’s bond, ${nearStr(c.exposure)} of the guarantor’s stake. You have delivered, so after the inspection window an unpaid order is a default.` }, "good");
+  const usage = BigInt(c.amount) < BigInt(before.amount) ? `The final bill is ${nearStr(c.amount)}, not the ${nearStr(before.amount)} ordered: the rest of the bond and guarantee is released, which escrow could not do. ` : "";
+  out("o2", { ...o2, verdict: "Shipped", why: `${usage}Locked for you: ${nearStr(c.bond_locked)} of the company’s bond, ${nearStr(c.exposure)} of the guarantor’s stake. You have delivered, so after the inspection window an unpaid order is a default.` }, "good");
   liveCheck = null;
   await renderCard().catch(() => setLive(false));
   readyToSettle(c);
@@ -441,7 +451,7 @@ btn("s3").addEventListener("click", async () => {
       if (o.hash) ledger.push({ label: "Agent settled", hash: o.hash });
     }
     const v = await act(btn("s3"), call(scoped(cfg.seller), "withdraw", { asset: cfg.asset?.id ?? null }, "80"));
-    out("o3", { ...v, verdict: "Paid. Identity still sealed.", why: `You were paid${v.kind === "paid" ? " and withdrew" : ""}. Its legal name stays sealed from you, and this payment goes on its record.` }, "good");
+    out("o3", { ...v, verdict: "Paid. Identity still sealed.", why: `You were paid${v.kind === "paid" ? " and withdrew" : ""}. Its legal name stays off the public ledger, and this payment goes on its record.` }, "good");
     hideSteps(4);
     setSteps("step", 9);
     await renderCard().catch(() => setLive(false));
@@ -572,16 +582,21 @@ async function book() {
   if (!g) return;
   const row = (k: string, v: string) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
   $("book").innerHTML = `<p class="eyebrow" style="margin:18px 0 8px">This demo guarantor’s book, live from the contract</p><div class="res">` +
-    row("Staked", nearStr(g.stake)) + row("On open orders", `${nearStr(g.exposure)} (${(Number(g.utilisation_bps) / 100).toFixed(1)}%)`) + row("Fees earned", nearStr(g.earned)) + row("Claims paid", nearStr(g.claims_paid)) + row("Recovered from companies", nearStr(g.recovered)) + `</div><p class="note">Demo traffic: most runs are visitors choosing “it doesn’t pay”, so these losses say nothing about real buyers.</p>`;
+    row("Staked", nearStr(g.stake)) + row("On open orders", `${nearStr(g.exposure)} (${(Number(g.utilisation_bps) / 100).toFixed(1)}%)`) + row("Fees earned", nearStr(g.earned)) + row("Claims paid", nearStr(g.claims_paid)) + row("Recovered from companies", nearStr(g.recovered)) + `</div>` + (BigInt(g.claims_paid) > 0n ? `<p class="note">Demo traffic: most runs are visitors choosing “it doesn’t pay”, so these losses say nothing about real buyers.</p>` : "");
 }
+
+document.querySelectorAll<HTMLTableElement>(".cmp").forEach((t) => {
+  const heads = Array.from(t.tHead!.rows[0].cells).map((c) => c.textContent ?? "");
+  Array.from(t.tBodies[0].rows).forEach((r) => Array.from(r.cells).forEach((c, i) => { if (i) c.dataset.l = heads[i]; }));
+});
 
 // ---------------- 保證人試算 ----------------
 function calc() {
-  const v = (id: string) => Number(($(id) as HTMLInputElement).value) / 100;
+  const v = (id: string) => Math.min(Math.max(Number(($(id) as HTMLInputElement).value) || 0, 0), 100) / 100;
   const b = v("cB"), p = v("cP"), c = v("cC"), e = v("cE"), f = v("cF"), u = v("cU");
-  const d = Number(($("cD") as HTMLInputElement).value);
+  const d = Math.max(Number(($("cD") as HTMLInputElement).value) || 1, 1);
   const pct = (x: number, n = 2) => `${(x * 100).toFixed(n)}%`;
-  const k = (1 - b) * c * d / 365;
+  const k = (1 - b) * c * d / 365 / Math.max(u, 0.01);
   const lowest = e < 1 ? (p * (1 - b) + k) / (1 - e) : Infinity;
   const absorb = b < 1 ? (f * (1 - e) - k) / (1 - b) : Infinity;
   const volume = b < 1 && d > 0 ? (365 / d) * (u / (1 - b)) : 0;
@@ -660,7 +675,7 @@ btn("askModel").addEventListener("click", async () => {
     const preimage = cfg.live.links[cell.idx + c.links] ?? randomHex();
     const o = await send(call(liveAgent, "spend", { preimage, j: c.links, to: c.payee, invoice_hash: await sha256(c.invoice_id) }, "80"));
     const why = o.kind === "paid"
-      ? `Contract: paid. It really moved ${(c.links * 0.0001).toFixed(4)} NEAR to the permitted supplier. If this invoice was poisoned and the model overpaid, the per-payment cap of 3 links is the most it can lose at once: Writ limits the damage, it does not judge the invoice.`
+      ? `Contract: paid. It really moved ${(c.links * 0.0001).toFixed(4)} NEAR to the permitted seller. If this invoice was poisoned and the model overpaid, the per-payment cap of 3 links is the most it can lose at once: Writ limits the damage, it does not judge the invoice.`
       : o.verdict.endsWith("LIMIT") ? "Contract: Rejected: LIMIT. This agent’s small budget has run out."
       : o.verdict.endsWith("CHAIN") ? "Contract: Rejected: CHAIN. Another visitor spent this budget link a moment ago. Try again."
       : `Contract: ${o.verdict}. ${o.why}`;

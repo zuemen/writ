@@ -156,7 +156,8 @@ All of these hold for the current contract.
 - **Delisting a guarantor stops new acceptances only.** Accepting then panics `GUARANTOR_DELISTED` (`A96`). Orders already accepted continue, and claims still draw on its stake.
 - **The windows differ by deployment and no view returns them.** `new` sets them. Demo deployments use seconds and minutes (`DEMO_WINDOWS` in `app/src/near.ts`), not the defaults in [CONTRACT.md](CONTRACT.md#windows).
 - **An invoice id belongs to the mandate, not to one seller.** A hijacked agent that opens credit on a hash to another in-scope seller blocks that hash until the order ends. The company can reissue under a new id.
-- **What the demo uses for credit.** `make credit-demo`, `docs/testnet-credit.md` and the site's orders are in NEAR. Stablecoin credit runs only on a local sandbox with a mock 6-decimal token (`make credit-usdc-demo`, `B35`–`B37`). The only real token transaction on testnet is one prepaid payment in Circle's testnet USDC (`docs/testnet-usdc.md`), not credit. In NEAR, the seller's cover and the guarantor's stake both move with NEAR's price, so a guarantee priced in a stablecoin needs the token path.
+- **What the demo uses for credit.** The site's selling story runs in Circle's testnet USDC. `make credit-usdc-demo` runs the same flows on a local mock 6-decimal token (`B35`–`B37`), and `make credit-demo` and `docs/testnet-credit.md` run in NEAR. The public-key challenge and the live-model agent hold NEAR budgets.
+- **The attack table's gain column reads one test account.** It is `w.attacker`. Where the adversary is the seller (`A46`, `A52`, `A82`, `A85`) that 0 proves nothing; the refusal does. `A85` shows a straw seller is refused above its cap, and can still take value up to it.
 - **A token tree's NEAR reserve goes back to the company on close,** even while a debt remains, because it is not an asset that pays claims. It is what remains after storage and hire fees.
 
 ### Agents and hire

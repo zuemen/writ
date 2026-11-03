@@ -1,4 +1,4 @@
-**86 attacks, 86 blocked as expected, attacker gain 0 yoctoNEAR.**
+**96 attacks, 96 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -86,8 +86,18 @@
 | A82 | seller bills more than the order when it marks delivery | BAD_FINAL_AMOUNT | BAD_FINAL_AMOUNT | 0 |
 | A83 | seller makes the contract store a rule without paying for the storage | POLICY_STORAGE | POLICY_STORAGE | 0 |
 | A84 | an order outside the seller's own rule gets accepted anyway | POLICY:ORDER_TOO_LARGE | POLICY:ORDER_TOO_LARGE | 0 |
-| A85 | a straw seller takes the whole stake through collusive orders | SELLER_CONCENTRATION | SELLER_CONCENTRATION | 0 |
+| A85 | one straw seller account takes more of the stake than its cap at once | SELLER_CONCENTRATION | SELLER_CONCENTRATION | 0 |
 | A86 | throwaway sellers grow the guarantor's record until every accept runs out of gas | list stays at 8 | list stays at 8 | 0 |
+| A87 | the credit asset differs from the cell's, or is swapped after the guarantor signed | CREDIT_ASSET_MISMATCH, BAD_ATTESTATION | CREDIT_ASSET_MISMATCH, BAD_ATTESTATION | 0 |
+| A88 | company settles a 5-token order with 5,000,000 yoctoNEAR | USE_FT_TRANSFER_CALL | USE_FT_TRANSFER_CALL | 0 |
+| A89 | attacker poses as the token, or pays with another token, to settle or stake | WRONG_ASSET, STAKE_ASSET_UNKNOWN | WRONG_ASSET, STAKE_ASSET_UNKNOWN | 0 |
+| A90 | a token transfer that fails is used to lose or double the seller's money | credited back once | credited back once | 0 |
+| A91 | guarantor backs a stablecoin order with a stake in NEAR | GUARANTOR_CAPACITY | GUARANTOR_CAPACITY | 0 |
+| A92 | a plain token cell with no credit terms hires, or takes NEAR it could never return | HIRE_TOKEN, TOKEN_CELL_USE_FT_TRANSFER_CALL | HIRE_TOKEN, TOKEN_CELL_USE_FT_TRANSFER_CALL | 0 |
+| A93 | guarantor signs a tenor long enough to overflow the deadlines, so an order can never end | BAD_CREDIT_TERMS | BAD_CREDIT_TERMS | 0 |
+| A94 | an order in a scaled or fake asset, with a fee that empties it or a friendly arbiter, passes the seller's rule | ASSET_NOT_APPROVED, FEE_TOO_HIGH, ARBITER_NOT_APPROVED | ASSET_NOT_APPROVED, FEE_TOO_HIGH, ARBITER_NOT_APPROVED | 0 |
+| A95 | throwaway accounts make the contract store a row for one yocto each | no row, excess returned | no row, excess returned | 0 |
+| A96 | a seller's order is accepted on a guarantor the owner has delisted | GUARANTOR_DELISTED | GUARANTOR_DELISTED | 0 |
 | B00 | legit payment 3+2 links to in-scope merchant | Paid | Paid | 0 |
 | B01 | AMC revoked in KERI TEL, ixn submitted by anyone | key deleted, next call AccessKeyNotFound | AccessKeyNotFound | 0 |
 | B02 | payment to a non-existent account | Rejected:TRANSFER_FAILED, vault refunded | Rejected:TRANSFER_FAILED, vault refunded | 0 |
@@ -123,3 +133,8 @@
 | B32 | usage order: limit 10, seller bills 7.3, bond and exposure follow, only 7.3 settles | 7.3 paid | 7.3 paid | 0 |
 | B33 | seller rule: refused with reasons, rule adjusted, order ships | refused, adjusted, accepted | refused, adjusted, accepted | 0 |
 | B34 | guarantor book: stake, exposure, earned, claims, recovered, loss ratio, top sellers | adds up | adds up | 0 |
+| B35 | credit in a 6-decimal stablecoin: seller pays the fee, usage order, NEAR reserve pays storage | seller received 3.92 of 4 | seller received 3.92 of 4 | 0 |
+| B36 | stablecoin default: the token stake pays the seller, the company repays in the token, revoking does not escape | seller whole, debt repaid | seller whole, debt repaid | 0 |
+| B37 | token tree: hire, sub-agent pays, disputes in escrow, retention and release per asset | books match the token balance | books match the token balance | 0 |
+| B38 | an order's storage, including the per-seller record, is paid by the order | cost <= fee | 776 bytes | 0 |
+| B39 | NEP-330 source metadata; check_order gives amount, asset, tenor, bond, exposure, fee, payer | all present | all present | 0 |
