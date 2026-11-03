@@ -691,6 +691,36 @@ mod exact {
     }
 
     #[test]
+    fn accept_reports_expiry_exactly_at_each_boundary() {
+        let (mut cx, r) = world(opt());
+        let k = opened(open(&mut cx, r, 1));
+        let has = |cx: &Cx, code: &str| check(cx, k, None).reasons.iter().any(|x| x == code);
+        let opened_at = cx.peek(|w| w.credits.get(&k).unwrap().opened_at.0);
+        cx.now = opened_at + 100 * NS;
+        assert!(!has(&cx, "OFFER_EXPIRED"), "the last moment of the offer still stands");
+        cx.now += 1;
+        assert!(has(&cx, "OFFER_EXPIRED"));
+        let until = cell(&cx, r).valid_until.0;
+        cx.now = until;
+        assert!(!has(&cx, "MANDATE_EXPIRED"), "the last moment of the mandate still stands");
+        cx.now = until + 1;
+        assert!(has(&cx, "MANDATE_EXPIRED"));
+        cx.now = until + 1000 * NS;
+        assert!(has(&cx, "MANDATE_EXPIRED"), "and every moment after it");
+    }
+
+    #[test]
+    fn a_revoke_says_the_vault_stayed_when_only_a_debt_is_open() {
+        let (mut cx, r) = world(opt());
+        let v = cell(&cx, r).vault.0;
+        assert!(v > 0);
+        cx.run("poke", &writ(), None, 0, |w| { let mut t = w.terms.get(&r).cloned().unwrap(); t.outstanding = U128(0); t.open_debts = 1; w.terms.insert(r, t); }).unwrap();
+        cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        assert!(get_logs().iter().any(|l| l.contains("revoked") && l.contains("\"refund\":\"0\"") && l.contains(&format!("\"retained\":\"{}\"", v))));
+        assert_eq!(cell(&cx, r).vault.0, v);
+    }
+
+    #[test]
     fn check_order_also_sees_what_the_money_and_the_state_would_refuse() {
         // no stake
         let mut o = opt(); o.stake = 0;
@@ -2073,6 +2103,41 @@ mod exact {
         assert!(cx.run("revoke", &acc("g.near"), None, 0, |w| w.revoke(U64(r), "x".into())).is_none());
         err(&cx, "ALREADY_CLOSED");
         assert_eq!(stake(&cx).amount.0, a1);
+    }
+
+    #[test]
+    fn only_the_guarantor_of_a_running_cover_returns_a_fee() {
+        const P: u64 = 30 * DAY * 1_000_000_000;
+        let world3 = || {
+            let (mut cx, r) = world(opt());
+            drop_credit(&mut cx, r);
+            let until = cx.now + 3 * P;
+            cx.run("poke", &writ(), None, 0, |w| { let mut c = w.cells.get(&r).cloned().unwrap(); c.valid_until = U64(until); w.cells.insert(r, c); }).unwrap();
+            offer(&mut cx, r, 8 * U, 2000, 100, 1000);
+            assert!(activate(&mut cx, r));
+            (cx, r)
+        };
+        // someone else revoking, who has free stake of its own, pays nothing out of it
+        let (mut cx, r) = world3();
+        let mine = stake(&cx);
+        cx.run("poke", &writ(), None, 0, |w| { w.stakes.insert((acc("funder.near"), None), mine.clone()); }).unwrap();
+        let a0 = cx.peek(|w| w.stakes.get(&(acc("funder.near"), None)).unwrap().amount.0);
+        let g0 = stake(&cx).amount.0;
+        cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        assert_eq!(cx.peek(|w| w.stakes.get(&(acc("funder.near"), None)).unwrap().amount.0), a0);
+        assert_eq!(stake(&cx).amount.0, g0);
+        assert!(!get_logs().iter().any(|l| l.contains("cover_fee_returned")));
+        // a cover that already ended returns nothing, even to its guarantor's own revoke
+        let (mut cx, r) = world3();
+        pay(&mut cx, r, 1, 1);
+        assert!(file(&mut cx, r, 1));
+        assert!(rule(&mut cx, r, 1, Ruling::Deny));
+        let i = inv(1);
+        assert!(cx.run("void", &acc("arb.near"), None, 0, |w| w.void_cover(U64(r), i)).is_some());
+        let (a1, p1) = (stake(&cx).amount.0, cover(&cx, r).premium.0);
+        cx.run("revoke", &acc("g.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        assert_eq!((stake(&cx).amount.0, cover(&cx, r).premium.0), (a1, p1));
+        assert!(!get_logs().iter().any(|l| l.contains("cover_fee_returned")));
     }
 
     #[test]
