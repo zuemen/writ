@@ -46,7 +46,7 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with
 |---|---|---|
 | 1 | `make setup` | contract builds; size and `sha256sum` of `contract/res/writ.wasm` printed |
 | 2 | `make cover-demo` | an agent fooled inside its limits: `DUPLICATE` on the same number, paid under a new one, a false claim denied, the real one upheld, the guarantor repays the loss less the company's share, then the same in a token; ends in `COVER_RESULT\|PASS` |
-| 3 | `make test` | `test result: ok. 101 passed`, then `test result: ok. 97 passed` and [`docs/bench.md`](docs/bench.md): 119 attacks, all blocked |
+| 3 | `make test` | `test result: ok. 105 passed`, then `test result: ok. 103 passed` and [`docs/bench.md`](docs/bench.md): 125 attacks, all blocked |
 | 4 | `make keri-check` | the credential chain is checked, then forged or stale chains are refused; last line `KERI_FORGERIES\|PASS\|32` |
 | 5 | `make credit-demo` | the net-30 story with real KERI signatures; ends in `CREDIT_RESULT\|PASS` |
 | 6 | `make credit-usdc-demo` | the same in a mock 6-decimal stablecoin; ends in `CREDIT_USDC_RESULT\|PASS` |
@@ -60,9 +60,9 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 
 | What | Result | Where |
 |---|---|---|
-| Attack bench, CI run [41617290940](https://github.com/zuemen/writ/actions/runs/41617290940) | 119 attacks blocked, each ending in the expected refusal; 101 unit, exact-value and fuzz tests; 97 sandbox tests | [`docs/bench.md`](docs/bench.md) |
+| Attack bench, CI run [41626045777](https://github.com/zuemen/writ/actions/runs/41626045777) | 125 attacks blocked, each ending in the expected refusal; 105 unit, exact-value and fuzz tests; 97 sandbox tests | [`docs/bench.md`](docs/bench.md) |
 | Cover story, same run | `COVER_RESULT\|PASS`, in NEAR and in a token | [`app/src/cover-demo.ts`](app/src/cover-demo.ts) |
-| Forged credentials, same run | 32 forged or stale chains refused by the off-chain verifier | [`keri/test_forgeries.py`](keri/test_forgeries.py) |
+| Forged credentials, same run | 36 forged or stale chains refused by the off-chain verifier | [`keri/test_forgeries.py`](keri/test_forgeries.py) |
 | Mutation testing | {MUTANTS} | [`docs/TESTING.md`](docs/TESTING.md#mutation-testing) |
 | The live model | Llama 3.3, 10 runs each: paid a plain re-bill of a paid order 0 of 10, the same bill with a fake controller note 10 of 10, a fake ledger sync 3 of 10, and refused every mismatch (0 of 30). A small sample | [`docs/TESTING.md`](docs/TESTING.md#the-live-model) |
 | On NEAR testnet | contract `{CONTRACT}`, no full-access key | [`docs/testnet.md`](docs/testnet.md) |

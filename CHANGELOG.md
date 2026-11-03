@@ -8,7 +8,7 @@ Attestation format `writ:attest:v7`. The direction changes: from net-30 for sell
 
 - **Fooled-agent cover** (`3e346d2`). `CoverArgs` signed with the mandate; `activate_cover`, `file_claim`, `resolve_claim`, `void_cover`, `claim_timeout`, `clear_agent`, `release_cover`; views `cover_of`, `payment_of`. `spend` takes an optional `context_hash`, kept with the payment under active cover. New rejections `UNDER_CLAIM` and `NOT_CLEARED`, with no strike.
 - **Site and setup.** The site's main demo runs on one covered mandate: the visitor fools a real model, files, and rules as the arbiter. `make live-agent` sets up that mandate in USDC with restricted company and arbiter keys. The calculator now prices cover. The worker gives the model `pay_invoice` and `reject_invoice` and a ledger, and caches only answers that pay.
-- CI run 41617290940: 119 attacks, 97 integration and 101 unit tests, 32 credential forgeries, `COVER_RESULT|PASS`. A contract audit followed that run, and `838562d` fixes its findings F1 to F6, so these numbers predate that commit.
+- CI run 41626045777: 125 attacks, 103 integration and 105 unit tests, 36 credential forgeries, `COVER_RESULT|PASS`. A contract audit followed that run, and `838562d` fixes its findings F1 to F6, so these numbers predate that commit.
 
 ## writ-net30.testnet
 

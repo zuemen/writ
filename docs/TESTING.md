@@ -8,12 +8,12 @@ Every claim in the docs should have a command. `make verify` runs the build, the
 |---|---|
 | `make setup` | contract builds and is shrunk with wasm-opt; size and `sha256sum` of `contract/res/writ.wasm` printed |
 | `make cover-demo` | an agent fooled inside its limits: same number refused, new number paid, a false claim denied with nothing moved, the fooled payment upheld, the guarantor repays the loss less the company's share, the tree stays stopped until cleared, then the same in a token with cover alone. Last line `COVER_RESULT\|PASS\|activated=true\|duplicate=DUPLICATE\|fooled_paid=true\|…` |
-| `make test` | `cargo test --lib`: `test result: ok. 101 passed` (unit, exact values, fuzz). Then the bench: `test result: ok. 97 passed`, and the table in [bench.md](bench.md): 119 attacks, all blocked (the attacker's balance is measured at the end of each test) |
+| `make test` | `cargo test --lib`: `test result: ok. 105 passed` (unit, exact values, fuzz). Then the bench: `test result: ok. 103 passed`, and the table in [bench.md](bench.md): 125 attacks, all blocked (the attacker's balance is measured at the end of each test) |
 | `make credit-demo` | the whole credit story with real KERI signatures: risk card, a seller's rule refuses then ships, paid on time and sealed, unpaid and the guarantor pays, frozen, recourse over, keys deleted, a false company refused, the real one named. Last line `CREDIT_RESULT\|PASS\|rule_refused_then_shipped=…\|paid_on_time_sealed=…\|guarantor_paid=…\|frozen=…\|revealed=…` |
 | `make credit-usdc-demo` | the same in a mock 6-decimal token: rule refuses, usage order for 4 of 5, seller pays the fee, default paid by the token stake, repaid in the token, books match the token balance. Last line `CREDIT_USDC_RESULT\|PASS\|…` |
 | `make demo` | a fresh local sandbox starts (port 3030 must be free); the 8-step prepaid story prints (includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
 | `make ui` → open http://localhost:8787 | three views (HR / agent / seller, labelled Merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays**. Each row in *Chain log* shows a tx hash or the protocol error. Prepaid path only |
-| `make keri-check` | the verifier prints its ✓ lines (mock root → QVI → legal entity → ECR → AMC: KEL, TEL, ACDC, registry control, schemas, I2I edges, delegation), then refuses 32 forged or stale chains; last line `KERI_FORGERIES\|PASS\|32` |
+| `make keri-check` | the verifier prints its ✓ lines (mock root → QVI → legal entity → ECR → AMC: KEL, TEL, ACDC, registry control, schemas, I2I edges, delegation), then refuses 36 forged or stale chains; last line `KERI_FORGERIES\|PASS\|32` |
 | optional: `NEARAI_API_KEY=... make attack-live` (or `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` for any OpenAI-compatible provider) | a real LLM reads both invoices and chooses the tool calls; 5 attacks × `LLM_RUNS` per model in `LLM_MODEL`; last line `LIVE_RESULT\|PASS\|…\|attacker_gain=0`; report in [attack-live.md](attack-live.md) |
 | optional: `make attack-credit-live` | a real LLM reads purchase orders and orders on credit; last line `CREDIT_LIVE_RESULT\|…`; report in [attack-credit-live.md](attack-credit-live.md) |
 
@@ -60,7 +60,7 @@ DEMO_RESULT|PASS|paid=true|injection=SCOPE|attacker_gain=0|disclosed=true|revoke
 | Credential forgeries | `keri/test_forgeries.py` | F1–F32: forged or stale chains the verifier must refuse. |
 | Live models | `app/src/agent-live.ts`, `app/src/agent-credit.ts` | Real LLMs on a local sandbox. Small samples that show the contract holds whichever way the model goes, not how often models fail. |
 
-The numbers on this page, the README and the site are from CI run [41617290940](https://github.com/zuemen/writ/actions/runs/41617290940), on commit `8da5d7c`: 119 attacks, 97 integration tests, 101 unit tests, 32 credential forgeries, `COVER_RESULT|PASS`. [bench.md](bench.md) is that run's table. The contract changed after it (`838562d`, audit fixes); rerun before quoting them against a later commit.
+The numbers on this page, the README and the site are from CI run [41626045777](https://github.com/zuemen/writ/actions/runs/41626045777), on commit `ea27d76`: 125 attacks, 103 integration tests, 105 unit tests, 36 credential forgeries, `COVER_RESULT|PASS`. [bench.md](bench.md) is that run's table. The contract changed after it (`838562d`, audit fixes); rerun before quoting them against a later commit.
 
 ## The live model
 

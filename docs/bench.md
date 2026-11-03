@@ -1,4 +1,4 @@
-**119 attacks, 119 blocked as expected, attacker gain 0 yoctoNEAR.**
+**125 attacks, 125 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -34,6 +34,12 @@
 | A118 | company claims on a payment made before the cover was active | NO_PAYMENT | NO_PAYMENT | 0 |
 | A119 | agent pays with a context hash nobody can check later | Rejected:INVOICE | Rejected:INVOICE | 0 |
 | A12 | self-signed attestation (not a whitelisted verifier) | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
+| A120 | a fee as large as the limit, so the company pays for its own guarantee | COVER_PREMIUM | COVER_PREMIUM | 0 |
+| A121 | guarantor with too little stake lets the company's fee back the company's own cover | GUARANTOR_CAPACITY | GUARANTOR_CAPACITY | 0 |
+| A122 | guarantor waits until the term is nearly over, takes a full period's fee, and covers almost nothing | ACTIVATION_TOO_LATE | ACTIVATION_TOO_LATE | 0 |
+| A123 | a listed verifier guarantees its own company and inflates its record | COVER_GUARANTOR | COVER_GUARANTOR | 0 |
+| A124 | the mandate's scope lets the agent pay the contract itself, stranding the money | COVER_SCOPE | COVER_SCOPE | 0 |
+| A125 | someone with the arbiter's key upholds a loss of one yocto: it pays nothing and burns the claim | BAD_LOSS | BAD_LOSS | 0 |
 | A13 | funder widens the scope after the verifier signed | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
 | A14 | attacker replays someone else's attestation | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
 | A15 | forged KERI revocation event | BAD_KEL_SIGNATURE | BAD_KEL_SIGNATURE | 0 |
@@ -168,3 +174,5 @@
 | B44 | storage per payment: longest account, context hash, upheld claim | fee covers it | 355 bytes per record, 4000000000000000000000 yocto per link | 0 |
 | B45 | arbiter runs out of time: no payment, no denial, the company can file again, the count is public | filed again | filed again | 0 |
 | B46 | a claim on the tree does not stop settling an order | settled | settled | 0 |
+| B47 | worst payment in NEAR on 80 Tgas: third-level sub-agent, 16 longest accounts, context hash, record written | Paid and recorded | Paid and recorded, 15 Tgas burnt | 0 |
+| B48 | worst payment in a token on 80 Tgas: third-level sub-agent, 16 longest accounts, context hash, record written | Paid and recorded | Paid and recorded, 9 Tgas burnt | 0 |
