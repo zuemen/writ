@@ -87,6 +87,10 @@ What this is and isn't:
 
 The earlier runs in [attack-live.md](attack-live.md) and [attack-credit-live.md](attack-credit-live.md) are separate: Gemini models, a prompt that said to pay, a local sandbox.
 
+## The deployed code hash
+
+`.github/workflows/verify.yml` rebuilds the wasm and compares it with `writ-cover.testnet` on-chain. It matches only with `CARGO_HOME=/home/sanketsu/.cargo`, because dependency paths end up in panic messages. A normal `make setup` elsewhere passes every test and gives a different hash, which is expected. Same-hash: [run 41726000412](https://github.com/zuemen/writ/actions/runs/41726000412).
+
 ## Mutation testing
 
 `cargo mutants` runs on the contract from [`.github/workflows/mutants.yml`](../.github/workflows/mutants.yml), by hand and in 8 shards (`WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source; config in `contract/.cargo/mutants.toml`).

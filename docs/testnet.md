@@ -4,7 +4,7 @@ Contract: [writ-cover.testnet](https://testnet.nearblocks.io/address/writ-cover.
 
 Full-access keys on the contract account: 0. Agent function-call keys come and go as mandates open and close (12 when this was generated). Check it yourself: `near account list-keys writ-cover.testnet network-config testnet now` or the RPC method `view_access_key_list`.
 
-Deployed code hash: `6qQHjPPxUNTiUMkBKE1U1WUUAkgprorByTvnnb4sobQ3`, which is the base58 of the sha256 of `contract/res/writ.wasm` as built by `make setup`. The contract cannot be upgraded.
+Deployed code hash: `6qQHjPPxUNTiUMkBKE1U1WUUAkgprorByTvnnb4sobQ3`, which is the base58 of the sha256 of `contract/res/writ.wasm`. To get the same hash, build with `CARGO_HOME=/home/sanketsu/.cargo`: dependency paths end up in panic messages, so another path gives a different hash. CI does this and compares with the chain: [same-hash in run 41726000412](https://github.com/zuemen/writ/actions/runs/41726000412). `scripts/code_hash.py <wasm> <account>` runs the comparison. The contract cannot be upgraded.
 
 | step | what happened | transaction |
 |---|---|---|

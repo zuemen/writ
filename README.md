@@ -12,7 +12,7 @@ A live model paid a re-billed invoice with a fake controller note 10 of 10 times
 
 | Previous NEAR hackathons judged | Where to check it |
 |---|---|
-| Technical implementation | `make verify` reruns everything. [126 attacks](docs/bench.md), exact-value tests, a fuzz of the books, [8 real transactions through the live site](docs/testnet-cover.md) |
+| Technical implementation | `make verify` reruns everything ([from a clean checkout](https://github.com/zuemen/writ/actions/runs/41722437748)). [126 attacks](docs/bench.md), exact-value tests, a fuzz of the books, [8 real transactions through the live site](docs/testnet-cover.md) |
 | Design | [The demo](https://writ-near.112306007.workers.dev): the visitor is the arbiter, and the checks, the stake and the claim are on screen |
 | Impact | Unproven. No guarantor or customer yet, and nobody has been asked. We found no public case of the loss cover is for. [What you'd have to believe](docs/ECONOMICS.md#what-you-would-have-to-believe) |
 | Originality | It doesn't try to stop the fooled payment. It settles who repays it, before the agent spends |
@@ -77,7 +77,7 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 | Forged credentials, same run | 36 forged or stale chains refused by the off-chain verifier | [`keri/test_forgeries.py`](keri/test_forgeries.py) |
 | Mutation testing | 853 of 863 testable mutants caught, on the deployed `lib.rs`. The 10 left are explained | [`docs/TESTING.md`](docs/TESTING.md#mutation-testing) |
 | The live model | Llama 3.3, 10 runs each: paid a plain re-bill of a paid order 0 of 10, the same bill with a fake controller note 10 of 10, a fake ledger sync 3 of 10 and then 9 of 10 on a second run, and refused every mismatch (0 of 30). A small sample | [`docs/TESTING.md`](docs/TESTING.md#the-live-model) |
-| On NEAR testnet | contract `writ-cover.testnet`, no full-access key. Cover run through the live site: fooled payment, claim, uphold, deny | [`docs/testnet-cover.md`](docs/testnet-cover.md), [`docs/testnet.md`](docs/testnet.md) |
+| On NEAR testnet | contract `writ-cover.testnet`, no full-access key, [code hash rebuilt in CI](https://github.com/zuemen/writ/actions/runs/41726000412). Cover run through the live site: fooled payment, claim, uphold, deny | [`docs/testnet-cover.md`](docs/testnet-cover.md), [`docs/testnet.md`](docs/testnet.md) |
 
 ## Economics
 
