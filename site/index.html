@@ -113,6 +113,7 @@
   .ledger { margin-top:14px; font-size:14.5px; } .ledger:empty { display:none; }
   .ledger ol { margin:6px 0 0; padding-left:22px; } .ledger li { margin:3px 0; }
   #again { margin-top:14px; }
+  .btn[hidden] { display:none; }
   .step h4 { font:600 19px var(--sans); margin:0 0 3px; }
   .step p { margin:0; color:var(--soft); font-size:15.5px; max-width:640px; }
   .tryit { border:1px solid var(--rule-strong); background:var(--sheet); padding:20px 22px; margin:18px 0 26px; }
@@ -265,14 +266,14 @@
     <div class="step" data-step="1">
       <div class="n">1</div>
       <div><h4>Choose how this goes</h4><p>The accounts-payable agent places an order. You see the risk card above, not the company's name.</p>
-        <div class="pick"><button class="btn" id="cHonest" disabled>Company will pay</button><button class="btn ghost" id="cBad" disabled>Company won't pay</button></div></div>
+        <div class="pick"><button class="btn" id="cHonest" disabled>Company will pay</button><button class="btn ghost" id="cBad" disabled>Company won't pay</button><button class="btn ghost" id="cNo" disabled>Decline to sell</button></div></div>
       <div class="act"></div>
       <div class="out" id="o1"></div>
     </div>
     <div class="step" data-step="2">
       <div class="n">2</div>
       <div><h4>Accept the order and ship</h4><p>Accepting pays the guarantor its fee and locks the bond and the guarantor's exposure for this order, so no other seller can drain them.</p></div>
-      <div class="act"><button class="btn" id="s2" disabled>Accept and ship</button><button class="btn ghost" id="s2d" disabled>Decline</button></div>
+      <div class="act"><button class="btn" id="s2" disabled>Accept and ship</button></div>
       <div class="out" id="o2"></div>
     </div>
     <div class="step" data-step="3">

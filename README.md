@@ -15,7 +15,7 @@ Under that, every agent is tied to the person who authorized it. Each hire can o
 
 Each payment is also checked on-chain: counterparty in scope, invoice not already paid, within the per-payment cap, the hash-chain budget and the daily rate, not expired. So a fooled agent cannot pay anyone it was not authorized to pay.
 
-**Live on NEAR testnet:** contract [`writ-guarantee.testnet`](https://testnet.nearblocks.io/address/writ-guarantee.testnet), every step with its transaction in [`docs/testnet.md`](docs/testnet.md). It has no full-access key.
+**Live on NEAR testnet:** contract [`writ-surety.testnet`](https://testnet.nearblocks.io/address/writ-surety.testnet), every step with its transaction in [`docs/testnet.md`](docs/testnet.md). It has no full-access key.
 
 **The whole credit story, on testnet:** order, fee, delivery, default, the guarantor pays, keys deleted, company named, every step with its transaction in [`docs/testnet-credit.md`](docs/testnet-credit.md).
 
@@ -25,7 +25,7 @@ Each payment is also checked on-chain: counterparty in scope, invoice not alread
 
 **Models buying on credit, too.** In a separate small run, two Gemini models read poisoned purchase orders and did what the order said in 8 of 12 attacks: 90-day terms, inflated totals, repeated orders. The contract let none of those stand ([`docs/attack-credit-live.md`](docs/attack-credit-live.md), local sandbox; 4 calls were lost to model outages and are not counted).
 
-**Run it in your browser:** <https://writ-near.112306007.workers.dev> has no server. Sell to an AI agent as the supplier and see who pays when the company doesn't; fire an employee and watch every key go; or try to steal from an agent whose private key is published on purpose. `make pool` and `make bounty` prepare those cells; their test keys live only on that page, never in this repo.
+**Run it in your browser:** <https://writ-near.112306007.workers.dev> signs in your browser; the only server code is [`worker/index.js`](worker/index.js), which asks a model about an invoice and holds no key. Write your own poisoned invoice and watch a live model read it and the contract answer; sell to an AI agent as the supplier and see who pays when the company doesn't; fire an employee and watch every key go; or try to steal from an agent whose private key is published on purpose. `make pool` and `make bounty` prepare those cells; their test keys live only on that page, never in this repo.
 
 Every claim below has a command. The trust assumptions are in [Trust model](#trust-model).
 
@@ -40,7 +40,7 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with
 | # | Do | See |
 |---|---|---|
 | 1 | `make setup` | contract builds and is shrunk with wasm-opt (≈ 300 KB); size and `sha256sum` of `contract/res/writ.wasm` printed |
-| 2 | `make test` | `test result: ok. 33 passed` (unit, exact values, fuzz), then `test result: ok. 59 passed` and the table in [`docs/bench.md`](docs/bench.md): **78 attacks, 78 blocked** (the attacker's balance is measured at the end of each test) |
+| 2 | `make test` | `test result: ok. 37 passed` (unit, exact values, fuzz), then `test result: ok. 59 passed` and the table in [`docs/bench.md`](docs/bench.md): **78 attacks, 78 blocked** (the attacker's balance is measured at the end of each test) |
 | 3 | `make credit-demo` | the whole credit story with real KERI signatures: risk card, paid on time and sealed, unpaid and the guarantor pays, frozen, recourse over, keys deleted, a false company refused, the real one named; ends in `CREDIT_RESULT\|PASS` |
 | 4 | `make demo` | a fresh local sandbox starts (port 3030 must be free); the 8-step story prints (about 1 min, includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
 | 5 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
@@ -305,9 +305,9 @@ Rejection reasons: `EXPIRED`, `SCOPE`, `INVOICE`, `DUPLICATE`, `PER_TX`, `LIMIT`
 
 ## Mutation testing
 
-`cargo mutants` runs on the contract from `.github/workflows/mutants.yml` (`WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source). **Of 562 testable mutants, 558 are caught and 4 are not**, added up from three runs on the same `lib.rs`; [`contract/mutants-baseline/README.md`](contract/mutants-baseline/README.md) has the run IDs.
+`cargo mutants` runs on the contract from `.github/workflows/mutants.yml` (`WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source). The current result is being re-run on the deployed contract; on the version before it, 558 of 562 testable mutants were caught.
 
-The first run was worse than we expected: the attack bench alone caught 423 and missed 139, many of them in the credit money paths, because the bench checks who gets refused and rarely the exact amount. So `contract/src/exact.rs` now checks every money path to the yoctoNEAR and every deadline to the nanosecond. Those tests found no bug in the contract. The four left are `>` vs `>=` where the amount is zero or equality cannot happen. We read them by hand and believe they change no balance, though three can change the gas burnt. A review agent read them as well; it did not run them.
+The first run was worse than we expected: the attack bench alone caught 423 and missed 139, many of them in the credit money paths, because the bench checks who gets refused and rarely the exact amount. So `contract/src/exact.rs` now checks every money path to the yoctoNEAR and every deadline to the nanosecond. Those tests found no bug in the contract.
 
 ## Security review notes
 
@@ -330,12 +330,11 @@ Code reviews after the first bench, done with AI review agents, found problems t
 ## Not implemented / limits
 
 - **The public demo holds the secrets a guarantor would keep.** The site's `config.json` has the fictional company's LEI and salt, so the guarantor's step can run in your browser. A real guarantor keeps them private.
-- **On the site the agents do not think.** The buttons run prepared transactions. The model runs are separate, on a local sandbox, with Gemini: small samples, not NEAR AI, no TEE. `docs/attack-live.md` was generated with the plain prompt only; the current `make attack-live` also runs a hardened prompt, so a rerun prints a longer table.
+- **On the site, only "Fool a live model" uses a model.** That section sends your invoice to Llama 3.3 on Cloudflare Workers AI's free tier and signs whatever it decides, so a free quota can run out and the site then says so. The selling and firing stories run prepared transactions. The numbers in the table come from separate runs on a local sandbox, with Gemini: small samples, not NEAR AI, no TEE. `docs/attack-live.md` was generated with the plain prompt only; the current `make attack-live` also runs a hardened prompt, so a rerun prints a longer table.
 - **No real guarantor exists yet.** The demo guarantor is a test account and the 2% fee is a placeholder. Who would underwrite agents, and at what price, is untested. The fee is not refunded if an accepted order is later cancelled.
 - **Disclosure takes the guarantor.** Only it holds the salt, so a guarantor that stays quiet reveals nothing, and a debt repaid from money left in the tree reveals nothing. Closing covers one mandate's tree, not every mandate the company has.
 - **The terms are a placeholder.** `terms_hash` commits to demo text no lawyer has reviewed. Whether an on-chain default and disclosure have legal effect depends on a real agreement and a jurisdiction.
-- **`invoice_paid` means the invoice id has been used, not that money moved.** It turns true when credit is opened and stays true after a cancel, and paying that invoice later returns `DUPLICATE` with a strike. A seller should read the credit's status instead. A new order needs a new invoice id.
-- **The `revoked` event reports the cell's share as `refund` even when the money is kept in the root for a debt.** Balances are right; an indexer should read `get_cell`, not this field.
+- **An invoice id belongs to the mandate, not to one seller.** A hijacked agent that opens credit on a hash to another in-scope seller blocks that hash until the order ends. The company can reissue under a new id.
 - **Credit is in NEAR only.** USDC works for `spend`, not for credit.
 - **The guarantor's stake is the real limit.** A guarantor's exposure across cells cannot exceed its stake while orders are open, but it can request an unstake in advance; the risk card shows `guarantor_unstake_at` so a seller can see it.
 - **The delivery proof is a hash.** The contract cannot tell a real delivery from a false one; a dispute handles that, and the arbiter is one account named in the mandate.
@@ -360,6 +359,7 @@ Code reviews after the first bench, done with AI review agents, found problems t
 ## Repository layout
 
 ```
+worker/          the one server function: asks a model about an invoice, no keys, no storage
 contract/        Rust contract (near-sdk 5.30), src/fuzz.rs (invariants), src/exact.rs (exact values), tests/bench.rs (attack bench), ft-mock/ (test NEP-141 token)
 keri/            issuer.py (mock vLEI ecosystem), verify.py (verifier), test_forgeries.py, common.py (schemas)
 app/             TypeScript: setup, demo, local UI server, live LLM agent, agent SDK (src/), page (web/)

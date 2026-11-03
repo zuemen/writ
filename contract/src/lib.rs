@@ -325,7 +325,7 @@ pub struct Contract {
     unseal_delay_ns: u64,
     used_amcs: LookupMap<String, u64>, // 一張 AMC 只能開一格；撤銷後不能用同一張 attestation 復活
     paid_invoices: LookupSet<Vec<u8>>, // cell id ‖ 發票雜湊：同一張發票不能付兩次
-    pending_invoices: LookupSet<Vec<u8>>, // 賒帳開單到付清之間：發票已占用，但錢還沒動
+    pending_invoices: LookupSet<Vec<u8>>, // 發票已占用但賣方沒拿到錢：開單到付清之間，或仲裁判公司勝之後
     used_keys: LookupSet<PublicKey>, // 鑰匙一生只用一次：解僱、撤銷、tripwire 之後都不能再被雇用或開格
     credits: LookupMap<u64, Credit>,
     terms: LookupMap<u64, CreditTerms>,
@@ -615,7 +615,10 @@ impl Contract {
 
         // 通過：推進鏈頭、扣額度、扣金庫，然後轉帳
         let amount = (j as u128) * c.unit.0;
-        self.paid_invoices.insert(invoice_key.unwrap());
+        // 錢真的到了才算付款；轉帳途中發票已占用，但還不是「已付」
+        let ik = invoice_key.unwrap();
+        self.paid_invoices.insert(ik.clone());
+        self.pending_invoices.insert(ik);
         c.w_cur = preimage.to_lowercase();
         c.idx += j;
         c.day_used += j;
@@ -849,15 +852,20 @@ impl Contract {
             if c.asset.is_none() {
                 self.stats.paid_yocto = U128(self.stats.paid_yocto.0 + amount.0);
             }
+            if let Some(k) = Self::invoice_key(c.root, &invoice_hash) {
+                self.pending_invoices.remove(&k);
+            }
             event("paid", serde_json::json!({"cell": cell.0.to_string(), "to": to, "amount": amount.0.to_string(), "idx": idx, "invoice": invoice_hash}));
             return Verdict::Paid { cell, amount, idx, remaining_links: remaining };
         }
         // 沒付成：這張發票還能再付；鏈節已消耗不退（防重放）；錢退回金庫
         if let Some(k) = Self::invoice_key(c.root, &invoice_hash) {
             self.paid_invoices.remove(&k);
+            self.pending_invoices.remove(&k);
         }
         c.spends = c.spends.saturating_sub(1);
         let strikes = c.strikes;
+        let mut retained = false;
         if matches!(c.status, Status::Revoked { .. }) {
             // 轉帳途中格已被撤銷：關閉的格不能再領錢，直接退給法人
             let (asset, funder, root_id) = (c.asset.clone(), c.funder.clone(), c.root);
@@ -869,6 +877,7 @@ impl Contract {
                 r.vault = U128(r.vault.0 + amount.0);
                 self.cells.insert(root_id, r);
                 self.vault_total += amount.0;
+                retained = true;
             } else {
                 self.pay_out(cell.0, &asset, funder, amount.0, format!("writ cell {} closed", cell.0));
             }
@@ -879,7 +888,7 @@ impl Contract {
             }
             self.cells.insert(cell.0, c);
         }
-        event("refunded", serde_json::json!({"cell": cell.0.to_string(), "amount": amount.0.to_string()}));
+        event(if retained { "retained" } else { "refunded" }, serde_json::json!({"cell": cell.0.to_string(), "amount": amount.0.to_string()}));
         Verdict::Rejected { cell, reason: "TRANSFER_FAILED".to_string(), strikes, tripped: false }
     }
 
@@ -1487,6 +1496,11 @@ impl Contract {
             _ => env::panic_str("NOT_CANCELLABLE"),
         }
         self.release(&mut cr, CreditStatus::Cancelled, 0);
+        // 取消的單沒人收到錢也沒人裁定過：發票放回去，公司可以重開或付款
+        if let Some(k) = Self::invoice_key(cr.root.0, &cr.invoice_hash) {
+            self.paid_invoices.remove(&k);
+            self.pending_invoices.remove(&k);
+        }
         self.credits.insert(credit.0, cr);
     }
 
@@ -1618,7 +1632,13 @@ impl Contract {
         require!(cr.status == CreditStatus::Disputed, "NOT_DISPUTED");
         require!(env::block_timestamp() > cr.recourse_until.0, "ARBITER_STILL_HAS_TIME");
         let delivered = cr.delivery_hash.is_some();
+        let key = Self::invoice_key(cr.root.0, &cr.invoice_hash);
         self.finish_dispute(cr, delivered);
+        // 仲裁人沒裁定、也沒交貨：沒人判過這張發票，放回去
+        if let (false, Some(k)) = (delivered, key) {
+            self.paid_invoices.remove(&k);
+            self.pending_invoices.remove(&k);
+        }
     }
 
     /// 違約：到期加寬限期仍未付，條件全是鏈上狀態，不問買賣糾紛。
@@ -1813,13 +1833,14 @@ impl Contract {
         self.release_retained(cr.root.0);
     }
 
-    /// 賒帳單結束：不再是待付。取消的單沒有人收到錢，發票放回去可以重開或付款。
+    /// 賒帳單結束而且賣方拿到錢：發票算已付。沒拿到錢的（取消、仲裁判公司勝）維持待付，
+    /// 所以 invoice_paid 是 false，而發票仍然占用：仲裁判掉的不能換條路再付。
     fn close_invoice(&mut self, cr: &Credit) {
+        if cr.status == CreditStatus::Cancelled {
+            return;
+        }
         if let Some(k) = Self::invoice_key(cr.root.0, &cr.invoice_hash) {
             self.pending_invoices.remove(&k);
-            if cr.status == CreditStatus::Cancelled {
-                self.paid_invoices.remove(&k);
-            }
         }
     }
 

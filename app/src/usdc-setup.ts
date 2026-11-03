@@ -18,7 +18,7 @@ const acme = as(a.acme.id, a.acme.sk);
 const usdc = (id: string) => view(USDC, "ft_balance_of", { account_id: id }) as Promise<string>;
 
 const have = BigInt(await usdc(a.acme.id));
-if (have < 5n * 10n * UNIT) {
+if (have < 4n * 10n * UNIT) {
   console.error(`${a.acme.id} holds ${have} of USDC's smallest unit. Get testnet USDC from https://faucet.circle.com (network: NEAR Testnet), then run this again.`);
   process.exit(2);
 }
@@ -35,7 +35,7 @@ py("verify.py", "pin", "--root", JSON.parse(init.slice(init.indexOf("{"), init.l
 
 const reg = await register("0.5");
 if (!reg.ok) throw new Error("register failed: " + reg.error);
-const fund = await call(acme, USDC, "ft_transfer_call", { receiver_id: a.writ.id, amount: (5n * 10n * UNIT).toString(), msg: String(reg.cell) }, { deposit: 1n, gas: teraToGas("100") });
+const fund = await call(acme, USDC, "ft_transfer_call", { receiver_id: a.writ.id, amount: (4n * 10n * UNIT).toString(), msg: String(reg.cell) }, { deposit: 1n, gas: teraToGas("100") });
 if (fund.error) throw new Error("funding failed: " + fund.error);
 
 const before = BigInt(await usdc(a.merchant.id));

@@ -572,6 +572,52 @@ mod exact {
         cx.run("d", &acc("funder.near"), None, U, |w| w.dispute(U64(k), "cd".repeat(32))).unwrap();
         cx.run("r", &acc("arb.near"), None, 0, |w| w.resolve_dispute(U64(k), false)).unwrap();
         assert!(!paid(&cx, r, &inv));
+        assert_eq!(why(&open_inv(&mut cx, r, &inv)), "DUPLICATE", "a ruling against the seller keeps blocking the invoice");
+    }
+
+    #[test]
+    fn an_unruled_timeout_without_delivery_frees_the_invoice() {
+        let inv = "cc".repeat(32);
+        let (mut cx, r) = world(opt());
+        let k = opened(open_inv(&mut cx, r, &inv));
+        accept(&mut cx, k);
+        cx.run("d", &acc("funder.near"), None, U, |w| w.dispute(U64(k), "cd".repeat(32))).unwrap();
+        cx.now = cred(&cx, k).recourse_until.0 + 1;
+        cx.run("t", &acc("x.near"), None, 0, |w| w.resolve_timeout(U64(k))).unwrap();
+        assert!(!paid(&cx, r, &inv));
+        opened(open_inv(&mut cx, r, &inv));
+        // 有交貨的逾時算賣方贏：發票算已付
+        let (mut cx, r) = world(opt());
+        let k = opened(open_inv(&mut cx, r, &inv));
+        accept(&mut cx, k);
+        cx.run("d", &acc("funder.near"), None, U, |w| w.dispute(U64(k), "cd".repeat(32))).unwrap();
+        deliver(&mut cx, k);
+        cx.now = cred(&cx, k).recourse_until.0 + 1;
+        cx.run("t", &acc("x.near"), None, 0, |w| w.resolve_timeout(U64(k))).unwrap();
+        assert!(paid(&cx, r, &inv));
+        assert_eq!(why(&open_inv(&mut cx, r, &inv)), "DUPLICATE");
+    }
+
+    #[test]
+    fn a_spend_counts_as_paid_only_after_the_transfer_lands() {
+        let inv = "bb".repeat(32);
+        let (mut cx, r) = world(opt());
+        let (p, k) = (link(&cx, r, 1), key(&cx, r));
+        let i2 = inv.clone();
+        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), i2); }).unwrap();
+        assert!(!paid(&cx, r, &inv), "still in flight");
+        cx.resolve(false);
+        assert!(paid(&cx, r, &inv), "the transfer landed");
+
+        let (mut cx, r) = world(opt());
+        let (p, k) = (link(&cx, r, 1), key(&cx, r));
+        let i2 = inv.clone();
+        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), i2); }).unwrap();
+        cx.resolve(true);
+        assert!(!paid(&cx, r, &inv), "the transfer failed");
+        let (p, i2) = (link(&cx, r, 1), inv.clone());
+        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), i2); }).unwrap();
+        assert_eq!(cell(&cx, r).spends, 1, "and the invoice can be paid again");
     }
 
     #[test]

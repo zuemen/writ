@@ -87,7 +87,7 @@ const btn = (id: string) => $(id) as HTMLButtonElement;
 const nearStr = (y: any) => `${near(String(y))} NEAR`;
 const ledger: { label: string; hash: string }[] = [];
 function out(id: string, o: Out, cls: string, extra = "") {
-  if (o.hash && cls !== "err") ledger.push({ label: o.verdict, hash: o.hash });
+  if (o.hash && cls !== "err" && /^o\d$/.test(id)) ledger.push({ label: o.verdict, hash: o.hash });
   const el = $(id);
   el.className = `out show ${cls}`;
   el.innerHTML = `<b>${esc(o.verdict)}</b> ${txLink(o.hash)}<div>${esc(o.why)}${extra}</div>`;
@@ -132,7 +132,16 @@ function saveRun() { try { localStorage.setItem(STORE, JSON.stringify({ cell: sa
 function clearRun() { try { localStorage.removeItem(STORE); } catch {} }
 function loadRun(): { cell: string; credit: string; honest: boolean } | null { try { return JSON.parse(localStorage.getItem(STORE) ?? "null"); } catch { return null; } }
 const shuffled = <T,>(a: T[]) => a.map((x) => [Math.random(), x] as const).sort((p, q) => p[0] - q[0]).map((p) => p[1]);
-const creditOf = (): Promise<any> => provider.callFunction({ contractId: cfg.contract, method: "credit_of", args: { credit: creditId } }) as Promise<any>;
+const creditOnce = (): Promise<any> => provider.callFunction({ contractId: cfg.contract, method: "credit_of", args: { credit: creditId } }) as Promise<any>;
+async function creditOf(): Promise<any> {
+  for (let i = 0; ; i++) {
+    try { return await creditOnce(); } catch (e) {
+      if (i >= 3) throw e;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+}
+const SAVED = "The transaction went through, but the page could not read the result. Reload: your run is saved and picks up from the chain.";
 function setLive(ok: boolean) {
   $("liveText").textContent = ok ? "NEAR testnet, live" : "testnet not answering";
   $("live").classList.toggle("down", !ok);
@@ -181,9 +190,15 @@ function poolText() {
     : "";
 }
 async function pick() {
-  const states = await Promise.all(cfg.cells.map(async (c) => ({ root: await getCell(c.root.cell).catch(() => null), leaf: await getCell(c.leaf.cell).catch(() => null) })));
+  const states = await Promise.all(cfg.cells.map(async (c) => {
+    const root = await getCell(c.root.cell).catch(() => null);
+    const leaf = await getCell(c.leaf.cell).catch(() => null);
+    // 用過一次的樹可能正有別的訪客跑到一半：沒有未結清才算空閒
+    const card: any = root?.idx === 7 ? await provider.callFunction({ contractId: cfg.contract, method: "risk_card", args: { cell: c.root.cell } }).catch(() => null) : null;
+    return { root, leaf, idle: root?.idx === 6 || (card && BigInt(card.outstanding) === 0n && !card.frozen) };
+  }));
   if (states.every((s) => !s.root)) throw new Error("rpc");
-  const ok = (i: number, idx: number) => states[i].root?.status === "Active" && states[i].root.idx === idx && states[i].leaf?.rejects === 0;
+  const ok = (i: number, idx: number) => states[i].root?.status === "Active" && states[i].root.idx === idx && states[i].leaf?.rejects === 0 && states[i].idle;
   cfg.cells.forEach((c, i) => idxOf.set(c, states[i].root?.idx ?? 0));
   unused = shuffled(cfg.cells.filter((_c, i) => ok(i, 6)));
   paidOnce = shuffled(cfg.cells.filter((_c, i) => ok(i, 7)));
@@ -197,18 +212,22 @@ async function pick() {
     replayMode();
     return;
   }
+  replaying = false;
+  btn("cHonest").hidden = false;
+  btn("cBad").textContent = "Company won't pay";
   btn("cHonest").disabled = !unused.length;
   btn("cBad").disabled = false;
+  btn("cNo").disabled = false;
   await renderCard();
   setSteps("step", 1);
 }
 
 // 樹用完時：放一次真的舊交易，清楚標示這是錄下來的
 const REC: [string, number, string, string, string][] = [
-  ["o1", 2, "Recorded: order placed on credit", "FSpDan4UVugdb4rS4XPAnLka5Df6SrKYovnKq9XNt9QP", "Budget links spent, no money moved."],
-  ["o2", 3, "Recorded: accepted and shipped", "3hsmSKKEw3t5KWAzj61gR7QBjnyMryaobyTY1Kn2B5Yk", "The fee moved to the guarantor; the bond and the guarantor's exposure were locked for this order."],
-  ["o3", 4, "Recorded: seller paid in full", "VGLZ1wGhZkAnVAqdWg4XMb3TRjQhs24kFgjmKRQwCTy", "The seller received 0.800 NEAR; 0.698 NEAR of it came from the guarantor's stake. No approval needed."],
-  ["o4", 9, "Recorded: the company is named", "DGtcnEqMU6yFnLWPHYJB1shvmpLxYHGAfcEcvafsm1kL", "One earlier transaction deleted the agent's key; this one revealed the fictional company, checked against the commitment and the legal entity's signature."],
+  ["o1", 2, "Recorded: order placed on credit", "8pXrCzNtoF5nf1vfMiUa62KXNSqhkHLJEigNQ82SmF5p", "Budget links spent, no money moved."],
+  ["o2", 3, "Recorded: accepted and shipped", "5QSFXukqmwBYHETcxm51vfeX4nJtYSWjLcEDeZ3WWumv", "The fee moved to the guarantor; the bond and the guarantor's exposure were locked for this order."],
+  ["o3", 4, "Recorded: seller paid in full", "LUY5oaHBiyhDPPZMFokFts7psuqe7jwCYXjEUTACCmk", "The seller received 0.800 NEAR; 0.698 NEAR of it came from the guarantor's stake. No approval needed."],
+  ["o4", 9, "Recorded: the company is named", "4nVjFVQBNe2GTufSKQVjxBZg4QPeSQAcHckmU7THj68P", "One earlier transaction deleted the agent's key; this one revealed the fictional company, checked against the commitment and the legal entity's signature."],
 ];
 let replaying = false;
 function replayMode() {
@@ -264,6 +283,7 @@ async function choose(isHonest: boolean, b: HTMLButtonElement) {
   assignFire();
   const other = btn(isHonest ? "cBad" : "cHonest");
   other.disabled = true;
+  btn("cNo").disabled = true;
   const label = b.textContent;
   b.disabled = true;
   b.textContent = "Signing…";
@@ -275,28 +295,26 @@ async function choose(isHonest: boolean, b: HTMLButtonElement) {
     out("o1", { kind: "paid", verdict: `Order ${creditId}: ${nearStr(o.amount)} on credit`, why: `You chose: ${isHonest ? "the company will pay" : "the company won't pay"}. Budget links spent, no money moved. The agent could only order from a supplier in its mandate.`, hash: o.hash }, "good");
     setSteps("step", 2);
     btn("s2").disabled = false;
-    btn("s2d").disabled = false;
-    await renderCard();
+    await renderCard().catch(() => setLive(false));
   } catch (e: any) {
     b.textContent = label;
-    if (String(e?.message).includes("Rejected")) {
-      out("o1", { kind: "error", verdict: "Another visitor just used this mandate", why: "A different one is ready. Choose again." }, "err");
-      await pick().catch(() => {});
-    } else {
-      out("o1", { kind: "error", verdict: "Network error", why: "The testnet RPC did not answer cleanly. Try again." }, "err");
-      btn("cBad").disabled = false;
-      btn("cHonest").disabled = !unused.length;
-    }
+    const taken = /Rejected|AccessKey|does not exist/.test(String(e?.message));
+    out("o1", taken
+      ? { kind: "error", verdict: "Another visitor just used this mandate", why: "A different one is ready. Choose again." }
+      : { kind: "error", verdict: "Network error", why: "The testnet RPC did not answer cleanly. Try again." }, "err");
+    await pick().catch(() => setLive(false));
   }
 }
 btn("cHonest").addEventListener("click", () => choose(true, btn("cHonest")));
 btn("cBad").addEventListener("click", () => (replaying ? runReplay() : choose(false, btn("cBad"))));
-btn("s2d").addEventListener("click", () => {
-  btn("s2").disabled = btn("s2d").disabled = true;
-  out("o2", { kind: "paid", verdict: "You declined", why: "No transaction, and nothing is locked. Until a seller accepts, no one is bound: the fee is not paid, and the offer lapses by itself." }, "good");
-  hideSteps(3, 4);
+btn("cNo").addEventListener("click", () => {
+  btn("cHonest").disabled = btn("cBad").disabled = btn("cNo").disabled = true;
+  btn("cNo").classList.add("chosen");
+  out("o1", { kind: "paid", verdict: "You declined", why: "No transaction, and nothing is locked. Nothing binds anyone until a seller accepts, so walking away from this risk card costs you nothing." }, "good");
+  hideSteps(2, 3, 4);
   setSteps("step", 9);
-  finish("This run, on-chain", "Start a new run");
+  btn("again").textContent = "Look at it again";
+  btn("again").hidden = false;
 });
 function readyToSettle(c: any) {
   setSteps("step", 3);
@@ -328,7 +346,6 @@ function readyToEnforce(c: any) {
 }
 btn("s2").addEventListener("click", async () => {
   const seller = scoped(cfg.seller);
-  btn("s2d").disabled = true;
   const fail = (o: Out) => { btn("s2").disabled = false; out("o2", o, "err"); };
   const before: any = await creditOf().catch(() => null);
   if (!before) return fail({ kind: "error", verdict: "Network error", why: "The testnet RPC did not answer cleanly. Try again." });
@@ -339,9 +356,10 @@ btn("s2").addEventListener("click", async () => {
   }
   const o2 = await act(btn("s2"), call(seller, "mark_delivered", { credit: creditId, delivery_hash: randomHex() }, "50"));
   if (o2.kind === "error" || o2.kind === "blocked") return fail(o2);
-  const c: any = await creditOf();
+  const c: any = await creditOf().catch(() => null);
+  if (!c) return out("o2", { ...o2, verdict: "Shipped", why: SAVED }, "err");
   out("o2", { ...o2, verdict: "Accepted and shipped", why: `Locked for you: ${nearStr(c.bond_locked)} of the company's bond, ${nearStr(c.exposure)} of the guarantor's stake. The guarantor earned its fee when you accepted. You have delivered, so after the inspection window an unpaid order is a default.` }, "good");
-  await renderCard();
+  await renderCard().catch(() => setLive(false));
   readyToSettle(c);
 });
 btn("s3").addEventListener("click", async () => {
@@ -356,7 +374,7 @@ btn("s3").addEventListener("click", async () => {
     out("o3", { ...v, verdict: "Paid. Identity still sealed.", why: `You were paid${v.kind === "paid" ? " and withdrew" : ""}. Its legal name stays sealed from you, and this payment goes on its record.` }, "good");
     hideSteps(4);
     setSteps("step", 9);
-    await renderCard();
+    await renderCard().catch(() => setLive(false));
     finish("This run, on-chain");
     return;
   }
@@ -365,10 +383,11 @@ btn("s3").addEventListener("click", async () => {
     btn("s3").disabled = false;
     return out("o3", o, "err");
   }
-  const c: any = await creditOf();
+  const c: any = await creditOf().catch(() => null);
+  if (!c) return out("o3", { ...o, verdict: "You are paid in full", why: SAVED }, "err");
   debtAtDefault = BigInt(c.debt);
   out("o3", { ...o, verdict: "You are paid in full", why: `The contract paid you from the company's money first, then ${nearStr(c.debt)} from the guarantor's stake, within the ${nearStr(c.exposure)} it had locked for you. No approval needed. The company's agents are frozen: no new credit, no payments, no hires. It is still sealed: it can still repay the guarantor.` }, "block");
-  await renderCard();
+  await renderCard().catch(() => setLive(false));
   readyToEnforce(c);
 });
 btn("s4").addEventListener("click", async () => {
@@ -385,7 +404,7 @@ btn("s4").addEventListener("click", async () => {
   const u = await act(btn("s4"), call(g, "credit_unseal", { credit: creditId, lei: sale!.lei, salt: sale!.salt, ecr: sale!.ecr }, "50"));
   if (u.kind === "error" || u.kind === "blocked") {
     btn("s4").disabled = false;
-    await renderCard();
+    await renderCard().catch(() => setLive(false));
     return out("o4", { ...u, verdict: "Keys deleted, but the name was not revealed", why: "The contract refused the disclosure, or the network failed. See the transaction, or try again." }, "err");
   }
   const after: any = await creditOf().catch(() => null);
@@ -394,7 +413,7 @@ btn("s4").addEventListener("click", async () => {
   $("r4").hidden = false;
   out("o4", { ...u, verdict: "Every agent lost its key. The company is named.", why: `One transaction deleted all three agents' keys. ${repaid > 0n ? `Money left in the tree repaid ${nearStr(repaid)} of the guarantor's loss first. ` : ""}The next one revealed ${cfg.company}: the contract checked the LEI against the commitment made at the start, and the legal entity's signature, so a guarantor cannot name a company whose key it does not hold. The seller now knows who to pursue; that is a lead, not a court order.` }, "block");
   setSteps("step", 9);
-  await renderCard();
+  await renderCard().catch(() => setLive(false));
   finish("This run, on-chain");
 });
 // 重新整理後接著走：單號、哪棵樹都在瀏覽器裡，狀態讀鏈上
@@ -404,11 +423,15 @@ async function resume() {
   const c = cfg.cells.find((x) => x.cell === s.cell);
   if (!c) return clearRun();
   creditId = s.credit;
-  const cr: any = await creditOf().catch(() => null);
+  const cr: any = await creditOf(); // 讀不到就讓 boot 重試，不清進度
   if (!cr || !["Open", "Accepted", "Delivered", "Defaulted", "Enforced"].includes(cr.status)) return clearRun();
   sale = c;
   honest = s.honest;
-  btn("cHonest").disabled = btn("cBad").disabled = true;
+  replaying = false;
+  btn("cHonest").hidden = false;
+  btn("cBad").textContent = "Company won't pay";
+  $("pooltext").textContent = poolText();
+  btn("cHonest").disabled = btn("cBad").disabled = btn("cNo").disabled = true;
   btn(honest ? "cHonest" : "cBad").classList.add("chosen");
   out("o1", { kind: "paid", verdict: `Picked up your order ${creditId}`, why: `You chose: ${honest ? "the company will pay" : "the company won't pay"}. Its status is read from the chain.` }, "good");
   btn("again").textContent = "Start a new run";
@@ -422,6 +445,8 @@ async function resume() {
     readyToSettle(cr);
   } else {
     debtAtDefault = BigInt(cr.debt);
+    $("h3").textContent = "The due date passed, and you were paid";
+    $("p3").textContent = "The company didn't pay, so you claimed. Its agents are frozen and it is still sealed.";
     readyToEnforce(cr);
   }
 }
@@ -510,19 +535,20 @@ btn("askModel").addEventListener("click", async () => {
   b.disabled = true;
   b.textContent = "The model is reading…";
   try {
-    const r = await fetch("api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ invoice, seller: cfg.merchant }) });
+    const r = await fetch("api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ invoice }) });
     if (!r.ok) {
       const why = r.status === 429 ? "Too many tries in a minute. Wait a moment." : r.status === 400 ? "Write an invoice first." : "The model is not answering, or today's free quota is used up. The stealing challenge below still works.";
       return out("modelOut", { kind: "error", verdict: "No answer from the model", why }, "err");
     }
-    const { call: c } = await r.json();
+    const { call: c, cached } = await r.json();
     if (!c) return out("modelOut", { kind: "blocked", verdict: "The model called nothing", why: "It read the text and chose not to pay. No transaction." }, "good");
     const decided = `pay_invoice(${c.invoice_id}, ${c.payee}, ${c.links} link${c.links === 1 ? "" : "s"})`;
-    if (!/^[a-z0-9][a-z0-9._-]{1,63}$/.test(c.payee)) return out("modelOut", { kind: "blocked", verdict: `The model decided: ${decided}`, why: "That is not a NEAR account, so there is nothing to send." }, "err");
+    if (!/^(?=.{2,64}$)[a-z0-9]+([-_][a-z0-9]+)*(\.[a-z0-9]+([-_][a-z0-9]+)*)*$/.test(c.payee)) return out("modelOut", { kind: "blocked", verdict: `The model decided: ${decided}`, why: "That is not a NEAR account, so there is nothing to send." }, "err");
+    if (!Number.isInteger(c.links) || c.links < 1 || c.links > 4294967295) return out("modelOut", { kind: "blocked", verdict: `The model decided: ${decided}`, why: "That is not a number of links, so there is nothing to send." }, "err");
     b.textContent = "Signing what it decided…";
     const o = await send(spend(cfg.bounty.spent_link, c.links, c.payee));
     const chain = o.verdict.endsWith("CHAIN");
-    out("modelOut", { ...o, verdict: `The model decided: ${decided}`, why: `Contract: ${o.verdict}. ${chain ? CLEAN_WHY : o.why}` }, o.kind === "error" ? "err" : chain ? "good" : "block");
+    out("modelOut", { ...o, verdict: `The model decided: ${decided}`, why: `Contract: ${o.verdict}. ${chain ? CLEAN_WHY : o.why}${cached ? " (The model's earlier answer to this exact invoice, reused to save the free quota. The transaction is new.)" : ""}` }, o.kind === "error" ? "err" : chain ? "good" : "block");
     tally().catch(() => {});
   } catch {
     out("modelOut", { kind: "error", verdict: "No answer from the model", why: "The request failed. Try again." }, "err");
