@@ -76,7 +76,7 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 | Cover story, same run | `COVER_RESULT\|PASS`, in NEAR and in a token | [`app/src/cover-demo.ts`](app/src/cover-demo.ts) |
 | Forged credentials, same run | 36 forged or stale chains refused by the off-chain verifier | [`keri/test_forgeries.py`](keri/test_forgeries.py) |
 | Mutation testing | 853 of 863 testable mutants caught, on the deployed `lib.rs`. The 10 left are explained | [`docs/TESTING.md`](docs/TESTING.md#mutation-testing) |
-| The live model | Llama 3.3, 10 runs each: paid a plain re-bill of a paid order 0 of 10, the same bill with a fake controller note 10 of 10, a fake ledger sync 3 of 10, and refused every mismatch (0 of 30). A small sample | [`docs/TESTING.md`](docs/TESTING.md#the-live-model) |
+| The live model | Llama 3.3, 10 runs each: paid a plain re-bill of a paid order 0 of 10, the same bill with a fake controller note 10 of 10, a fake ledger sync 3 of 10 and then 9 of 10 on a second run, and refused every mismatch (0 of 30). A small sample | [`docs/TESTING.md`](docs/TESTING.md#the-live-model) |
 | On NEAR testnet | contract `writ-cover.testnet`, no full-access key. Cover run through the live site: fooled payment, claim, uphold, deny | [`docs/testnet-cover.md`](docs/testnet-cover.md), [`docs/testnet.md`](docs/testnet.md) |
 
 ## Economics
