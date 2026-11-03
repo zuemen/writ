@@ -2231,6 +2231,38 @@ async fn b31_the_seller_pays_the_fee_when_it_is_paid() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn b32_a_usage_order_settles_only_what_was_used() -> anyhow::Result<()> {
+    let cw = credit_world_x(CwOpts { bond: 5000, ..Default::default() }).await?;
+    let w = &cw.w;
+    let id = cw.opened(10, 10, 3600, "INV-USAGE").await;
+    cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
+    assert_eq!(cw.credit(&id).await["bond_locked"], (5 * UNIT).to_string());
+    let hash = hex::encode([1u8; 32]);
+    let e = cw.seller("mark_delivered", json!({"credit": id, "delivery_hash": hash, "final_amount": (10 * UNIT + 1).to_string()})).await.unwrap_err();
+    assert!(e.contains("BAD_FINAL_AMOUNT"), "{}", e);
+    bench("A82", "seller bills more than the order when it marks delivery", "BAD_FINAL_AMOUNT", "BAD_FINAL_AMOUNT", gain(w).await);
+    let used = 73 * UNIT / 10;
+    cw.seller("mark_delivered", json!({"credit": id, "delivery_hash": hash, "final_amount": used.to_string()})).await.unwrap();
+    let c = cw.credit(&id).await;
+    assert_eq!(c["amount"], used.to_string());
+    assert_eq!(c["original_amount"], (10 * UNIT).to_string());
+    assert_eq!(c["bond_locked"], (used / 2).to_string());
+    assert_eq!(c["exposure"], (used - used / 2).to_string());
+    assert_eq!(cw.card().await["outstanding"], used.to_string());
+    let st: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
+    assert_eq!(st["exposure"], (used - used / 2).to_string());
+    let v: Value = cw.agent.call(w.writ.id(), "settle").args_json(json!({"credit": id})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
+    assert_eq!(v["CreditSettled"]["amount"], used.to_string());
+    let got: Value = w.writ.view("claimable_of").args_json(json!({"account": w.merchant.id()})).await?.json()?;
+    assert_eq!(got, json!(used.to_string()));
+    let p: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    assert_eq!(p["idx"], 10, "the budget links stay spent");
+    assert_eq!(cw.solvent().await["solvent"], true);
+    bench("B32", "usage order: limit 10, seller bills 7.3, bond and exposure follow, only 7.3 settles", "7.3 paid", "7.3 paid", 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a78_a_company_with_no_money_for_the_fee_gets_no_guarantee() -> anyhow::Result<()> {
     let cw = credit_world_fee(0, 2000, 5, 0, 1, UNIT, LEI, 0).await?;
     // 金庫 1 節扣掉單據儲存剩 0.5 節；5 節的 20% 是 1 節，付不起

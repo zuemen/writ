@@ -242,7 +242,8 @@ pub struct Credit {
     pub cell: U64,
     pub root: U64,
     pub seller: AccountId,
-    pub amount: U128,
+    pub amount: U128,           // 目前金額；用量單交貨時可能縮小
+    pub original_amount: U128,  // 開單時的上限
     pub invoice_hash: String,
     pub opened_at: U64,
     pub due_at: U64,
@@ -250,6 +251,7 @@ pub struct Credit {
     pub bond_locked: U128,
     pub exposure: U128,         // 保證人為這筆承擔的金額
     pub fee: U128,              // 賣方接受時定下的保證費：買方付的已收，賣方付的等收款時才扣
+    pub fee_periods: u32,       // 接受時算出的期數；用量單縮小時賣方付的費用照這個重算
     pub delivery_hash: Option<String>,
     pub delivered_at: U64,
     pub dispute_escrow: U128,
@@ -1447,6 +1449,7 @@ impl Contract {
             root: U64(root_id),
             seller: to.clone(),
             amount: U128(amount),
+            original_amount: U128(amount),
             invoice_hash,
             opened_at: U64(now),
             due_at,
@@ -1454,6 +1457,7 @@ impl Contract {
             bond_locked: U128(0),
             exposure: U128(0),
             fee: U128(0),
+            fee_periods: 0,
             delivery_hash: None,
             delivered_at: U64(0),
             dispute_escrow: U128(0),
@@ -1481,7 +1485,8 @@ impl Contract {
         // 保證人或公司自己當賣方，等於自己製造違約：前者可走到揭露，後者把質押領給自己
         require!(cr.seller != t.guarantor && cr.seller != root.funder, "SELLER_NOT_INDEPENDENT");
         // 保證費：這是保證人肯做的理由。買方付的接受當下收，之後怎麼結束都不退（曝險已經承擔）；賣方付的等收款時扣
-        let fee = guarantee_fee(cr.amount.0, t.args.premium_bps, fee_periods(cr.due_at.0, env::block_timestamp()));
+        let periods = fee_periods(cr.due_at.0, env::block_timestamp());
+        let fee = guarantee_fee(cr.amount.0, t.args.premium_bps, periods);
         let premium = if t.args.fee_payer == FeePayer::Buyer { fee } else { 0 };
         let free = root.vault.0.saturating_sub(t.bond_locked.0);
         require!(free >= premium, "PREMIUM_SHORT");
@@ -1503,6 +1508,7 @@ impl Contract {
         cr.bond_locked = U128(bond);
         cr.exposure = U128(exposure);
         cr.fee = U128(fee);
+        cr.fee_periods = periods as u32;
         cr.status = CreditStatus::Accepted;
         self.credits.insert(credit.0, cr);
         event("credit_accepted", serde_json::json!({"credit": credit.0.to_string(), "bond": bond.to_string(), "premium": premium.to_string(), "fee": fee.to_string(), "guarantor_exposure": exposure.to_string()}));
@@ -1534,12 +1540,19 @@ impl Contract {
     }
 
     /// 賣方交貨，提交憑據。沒交貨就沒有違約。
-    pub fn mark_delivered(&mut self, credit: U64, delivery_hash: String) {
+    /// final_amount：用量單的實際金額（> 0 且不超過開單金額），只能在已接受、尚未爭議時給。
+    /// 單據縮成實際金額，保證金與曝險照原比例縮小，買方付過的費用不退，鏈節不退。
+    pub fn mark_delivered(&mut self, credit: U64, delivery_hash: String, final_amount: Option<U128>) {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
         require!(env::predecessor_account_id() == cr.seller, "ONLY_SELLER");
         // 公司搶先提出爭議時，賣方仍然可以留下交貨憑據，仲裁逾時才不會一律退給公司
         require!(matches!(cr.status, CreditStatus::Accepted | CreditStatus::Disputed) && cr.delivery_hash.is_none(), "NOT_ACCEPTED");
         hex32(&delivery_hash, "delivery_hash");
+        if let Some(f) = final_amount {
+            require!(cr.status == CreditStatus::Accepted, "FINAL_AMOUNT_NEEDS_ACCEPTED");
+            require!(f.0 > 0 && f.0 <= cr.amount.0, "BAD_FINAL_AMOUNT");
+            self.shrink_order(&mut cr, f.0);
+        }
         let now = env::block_timestamp();
         cr.delivery_hash = Some(delivery_hash);
         cr.delivered_at = U64(now);
@@ -1550,8 +1563,9 @@ impl Contract {
             require!(now <= cr.recourse_until.0, "DISPUTE_CLOSED");
             cr.recourse_until = U64(cr.recourse_until.0.max(now + self.windows.inspect.0 * 1_000_000_000));
         }
+        let (cr_amount, cr_original) = (cr.amount.0, cr.original_amount.0);
         self.credits.insert(credit.0, cr);
-        event("credit_delivered", serde_json::json!({"credit": credit.0.to_string()}));
+        event("credit_delivered", serde_json::json!({"credit": credit.0.to_string(), "final_amount": cr_amount.to_string(), "original_amount": cr_original.to_string()}));
     }
 
     /// agent 從自己的金庫結清。agent 鑰匙不受過期影響；被撤銷後由公司結清。
@@ -1838,6 +1852,28 @@ impl Contract {
     /// 假名只在同一個保證人底下有意義；別的保證人不能冒用這份紀錄。
     fn entity_key(guarantor: &AccountId, tag: &str) -> String {
         format!("{}:{}", guarantor, tag)
+    }
+
+    /// 用量單縮小：額度、保證金、曝險一起放回去，保證金維持條款承諾的比例。
+    fn shrink_order(&mut self, cr: &mut Credit, final_amount: u128) {
+        let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
+        let bond = final_amount * (t.args.bond_bps as u128) / 10_000;
+        let exposure = final_amount - bond;
+        t.outstanding = U128(t.outstanding.0 - (cr.amount.0 - final_amount));
+        t.bond_locked = U128(t.bond_locked.0 - (cr.bond_locked.0 - bond));
+        let cut = cr.exposure.0 - exposure;
+        if cut > 0 {
+            let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+            st.exposure = U128(st.exposure.0 - cut);
+            self.stakes.insert(t.guarantor.clone(), st);
+        }
+        if t.args.fee_payer == FeePayer::Seller {
+            cr.fee = U128(guarantee_fee(final_amount, t.args.premium_bps, cr.fee_periods as u128));
+        }
+        self.terms.insert(cr.root.0, t);
+        cr.amount = U128(final_amount);
+        cr.bond_locked = U128(bond);
+        cr.exposure = U128(exposure);
     }
 
     fn credit_seller(&mut self, seller: &AccountId, amount: u128) {

@@ -131,6 +131,12 @@ mod fuzz {
                         if c.root.0 != *r { continue; }
                         if matches!(c.status, CreditStatus::Open | CreditStatus::Accepted | CreditStatus::Delivered | CreditStatus::Disputed) {
                             o += c.amount.0; b += c.bond_locked.0; exp += c.exposure.0;
+                            // 接受之後保證金永遠等於條款承諾的比例，曝險是剩下的部分
+                            if c.status != CreditStatus::Open {
+                                let want = c.amount.0 * t.args.bond_bps as u128 / 10_000;
+                                if c.bond_locked.0 != want { e.push(format!("bond {} vs promised {}", c.bond_locked.0, want)); }
+                                if c.exposure.0 != c.amount.0 - want { e.push(format!("exposure {} of order", c.exposure.0)); }
+                            }
                         }
                         if c.debt.0 > 0 { d += 1; if !matches!(c.status, CreditStatus::Defaulted | CreditStatus::Enforced) { e.push(format!("debt in status {:?}", c.status)); } }
                         if c.status == CreditStatus::Disputed { if c.dispute_escrow.0 < c.amount.0 { e.push("escrow<amount".into()); } } else if c.dispute_escrow.0 != 0 { e.push("escrow left".into()); }
@@ -272,7 +278,7 @@ mod fuzz {
                 "open_credit".into()
             }
             7 | 8 => { let Some(c) = &info else { return "skip".into() }; let s = c.seller.clone(); let k = c.id; cx.run("accept", &s, None, 0, |w| w.accept_credit(k)); "accept".into() }
-            9 | 10 => { let Some(c) = &info else { return "skip".into() }; let s = c.seller.clone(); let k = c.id; cx.run("deliver", &s, None, 0, |w| w.mark_delivered(k, "ab".repeat(32))); "deliver".into() }
+            9 | 10 => { let Some(c) = &info else { return "skip".into() }; let s = c.seller.clone(); let k = c.id; let f = match cx.r(5) { 0 => Some(U128((c.amount.0 / 2).max(1))), 1 => Some(U128(c.amount.0 - 1)), 2 => Some(U128(c.amount.0 + 1)), _ => None }; cx.run("deliver", &s, None, 0, |w| w.mark_delivered(k, "ab".repeat(32), f)); "deliver".into() }
             11 => {
                 let Some(c) = &info else { return "skip".into() }; let k = c.id; let cc = c.cell.0;
                 let akey = cx.cells.iter().find(|x| x.id == cc).unwrap().pk.clone();

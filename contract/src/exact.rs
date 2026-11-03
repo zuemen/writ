@@ -66,7 +66,8 @@ mod exact {
     fn open(cx: &mut Cx, id: u64, j: u32) -> Verdict { let d = cx.now + 500 * NS; open_at(cx, id, j, d) }
     fn opened(v: Verdict) -> u64 { if let Verdict::CreditOpened { credit, .. } = v { credit.0 } else { panic!("not opened: {}", why(&v)) } }
     fn accept(cx: &mut Cx, k: u64) { cx.run("accept", &acc("s1.near"), None, 0, |w| w.accept_credit(U64(k))).expect("accept"); }
-    fn deliver(cx: &mut Cx, k: u64) { cx.run("deliver", &acc("s1.near"), None, 0, |w| w.mark_delivered(U64(k), "ab".repeat(32))).expect("deliver"); }
+    fn deliver(cx: &mut Cx, k: u64) { cx.run("deliver", &acc("s1.near"), None, 0, |w| w.mark_delivered(U64(k), "ab".repeat(32), None)).expect("deliver"); }
+    fn deliver_final(cx: &mut Cx, k: u64, f: u128) -> bool { cx.run("deliver", &acc("s1.near"), None, 0, |w| w.mark_delivered(U64(k), "ab".repeat(32), Some(U128(f)))).is_some() }
     fn settle(cx: &mut Cx, id: u64, k: u64) -> bool { let p = key(cx, id); cx.run("settle", &writ(), Some(&p), 0, |w| { let _ = w.settle(U64(k)); }).is_some() }
 
     fn hire(cx: &mut Cx, parent: u64, j: u32, f: impl FnOnce(&mut HireArgs)) -> Verdict {
@@ -495,6 +496,95 @@ mod exact {
         assert!(settle(&mut cx, r, k));
         assert_eq!(claim(&cx, "s1.near"), Some(4 * U));
         assert_eq!((stake(&cx).amount.0, stake(&cx).earned.0), (10 * U + fee, fee));
+    }
+
+    #[test]
+    fn a_usage_order_shrinks_everything_to_the_promised_ratio() {
+        let mut o = opt(); o.bond = 2500; o.premium = 100; o.limit = 6 * U;
+        let (mut cx, r) = world(o);
+        let k = opened(open(&mut cx, r, 5));
+        accept(&mut cx, k);
+        let paid = 5 * U / 100;
+        let (v, idx, st) = (cell(&cx, r).vault.0, cell(&cx, r).idx, stake(&cx));
+        assert_eq!((outstanding(&cx, r).0, outstanding(&cx, r).1, st.exposure.0), (5 * U, 5 * U / 4, 5 * U * 3 / 4));
+        assert!(deliver_final(&mut cx, k, 3 * U));
+        assert!(get_logs().iter().any(|l| l.contains("credit_delivered") && l.contains(&format!("\"final_amount\":\"{}\"", 3 * U)) && l.contains(&format!("\"original_amount\":\"{}\"", 5 * U))));
+        let c = cred(&cx, k);
+        assert_eq!((c.amount.0, c.original_amount.0, c.bond_locked.0, c.exposure.0, c.fee.0), (3 * U, 5 * U, 3 * U / 4, 3 * U * 3 / 4, paid));
+        assert_eq!(outstanding(&cx, r), (3 * U, 3 * U / 4, 0));
+        assert_eq!(stake(&cx).exposure.0, 3 * U * 3 / 4);
+        assert_eq!(stake(&cx).earned.0, paid, "a buyer-paid fee is not refunded");
+        assert_eq!(cell(&cx, r).vault.0, v, "the released bond was never moved out of the vault");
+        assert_eq!(cell(&cx, r).idx, idx, "the budget links stay spent");
+        // 額度放回去了：6U 上限還能再開 3U
+        opened(open(&mut cx, r, 3));
+        assert_eq!(why(&open(&mut cx, r, 1)), "CREDIT_LIMIT");
+        // 付的是實際金額
+        assert!(settle(&mut cx, r, k));
+        assert_eq!(claim(&cx, "s1.near"), Some(3 * U));
+        assert_eq!(cell(&cx, r).vault.0, v - S - 3 * U);
+    }
+
+    #[test]
+    fn final_amount_boundaries() {
+        let (mut cx, r) = world(opt());
+        let k = opened(open(&mut cx, r, 2));
+        accept(&mut cx, k);
+        assert!(!deliver_final(&mut cx, k, 0), "zero");
+        assert!(!deliver_final(&mut cx, k, 2 * U + 1), "more than ordered");
+        assert_eq!(cred(&cx, k).status, CreditStatus::Accepted);
+        assert!(deliver_final(&mut cx, k, 2 * U), "exactly the amount");
+        assert_eq!((cred(&cx, k).amount.0, cred(&cx, k).exposure.0), (2 * U, 2 * U));
+        // 尚未接受、已爭議：都不能改金額
+        let k = opened(open(&mut cx, r, 2));
+        assert!(!deliver_final(&mut cx, k, U), "not accepted");
+        accept(&mut cx, k);
+        cx.run("d", &acc("funder.near"), None, 2 * U, |w| w.dispute(U64(k), "cd".repeat(32))).unwrap();
+        assert!(!deliver_final(&mut cx, k, U), "disputed");
+        deliver(&mut cx, k);
+        assert_eq!(cred(&cx, k).amount.0, 2 * U);
+        // 1 yocto 也行，保證金取整到 0，曝險 1
+        let mut o = opt(); o.bond = 2500;
+        let (mut cx, r) = world(o);
+        let k = opened(open(&mut cx, r, 2));
+        accept(&mut cx, k);
+        assert!(deliver_final(&mut cx, k, 1));
+        assert_eq!((cred(&cx, k).bond_locked.0, cred(&cx, k).exposure.0), (0, 1));
+        assert_eq!(outstanding(&cx, r), (1, 0, 0));
+        assert_eq!(stake(&cx).exposure.0, 1);
+    }
+
+    #[test]
+    fn a_seller_paid_fee_follows_the_final_amount() {
+        const P: u64 = 30 * 86_400 * NS;
+        let mut o = opt(); o.premium = 100; o.payer = FeePayer::Seller; o.max_tenor = 400 * 86_400;
+        let (mut cx, r) = world(o);
+        let due = cx.now + P + 1;
+        let k = opened(open_at(&mut cx, r, 4, due));
+        accept(&mut cx, k);
+        assert_eq!((cred(&cx, k).fee.0, cred(&cx, k).fee_periods), (4 * U * 2 / 100, 2));
+        assert!(deliver_final(&mut cx, k, 3 * U));
+        let fee = 3 * U * 2 / 100;
+        assert_eq!(cred(&cx, k).fee.0, fee, "two periods on the final amount");
+        assert!(settle(&mut cx, r, k));
+        assert_eq!(claim(&cx, "s1.near"), Some(3 * U - fee));
+        assert_eq!(stake(&cx).earned.0, fee);
+    }
+
+    #[test]
+    fn a_default_on_a_usage_order_pays_only_the_final_amount() {
+        let mut o = opt(); o.vault = U; o.bond = 5000;
+        let (mut cx, r) = world(o);
+        let k = opened(open(&mut cx, r, 1));
+        accept(&mut cx, k);
+        assert!(deliver_final(&mut cx, k, U / 2));
+        cx.now = cred(&cx, k).due_at.0 + 51 * NS;
+        let v = cell(&cx, r).vault.0;
+        cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(k))).unwrap();
+        assert_eq!(claim(&cx, "s1.near"), Some(U / 2));
+        assert_eq!(cell(&cx, r).vault.0, v - U / 2);
+        assert_eq!(cred(&cx, k).debt.0, 0);
+        assert_eq!(stake(&cx).exposure.0, 0);
     }
 
     #[test]
