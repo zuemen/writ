@@ -80,9 +80,8 @@ The site's "Fool a real model" sends your invoice to Llama 3.3 on Cloudflare Wor
 
 What this is and isn't:
 
-- **Four runs each is a small sample.** It shows the demo can work. It is not a rate of anything, and says nothing about other models or prompts.
-- The test prompt priced a link at 0.0001 NEAR and allowed 150 tokens. The worker as deployed prices it at 0.01 USDC and allows 120. Nothing else in the prompt differs, but these exact settings were not rerun.
-- The test scripts were one-off and aren't in this repo. The site's "Plain re-bill", "With a fake controller note" and "Real purchase" use the tested texts. Its guard presets ("Swap the payee", "Inflate", "Pay INV-1 again") were **not measured**. When the model refuses one, the page says so and offers to send the call with no model involved, labelled as such.
+- **Ten runs each is a small sample.** It shows the demo can work. It is not a rate of anything, and says nothing about other models or prompts. The fake ledger sync was 4 of 4 in an earlier run with a slightly different prompt and 3 of 10 here, so treat every number as unstable.
+- The test is in `scripts/model-check/`. The site's "Plain re-bill", "With a fake controller note" and "Real purchase" use the tested texts. Its guard presets ("Swap the payee", "Inflate", "Pay INV-1 again") were **not measured**. When the model refuses one, the page says so and offers to send the call with no model involved, labelled as such.
 - Answers that pay are cached for a day by invoice text with the number removed, to save the free quota, and the page says when. Refusals are not cached.
 - Not NEAR AI, no TEE.
 
