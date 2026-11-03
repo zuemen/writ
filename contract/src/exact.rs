@@ -307,6 +307,19 @@ mod exact {
         (cx, r, a, b)
     }
 
+    /// 舊行為存證：金庫不足時保證金靜默縮水，差額轉給保證人，風險卡仍顯示 bond_bps。
+    #[test]
+    fn soft_bond_shrinks_silently_and_moves_the_gap_to_the_guarantor() {
+        let mut o = opt(); o.vault = 2 * U; o.bond = 10_000;
+        let (mut cx, r) = world(o);
+        let k = opened(open(&mut cx, r, 5));
+        accept(&mut cx, k);
+        let c = cred(&cx, k);
+        assert_eq!(c.bond_locked.0, 2 * U - S, "promised 5U, locked only what was free");
+        assert_eq!(c.exposure.0, 3 * U + S, "the gap moved to the guarantor");
+        assert_eq!(cx.peek(|w| w.terms.get(&r).unwrap().args.bond_bps), 10_000, "the card still says 100%");
+    }
+
     #[test]
     fn settle_may_use_only_its_own_bond() {
         let (mut cx, r, a, _) = two_bonded(3 * U);
