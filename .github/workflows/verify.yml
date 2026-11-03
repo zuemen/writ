@@ -20,3 +20,26 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libsodium23
       - run: make setup
       - run: make verify
+  # The deployed code hash, rebuilt. Dependency paths end up in panic messages, so the wasm matches only with Cargo's home at the path it was built with.
+  same-hash:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: deployed-writ-cover
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.0"
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: sudo mkdir -p /home/sanketsu && sudo chown "$USER" /home/sanketsu
+      - run: cd app && npm ci
+      - name: build and compare with the chain
+        env:
+          CARGO_HOME: /home/sanketsu/.cargo
+        run: |
+          make -C contract build
+          python3 scripts/code_hash.py contract/res/writ.wasm writ-cover.testnet
