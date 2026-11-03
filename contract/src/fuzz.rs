@@ -426,4 +426,6 @@ mod fuzz {
         println!("END-STATE enforced={} debt={} FAILURES {}", e, d, failures);
         assert_eq!(failures, 0);
     }
+
+    include!("exact.rs");
 }
