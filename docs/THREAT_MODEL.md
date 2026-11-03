@@ -130,6 +130,7 @@ All of these hold for the current contract.
 
 - **The contract can't tell if an agent was fooled.** A named arbiter decides, on evidence the contract only hashes. `context_hash` binds the text to the payment, not the text to the truth, and it can be omitted.
 - **A bought arbiter hurts both ways, and the limit protects only the guarantor.** Bought by the company, it pays false claims and costs the guarantor up to the limit. Bought by the guarantor, it denies true claims, and after any denial `void_cover` can end the cover at any later time: the lock comes back, the fee stays, and later payments have no cover. The company has no remedy on-chain.
+- **The arbiter can be a council, which spreads the risk without removing it.** A [Sputnik DAO ruled on testnet](testnet-dao-arbiter.md) with no contract change. Its policy can change, and the contract can't see who runs it, so a guarantor has to check that itself.
 - **Moral hazard is capped, not stopped.** A company that fools its own agent, with a seller it controls, gets the loss minus its share, if the arbiter upholds. The share and the limit are the only brakes; there is no fraud check.
 - **Seller refunds are invisible.** If a seller refunds a fooled payment, the contract can't see it, so a company could be repaid twice. The terms ask for a statement; nothing on-chain checks it.
 - **No company-wide total.** Each mandate has its own limit. Nothing adds up a company's mandates, or stops it buying cover from several guarantors for one loss.
