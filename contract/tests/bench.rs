@@ -1669,20 +1669,36 @@ async fn a52_seller_side_attacks() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn a56_bond_is_locked_per_credit_and_cannot_be_raced() -> anyhow::Result<()> {
-    // 金庫 3 節，保證金 100%：第一筆鎖 2 節，第二筆只剩不到 1.5 節可鎖，差額由保證人扛
-    let cw = credit_world_with(10_000, 5, 0, 1, 3 * UNIT, LEI).await?;
+    // 金庫 4.x 節，保證金 100%：兩筆各鎖 2 節。串通的賣方先告違約，只能動到自己那筆的保證金
+    let cw = credit_world_with(10_000, 5, 0, 1, 5 * UNIT, LEI).await?;
     let first = cw.delivered(2, 2, 3600, "INV-1").await;
     let second = cw.delivered(4, 2, 1, "INV-2").await;
     let c1 = cw.credit(&first).await;
     assert_eq!(c1["bond_locked"], (2 * UNIT).to_string());
     let c2 = cw.credit(&second).await;
-    let bond2: u128 = c2["bond_locked"].as_str().unwrap().parse()?;
-    assert!(bond2 < 2 * UNIT);
+    assert_eq!(c2["bond_locked"], (2 * UNIT).to_string());
     wait_secs(2).await;
     cw.seller("claim_default", json!({"credit": second})).await.unwrap();
+    assert_eq!(cw.credit(&second).await["debt"], "0", "its own bond covered it");
     let c: Value = cw.w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
     assert!(c["vault"].as_str().unwrap().parse::<u128>()? >= 2 * UNIT, "the first seller's locked bond was not touched: {}", c["vault"]);
     bench("A56", "a colluding seller defaults first to drain the bond another seller relies on", "first seller's bond intact", "first seller's bond intact", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a79_a_bond_the_company_cannot_fund_is_refused() -> anyhow::Result<()> {
+    // 金庫 3 節，保證金 100%：第一筆鎖 2 節，第二筆鎖不到 2 節。以前差額會靜默轉給保證人
+    let cw = credit_world_with(10_000, 5, 0, 1, 3 * UNIT, LEI).await?;
+    let first = cw.delivered(2, 2, 3600, "INV-1").await;
+    assert_eq!(cw.credit(&first).await["bond_locked"], (2 * UNIT).to_string());
+    let second = cw.opened(4, 2, 3600, "INV-2").await;
+    let e = cw.seller("accept_credit", json!({"credit": second})).await.unwrap_err();
+    assert!(e.contains("BOND_SHORT"), "{}", e);
+    assert_eq!(cw.credit(&second).await["status"], "Open");
+    let st: Value = cw.w.writ.view("stake_of").args_json(json!({"account": cw.w.verifier.id()})).await?.json()?;
+    assert_eq!(st["exposure"], "0", "nothing moved to the guarantor");
+    bench("A79", "company with a thin vault gets an order accepted with less bond than the risk card says", "BOND_SHORT", "BOND_SHORT", gain(&cw.w).await);
     Ok(())
 }
 

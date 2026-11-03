@@ -1461,8 +1461,9 @@ impl Contract {
         root.vault = U128(root.vault.0 - premium);
         self.cells.insert(cr.root.0, root);
         let free = free - premium;
-        let want = cr.amount.0 * (t.args.bond_bps as u128) / 10_000;
-        let bond = want.min(free);
+        // 保證金是硬性要求：風險卡寫幾成就鎖幾成，付不出來這張單就不成立，差額不會靜默轉給保證人
+        let bond = cr.amount.0 * (t.args.bond_bps as u128) / 10_000;
+        require!(free >= bond, "BOND_SHORT");
         let exposure = cr.amount.0 - bond;
         let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
         require!(st.amount.0.saturating_add(premium).saturating_sub(st.exposure.0) >= exposure, "GUARANTOR_CAPACITY");

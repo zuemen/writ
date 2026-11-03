@@ -307,17 +307,28 @@ mod exact {
         (cx, r, a, b)
     }
 
-    /// 舊行為存證：金庫不足時保證金靜默縮水，差額轉給保證人，風險卡仍顯示 bond_bps。
+    /// 保證金是硬性要求：金庫少 1 yocto 就 BOND_SHORT，什麼都不動；剛好夠才成立。
     #[test]
-    fn soft_bond_shrinks_silently_and_moves_the_gap_to_the_guarantor() {
-        let mut o = opt(); o.vault = 2 * U; o.bond = 10_000;
+    fn a_bond_is_hard_to_the_exact_yocto() {
+        // 5U 的 100%：金庫扣掉單據儲存後剛好 5U 減 1
+        let mut o = opt(); o.vault = 5 * U + S - 1; o.bond = 10_000;
         let (mut cx, r) = world(o);
         let k = opened(open(&mut cx, r, 5));
+        let (v0, st0) = (cell(&cx, r).vault.0, stake(&cx));
+        cx.run("accept", &acc("s1.near"), None, 0, |w| w.accept_credit(U64(k)));
+        assert_eq!(cred(&cx, k).status, CreditStatus::Open, "BOND_SHORT leaves the order open");
+        assert_eq!((cell(&cx, r).vault.0, stake(&cx).exposure.0, st0.exposure.0, outstanding(&cx, r).1), (v0, 0, 0, 0));
+        // 補 1 yocto 就剛好成立，曝險只有沒押保證金的部分
+        set_vault(&mut cx, r, v0 + 1);
         accept(&mut cx, k);
         let c = cred(&cx, k);
-        assert_eq!(c.bond_locked.0, 2 * U - S, "promised 5U, locked only what was free");
-        assert_eq!(c.exposure.0, 3 * U + S, "the gap moved to the guarantor");
-        assert_eq!(cx.peek(|w| w.terms.get(&r).unwrap().args.bond_bps), 10_000, "the card still says 100%");
+        assert_eq!((c.bond_locked.0, c.exposure.0), (5 * U, 0));
+        // 費用先扣：付完費用剩下的才算得上保證金
+        let mut o = opt(); o.vault = 5 * U + S - 1; o.bond = 8000; o.premium = 2000;
+        let (mut cx, r) = world(o);
+        let k = opened(open(&mut cx, r, 5));
+        cx.run("accept", &acc("s1.near"), None, 0, |w| w.accept_credit(U64(k)));
+        assert_eq!(cred(&cx, k).status, CreditStatus::Open, "1U fee + 4U bond is one yocto short");
     }
 
     #[test]
