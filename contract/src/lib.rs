@@ -49,11 +49,25 @@ fn hire_fee(n: u32) -> u128 {
 fn register_fee(n: u32) -> u128 {
     REGISTER_FEE.as_yoctonear() + (n as u128) * STORAGE_PER_INVOICE
 }
+
+/// 這張單要付幾期：max(1, ceil((due_at - now) / 30 天))。不滿一期算一期；已過到期日也算一期。
+fn fee_periods(due_at: u64, now: u64) -> u128 {
+    let left = due_at.saturating_sub(now) as u128;
+    let period = NS_PER_PERIOD as u128;
+    ((left + period - 1) / period).max(1)
+}
+
+/// 保證費 = 金額 × 每期費率 × 期數 / 10000。
+fn guarantee_fee(amount: u128, premium_bps: u32, periods: u128) -> u128 {
+    amount * (premium_bps as u128) * periods / 10_000
+}
 /// agent 鑰匙能呼叫的方法——只有這一個寫入方法。
 pub const AGENT_METHODS: &str = "spend,hire,dismiss,open_credit,settle";
 /// scope 最多幾個收款人。
 pub const MAX_SCOPE: usize = 16;
 const NS_PER_DAY: u64 = 86_400_000_000_000;
+/// 保證費按天期計價：premium_bps 是每一期（30 天）的費率。
+pub const NS_PER_PERIOD: u64 = 30 * NS_PER_DAY;
 const GAS_FOR_CALLBACK: Gas = Gas::from_tgas(25); // 要付得起撤銷後的 ft_transfer（10）＋ on_refund（5）
 const GAS_FOR_REFUND_CB: Gas = Gas::from_tgas(5);
 const MAX_EVIDENCE: usize = 128;
@@ -177,7 +191,7 @@ pub struct RegisterArgs {
 pub struct CreditArgs {
     pub limit: U128,            // 未結清總額上限
     pub bond_bps: u32,          // 保證金比例（萬分比），賣方接受時逐筆鎖定
-    pub premium_bps: u32,       // 保證費（萬分比），賣方接受時由公司金庫付給保證人，不退
+    pub premium_bps: u32,       // 保證費（每 30 天的萬分比，不滿一期算一期），賣方接受時由公司金庫付給保證人，不退
     pub min_tenor: U64,         // 到期日距今最短（秒），防注入把到期設成幾秒後
     pub max_tenor: U64,
     pub terms_hash: String,     // 公司簽過的條款雜湊（準據法、同意揭露等）
@@ -1455,7 +1469,7 @@ impl Contract {
         // 保證人或公司自己當賣方，等於自己製造違約：前者可走到揭露，後者把質押領給自己
         require!(cr.seller != t.guarantor && cr.seller != root.funder, "SELLER_NOT_INDEPENDENT");
         // 保證費：這是保證人肯做的理由。接受當下收，之後怎麼結束都不退（曝險已經承擔）
-        let premium = cr.amount.0 * (t.args.premium_bps as u128) / 10_000;
+        let premium = guarantee_fee(cr.amount.0, t.args.premium_bps, fee_periods(cr.due_at.0, env::block_timestamp()));
         let free = root.vault.0.saturating_sub(t.bond_locked.0);
         require!(free >= premium, "PREMIUM_SHORT");
         root.vault = U128(root.vault.0 - premium);

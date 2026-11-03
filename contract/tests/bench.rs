@@ -1370,6 +1370,19 @@ async fn credit_world_full(bond_bps: u32, stake: u128, grace: u64, recourse: u64
 
 #[allow(clippy::too_many_arguments)]
 async fn credit_world_fee(bond_bps: u32, premium_bps: u32, stake: u128, grace: u64, recourse: u64, vault: u128, committed_lei: &str, inspect: u64) -> anyhow::Result<CreditWorld> {
+    credit_world_x(CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei.to_string(), inspect, ..Default::default() }).await
+}
+
+/// 信用世界的所有選項。預設：沒保證金、沒費用、質押 5 NEAR、金庫 30 節。
+struct CwOpts { bond: u32, premium: u32, stake: u128, grace: u64, recourse: u64, vault: u128, lei: String, inspect: u64, max_tenor: u64 }
+impl Default for CwOpts {
+    fn default() -> Self {
+        Self { bond: 0, premium: 0, stake: 5, grace: 0, recourse: 1, vault: 30 * UNIT, lei: LEI.to_string(), inspect: 0, max_tenor: 3600 }
+    }
+}
+
+async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
+    let CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei, inspect, max_tenor } = x;
     let worker = near_workspaces::sandbox().await?;
     let writ = worker.dev_deploy(&wasm_bytes()?).await?;
     writ.call("new").args_json(json!({"owner": writ.id(), "unseal_delay_secs": 5,
@@ -1407,7 +1420,7 @@ async fn credit_world_fee(bond_bps: u32, premium_bps: u32, stake: u128, grace: u
         "attested_at": ATTESTED_NOW.to_string(), "agent_pk": agent_sk.public_key(), "w0": pw.w0(), "n": o.n, "unit": o.unit.to_string(),
         "scope": o.scope, "valid_until": until.to_string(), "daily_links": o.daily,
         "lei_commit": hex::encode(Sha256::digest(format!("{}|{}", committed_lei, LEI_SALT))), "ecr_commit": o.ecr_commit, "verifier": w.verifier.id(),
-        "credit": {"limit": (10 * UNIT).to_string(), "bond_bps": bond_bps, "premium_bps": premium_bps, "min_tenor": "0", "max_tenor": "3600", "terms_hash": terms_hash,
+        "credit": {"limit": (10 * UNIT).to_string(), "bond_bps": bond_bps, "premium_bps": premium_bps, "min_tenor": "0", "max_tenor": max_tenor.to_string(), "terms_hash": terms_hash,
                    "terms_sig": terms_sig, "entity_tag": "ENTITY-7", "arbiter": arbiter.id()},
     });
     args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
@@ -2165,6 +2178,21 @@ async fn b30_the_guarantor_earns_a_fee_for_standing_behind_the_order() -> anyhow
     assert_eq!(st["earned"], fee.to_string(), "settling does not refund the fee");
     assert_eq!(cw.solvent().await["solvent"], true);
     bench("B30", "the guarantor earns its fee when the seller accepts; nothing is refunded", "fee on the risk card and in the stake", "fee on the risk card and in the stake", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a80_a_long_order_cannot_pay_the_one_period_fee() -> anyhow::Result<()> {
+    // 每期 2%；天期 90 天要收 3 期。一期的費用付得起、三期付不起：不能把長單當短單賺保證
+    let cw = credit_world_x(CwOpts { premium: 200, vault: UNIT, max_tenor: 100 * 86_400, ..Default::default() }).await?;
+    let due = now_ns(&cw.w).await? + 90 * 86_400 * SEC;
+    // 10 節的 2% = 0.2 節，一期付得起；三期 0.6 節超過扣完單據儲存後的金庫
+    let v: Value = cw.agent.call(cw.w.writ.id(), "open_credit").args_json(json!({"preimage": cw.pw.link(10), "j": 10, "to": cw.w.merchant.id(), "invoice_hash": hex::encode(Sha256::digest("INV-LONG")), "due_at": due.to_string()}))
+        .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
+    let id = v["CreditOpened"]["credit"].as_str().unwrap_or_else(|| panic!("{}", v)).to_string();
+    let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
+    assert!(e.contains("PREMIUM_SHORT"), "{}", e);
+    bench("A80", "a long order pays the fee of a short one", "PREMIUM_SHORT", "PREMIUM_SHORT", gain(&cw.w).await);
     Ok(())
 }
 

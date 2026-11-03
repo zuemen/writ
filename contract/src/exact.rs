@@ -8,9 +8,9 @@ mod exact {
     const T0: u64 = 1_000_000 * NS;
     const VALID: u64 = T0 + 1_000_000 * NS;
 
-    struct Opt { vault: u128, stake: u128, bond: u32, premium: u32, limit: u128, n: u32, daily: u32, maxl: u32, scope: Vec<AccountId> }
+    struct Opt { vault: u128, stake: u128, bond: u32, premium: u32, limit: u128, n: u32, daily: u32, maxl: u32, scope: Vec<AccountId>, max_tenor: u64 }
     fn opt() -> Opt {
-        Opt { vault: 100 * U, stake: 10 * U, bond: 0, premium: 0, limit: 1000 * U, n: 40, daily: 1000, maxl: 5, scope: vec![acc("s1.near"), acc("s2.near")] }
+        Opt { vault: 100 * U, stake: 10 * U, bond: 0, premium: 0, limit: 1000 * U, n: 40, daily: 1000, maxl: 5, scope: vec![acc("s1.near"), acc("s2.near")], max_tenor: 1000 }
     }
 
     fn world(o: Opt) -> (Cx, u64) {
@@ -32,7 +32,7 @@ mod exact {
             w.key_to_cell.insert(p2.clone(), id);
             w.used_keys.insert(p2.clone());
             w.vault_total += o.vault;
-            w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(o.limit), bond_bps: o.bond, premium_bps: o.premium, min_tenor: U64(10), max_tenor: U64(1000), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: "t".into(), arbiter: acc("arb.near") }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
+            w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(o.limit), bond_bps: o.bond, premium_bps: o.premium, min_tenor: U64(10), max_tenor: U64(o.max_tenor), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: "t".into(), arbiter: acc("arb.near") }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
             id
         }).unwrap();
         cx.cells.push(CellH { id, pk: p, links: ch });
@@ -329,6 +329,65 @@ mod exact {
         let k = opened(open(&mut cx, r, 5));
         cx.run("accept", &acc("s1.near"), None, 0, |w| w.accept_credit(U64(k)));
         assert_eq!(cred(&cx, k).status, CreditStatus::Open, "1U fee + 4U bond is one yocto short");
+    }
+
+    /// 接受時才算期數：差 1 奈秒就多一期。
+    #[test]
+    fn the_fee_is_per_started_thirty_days() {
+        const P: u64 = 30 * 86_400 * NS;
+        assert_eq!(NS_PER_PERIOD, P);
+        assert_eq!(fee_periods(T0, T0), 1, "due now is still one period");
+        assert_eq!(fee_periods(T0, T0 + 1), 1, "past due is still one period");
+        assert_eq!(fee_periods(T0 + 1, T0), 1);
+        assert_eq!(fee_periods(T0 + P, T0), 1);
+        assert_eq!(fee_periods(T0 + P + 1, T0), 2);
+        assert_eq!(fee_periods(T0 + 2 * P, T0), 2);
+        assert_eq!(fee_periods(T0 + 2 * P + 1, T0), 3);
+        assert_eq!(guarantee_fee(10_000, 150, 3), 450);
+        assert_eq!(guarantee_fee(9_999, 1, 1), 0, "rounds down");
+        for (extra, periods) in [(0u64, 1u128), (1, 2), (P, 2), (P + 1, 3)] {
+            let mut o = opt(); o.premium = 100; o.max_tenor = 400 * 86_400;
+            let (mut cx, r) = world(o);
+            let due = cx.now + P + extra;
+            let k = opened(open_at(&mut cx, r, 3, due));
+            let v = cell(&cx, r).vault.0;
+            accept(&mut cx, k);
+            let fee = 3 * U / 100 * periods;
+            assert_eq!(cell(&cx, r).vault.0, v - fee, "extra {}", extra);
+            assert_eq!(stake(&cx).amount.0, 10 * U + fee);
+            assert_eq!(stake(&cx).earned.0, fee);
+        }
+    }
+
+    /// 期數從賣方接受那一刻算，不是開單那一刻：晚接受可能少一期。
+    #[test]
+    fn the_periods_count_from_the_acceptance() {
+        const P: u64 = 30 * 86_400 * NS;
+        let mut o = opt(); o.premium = 100; o.max_tenor = 400 * 86_400;
+        let (mut cx, r) = world(o);
+        let due = cx.now + P + 10 * NS;
+        let k = opened(open_at(&mut cx, r, 3, due));
+        cx.now += 9 * NS;
+        let v = cell(&cx, r).vault.0;
+        accept(&mut cx, k);
+        assert_eq!(cell(&cx, r).vault.0, v - 2 * 3 * U / 100, "1 ns over the first period");
+        let mut o = opt(); o.premium = 100; o.max_tenor = 400 * 86_400;
+        let (mut cx, r) = world(o);
+        let due = cx.now + P + 10 * NS;
+        let k = opened(open_at(&mut cx, r, 3, due));
+        cx.now += 10 * NS;
+        let v = cell(&cx, r).vault.0;
+        accept(&mut cx, k);
+        assert_eq!(cell(&cx, r).vault.0, v - 3 * U / 100, "exactly one period left");
+        // 到期日已過才接受，也只收一期
+        let mut o = opt(); o.premium = 100;
+        let (mut cx, r) = world(o);
+        let due = cx.now + 10 * NS;
+        let k = opened(open_at(&mut cx, r, 3, due));
+        cx.now += 50 * NS;
+        let v = cell(&cx, r).vault.0;
+        accept(&mut cx, k);
+        assert_eq!(cell(&cx, r).vault.0, v - 3 * U / 100);
     }
 
     #[test]
