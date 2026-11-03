@@ -114,7 +114,7 @@ const ATTESTED_NOW: u64 = u64::MAX / 2;
 fn attest_msg(a: &Value, funder: &AccountId, contract: &AccountId) -> String {
     let scope: Vec<String> = a["scope"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect();
     format!(
-        "writ:attest:v6\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}\ncredit={}",
+        "writ:attest:v7\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}\ncredit={}\ncover={}",
         contract, a["amc_said"].as_str().unwrap(), a.get("issuer_aid").and_then(|v| v.as_str()).unwrap(), a["issuer_pk"].as_str().unwrap(), a["agent_pk"].as_str().unwrap(),
         a["w0"].as_str().unwrap(), a["n"], a["unit"].as_str().unwrap(), scope.join(","),
         a["valid_until"].as_str().unwrap(), a["daily_links"], a["max_links"], a["max_strikes"], a["lei_commit"].as_str().unwrap(), a["ecr_commit"].as_str().unwrap(), funder,
@@ -122,7 +122,9 @@ fn attest_msg(a: &Value, funder: &AccountId, contract: &AccountId) -> String {
         a.get("asset").and_then(|v| v.as_str()).unwrap_or("near"),
         a.get("credit").filter(|c| !c.is_null()).map(|c| format!("{},{},{},{},{},{},{},{},{},{},{},{}",
             c["limit"].as_str().unwrap(), c["bond_bps"], c["premium_bps"], c["min_tenor"].as_str().unwrap(), c["max_tenor"].as_str().unwrap(),
-            c["terms_hash"].as_str().unwrap(), c["terms_sig"].as_str().unwrap(), c["entity_tag"].as_str().unwrap(), c["arbiter"].as_str().unwrap(), c["fee_payer"].as_str().unwrap(), c["seller_cap_bps"], c.get("asset").and_then(|v| v.as_str()).unwrap_or("near"))).unwrap_or_else(|| "none".to_string())
+            c["terms_hash"].as_str().unwrap(), c["terms_sig"].as_str().unwrap(), c["entity_tag"].as_str().unwrap(), c["arbiter"].as_str().unwrap(), c["fee_payer"].as_str().unwrap(), c["seller_cap_bps"], c.get("asset").and_then(|v| v.as_str()).unwrap_or("near"))).unwrap_or_else(|| "none".to_string()),
+        a.get("cover").filter(|c| !c.is_null()).map(|c| format!("{},{},{},{},{},{}",
+            c["limit"].as_str().unwrap(), c["deductible_bps"], c["premium_bps"], c["claim_window"].as_str().unwrap(), c["arbiter"].as_str().unwrap(), c["terms_hash"].as_str().unwrap())).unwrap_or_else(|| "none".to_string())
     )
 }
 
@@ -2821,5 +2823,588 @@ async fn a78_a_company_with_no_money_for_the_fee_gets_no_guarantee() -> anyhow::
     let st: Value = cw.w.writ.view("stake_of").args_json(json!({"account": cw.w.verifier.id()})).await?.json()?;
     assert_eq!(st["exposure"], "0");
     bench("A78", "a company with an empty vault takes a guarantee without paying for it", "PREMIUM_SHORT", "PREMIUM_SHORT", gain(&cw.w).await);
+    Ok(())
+}
+
+// ---------------------------------------------------------------- round 15: fooled-agent cover
+
+const COVER_LINK: u128 = 4_000_000_000_000_000_000_000; // COVER_STORAGE_PER_LINK
+fn cover_fee(n: u32) -> u128 { fee(n) + n as u128 * COVER_LINK }
+fn h(s: &str) -> String { hex::encode(Sha256::digest(s)) }
+const TG: u64 = 150;
+
+/// Options of a mandate with cover. Limits are in links. Defaults: 100 links of 5 at most, limit 50 links, 20% share, no fee.
+#[derive(Clone)]
+struct CvOpts { n: u32, max_links: u32, limit_links: u128, ded: u32, premium: u32, window: u64, dispute: u64, valid_secs: u64, vault: u128, stake: u128, token: bool, credit: bool, bond: u32, max_strikes: u32 }
+impl Default for CvOpts {
+    fn default() -> Self {
+        Self { n: 100, max_links: 5, limit_links: 50, ded: 2000, premium: 0, window: 600, dispute: 5, valid_secs: 3600, vault: 200 * UNIT, stake: 5, token: false, credit: false, bond: 0, max_strikes: 3 }
+    }
+}
+
+struct CoverWorld { w: World, cell: u64, agent: Account, pw: Payword, arbiter: Account, token: Option<Contract>, x: CvOpts }
+
+/// Builds the signed register arguments for this world.
+async fn cover_args(w: &World, x: &CvOpts, arbiter: &AccountId, asset: Option<&AccountId>, unit: u128) -> anyhow::Result<(Value, SecretKey, Payword)> {
+    let agent_sk = SecretKey::from_random(KeyType::ED25519);
+    let pw = Payword::new(x.n);
+    let until = now_ns(w).await? + x.valid_secs * SEC;
+    let o = default_opts(w);
+    let mut args = json!({
+        "amc_said": format!("EAMC_COVER_{}", rand::random::<u32>()), "issuer_aid": o.issuer_aid, "issuer_pk": o.issuer_pk, "max_links": x.max_links, "max_strikes": x.max_strikes,
+        "attested_at": ATTESTED_NOW.to_string(), "agent_pk": agent_sk.public_key(), "w0": pw.w0(), "n": x.n, "unit": unit.to_string(),
+        "scope": [w.merchant.id()], "valid_until": until.to_string(), "daily_links": x.n,
+        "lei_commit": hex::encode(Sha256::digest(format!("{}|{}", LEI, LEI_SALT))), "ecr_commit": o.ecr_commit, "verifier": w.verifier.id(),
+        "cover": {"limit": (x.limit_links * unit).to_string(), "deductible_bps": x.ded, "premium_bps": x.premium, "claim_window": x.window.to_string(), "arbiter": arbiter, "terms_hash": h("cover terms")},
+    });
+    if let Some(t) = asset { args["asset"] = json!(t); }
+    if x.credit {
+        args["credit"] = json!({"limit": (20 * unit).to_string(), "bond_bps": x.bond, "premium_bps": 0, "min_tenor": "0", "max_tenor": "3600", "terms_hash": hex::encode([0xabu8; 32]),
+            "terms_sig": "00".repeat(64), "entity_tag": "ENTITY-7", "arbiter": arbiter, "fee_payer": "Buyer", "seller_cap_bps": 0});
+        if let Some(t) = asset { args["credit"]["asset"] = json!(t); }
+    }
+    sign_args(w, &mut args);
+    Ok((args, agent_sk, pw))
+}
+
+fn sign_args(w: &World, args: &mut Value) {
+    args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
+}
+
+async fn try_register(w: &World, args: &Value, deposit: u128) -> Result<String, String> {
+    let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_yoctonear(deposit)).max_gas().transact().await.map_err(|e| e.to_string())?;
+    match r.into_result() { Ok(v) => Ok(v.json::<String>().unwrap()), Err(e) => Err(format!("{:?}", e)) }
+}
+
+async fn cover_world(x: CvOpts) -> anyhow::Result<CoverWorld> {
+    let worker = near_workspaces::sandbox().await?;
+    let writ = worker.dev_deploy(&wasm_bytes()?).await?;
+    writ.call("new").args_json(json!({"owner": writ.id(), "unseal_delay_secs": 5,
+        "windows": {"accept_ttl": "3600", "inspect": "0", "grace": "0", "recourse": "1", "dispute_timeout": x.dispute.to_string(), "unstake_delay": "1"}}))
+        .transact().await?.into_result()?;
+    let verifier = worker.dev_create_account().await?;
+    let funder = worker.dev_create_account().await?;
+    let merchant = worker.dev_create_account().await?;
+    let attacker = worker.dev_create_account().await?;
+    let arbiter = worker.dev_create_account().await?;
+    let verifier_sk = SigningKey::generate(&mut rand::thread_rng());
+    writ.call("set_verifier").args_json(json!({"account": verifier.id(), "pk_hex": hex::encode(verifier_sk.verifying_key().to_bytes())})).transact().await?.into_result()?;
+    if x.stake > 0 && !x.token {
+        verifier.call(writ.id(), "stake").deposit(NearToken::from_near(x.stake)).transact().await?.into_result()?;
+    }
+    let attacker_start = balance(&attacker).await;
+    let w = World { worker, writ, verifier, verifier_sk, funder, merchant, attacker, attacker_start };
+    let token = if x.token {
+        let t = w.worker.dev_deploy(&std::fs::read(FT_WASM)?).await?;
+        t.call("new").args_json(json!({"owner_id": w.funder.id(), "total_supply": (1_000_000 * T).to_string()})).transact().await?.into_result()?;
+        for who in [w.writ.id(), w.merchant.id(), w.verifier.id(), w.attacker.id()] {
+            w.funder.call(t.id(), "storage_deposit").args_json(json!({"account_id": who})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
+        }
+        Some(t)
+    } else { None };
+    let unit = if x.token { T } else { UNIT };
+    let (args, agent_sk, pw) = cover_args(&w, &x, arbiter.id(), token.as_ref().map(|t| t.id()), unit).await?;
+    // A token mandate's excess NEAR is refunded or becomes the reserve; a NEAR mandate's excess is the vault
+    let deposit = if x.token { cover_fee(x.n) + NEAR_RESERVE } else { cover_fee(x.n) + x.vault };
+    let id = try_register(&w, &args, deposit).await.map_err(|e| anyhow::anyhow!(e))?;
+    let agent = Account::from_secret_key(w.writ.id().clone(), agent_sk, &w.worker);
+    if let Some(t) = &token {
+        w.funder.call(t.id(), "ft_transfer_call").args_json(json!({"receiver_id": w.writ.id(), "amount": x.vault.to_string(), "msg": id.clone()})).deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+        if x.stake > 0 {
+            w.funder.call(t.id(), "ft_transfer").args_json(json!({"receiver_id": w.verifier.id(), "amount": (x.stake * T).to_string()})).deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+            w.verifier.call(t.id(), "ft_transfer_call").args_json(json!({"receiver_id": w.writ.id(), "amount": (x.stake * T).to_string(), "msg": "stake"})).deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+        }
+    }
+    Ok(CoverWorld { w, cell: id.parse()?, agent, pw, arbiter, token, x })
+}
+
+impl CoverWorld {
+    fn root(&self) -> String { self.cell.to_string() }
+    async fn act(&self, who: &Account, method: &str, args: Value) -> Result<(), String> {
+        let r = who.call(self.w.writ.id(), method).args_json(args).gas(near_workspaces::types::Gas::from_tgas(TG)).transact().await.map_err(|e| e.to_string())?;
+        r.into_result().map(|_| ()).map_err(|e| format!("{:?}", e))
+    }
+    async fn activate(&self) -> Result<(), String> { self.act(&self.w.verifier, "activate_cover", json!({"root": self.root()})).await }
+    async fn pay(&self, agent: &Account, pre: String, j: u32, inv: &str) -> Value {
+        agent.call(self.w.writ.id(), "spend").args_json(json!({"preimage": pre, "j": j, "to": self.w.merchant.id(), "invoice_hash": h(inv), "context_hash": h(&format!("invoice text and model output of {}", inv))}))
+            .gas(near_workspaces::types::Gas::from_tgas(80)).transact().await.unwrap().into_result().unwrap().json().unwrap()
+    }
+    /// Pays from the root and requires it to go through.
+    async fn paid(&self, link: u32, j: u32, inv: &str) {
+        let v = self.pay(&self.agent, self.pw.link(link), j, inv).await;
+        assert!(v.get("Paid").is_some(), "{}", v);
+    }
+    async fn file(&self, inv: &str) -> Result<(), String> { self.act(&self.w.funder, "file_claim", json!({"root": self.root(), "invoice_hash": h(inv), "evidence_hash": h("evidence")})).await }
+    async fn rule(&self, inv: &str, ruling: Value) -> Result<(), String> { self.act(&self.arbiter, "resolve_claim", json!({"root": self.root(), "invoice_hash": h(inv), "ruling": ruling, "ruling_hash": h("the reasons")})).await }
+    async fn uphold(&self, inv: &str, loss: u128) -> Result<(), String> { self.rule(inv, json!({"Uphold": {"loss": loss.to_string()}})).await }
+    async fn deny(&self, inv: &str) -> Result<(), String> { self.rule(inv, json!("Deny")).await }
+    async fn clear(&self) -> Result<(), String> { self.act(&self.w.funder, "clear_agent", json!({"root": self.root()})).await }
+    async fn cover(&self) -> Value { self.w.writ.view("cover_of").args_json(json!({"cell": self.root()})).await.unwrap().json().unwrap() }
+    async fn rec(&self, inv: &str) -> Value { self.w.writ.view("payment_of").args_json(json!({"cell": self.root(), "invoice_hash": h(inv)})).await.unwrap().json().unwrap() }
+    async fn stake(&self) -> Value {
+        let a = self.token.as_ref().map(|t| t.id().clone());
+        self.w.writ.view("stake_of").args_json(json!({"account": self.w.verifier.id(), "asset": a})).await.unwrap().json().unwrap()
+    }
+    async fn claim(&self, who: &AccountId) -> u128 {
+        let a = self.token.as_ref().map(|t| t.id().clone());
+        let v: String = self.w.writ.view("claimable_of").args_json(json!({"account": who, "asset": a})).await.unwrap().json().unwrap();
+        v.parse().unwrap()
+    }
+    async fn cell_state(&self) -> Value { self.w.writ.view("get_cell").args_json(json!({"cell": self.root()})).await.unwrap().json().unwrap() }
+    async fn solvent(&self) -> bool { let v: Value = self.w.writ.view("solvency").await.unwrap().json().unwrap(); v["solvent"] == true }
+    async fn open_order(&self, link: u32, j: u32, due_in: u64, inv: &str) -> String {
+        let due = now_ns(&self.w).await.unwrap() + due_in * SEC;
+        let v: Value = self.agent.call(self.w.writ.id(), "open_credit").args_json(json!({"preimage": self.pw.link(link), "j": j, "to": self.w.merchant.id(), "invoice_hash": h(inv), "due_at": due.to_string()}))
+            .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await.unwrap().into_result().unwrap().json().unwrap();
+        v["CreditOpened"]["credit"].as_str().unwrap_or_else(|| panic!("{}", v)).to_string()
+    }
+    async fn seller(&self, method: &str, args: Value) -> Result<(), String> { self.act(&self.w.merchant, method, args).await }
+}
+#[track_caller]
+fn must(r: Result<(), String>, code: &str) {
+    let e = r.expect_err(code);
+    assert!(e.contains(code), "{} vs {}", e, code);
+}
+
+#[tokio::test]
+async fn a97_dismissing_the_sub_agent_that_paid_does_not_escape_the_stop() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts::default()).await?;
+    cw.activate().await.unwrap();
+    let child_sk = SecretKey::from_random(KeyType::ED25519);
+    let child_pw = Payword::new(5);
+    let until = cw.cell_state().await["valid_until"].as_str().unwrap().to_string();
+    let v = hire(&cw.agent, cw.w.writ.id(), &cw.pw.link(5), 5, json!({"agent_pk": child_sk.public_key(), "w0": child_pw.w0(), "scope": [cw.w.merchant.id()], "valid_until": until, "daily_links": 5, "max_links": 5})).await;
+    let child: String = v["Hired"]["child"].as_str().unwrap_or_else(|| panic!("{}", v)).to_string();
+    let child_agent = Account::from_secret_key(cw.w.writ.id().clone(), child_sk, &cw.w.worker);
+    let v = cw.pay(&child_agent, child_pw.link(2), 2, "INV-CHILD").await;
+    assert!(v.get("Paid").is_some(), "{}", v);
+    cw.agent.call(cw.w.writ.id(), "dismiss").args_json(json!({"child": child})).gas(near_workspaces::types::Gas::from_tgas(100)).transact().await?.into_result()?;
+    cw.file("INV-CHILD").await.unwrap();
+    assert_eq!(cw.cover().await["open_claim"], h("INV-CHILD"));
+    let v = cw.pay(&cw.agent, cw.pw.link(6), 1, "INV-AFTER").await;
+    assert_eq!(v["Rejected"]["reason"], "UNDER_CLAIM", "{}", v);
+    assert_eq!(v["Rejected"]["strikes"], 0, "the claim costs the agent nothing");
+    let cell: Value = cw.w.writ.view("cover_of").args_json(json!({"cell": child})).await?.json()?;
+    assert_eq!(cell["open_claim"], h("INV-CHILD"), "the dismissed cell still finds the cover");
+    bench("A97", "agent hires a sub-agent, it pays, it is dismissed, the company claims: the stop lands on a closed cell", "whole tree UNDER_CLAIM", "whole tree UNDER_CLAIM", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a98_a_claim_gets_the_loss_not_the_payment() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts::default()).await?;
+    cw.activate().await.unwrap();
+    cw.paid(3, 3, "INV-OVER").await;
+    cw.file("INV-OVER").await.unwrap();
+    must(cw.uphold("INV-OVER", 3 * UNIT + 1).await, "BAD_LOSS");
+    bench("A98", "the arbiter awards more than the payment", "BAD_LOSS", "BAD_LOSS", gain(&cw.w).await);
+    // The invoice was 2 and the agent paid 3, and the goods arrived: the loss is 1, not 3
+    let (st0, cl0) = (cw.stake().await, cw.claim(cw.w.funder.id()).await);
+    cw.uphold("INV-OVER", UNIT).await.unwrap();
+    let want = UNIT * 8 / 10;
+    let st = cw.stake().await;
+    assert_eq!(st["amount"].as_str().unwrap().parse::<u128>()?, st0["amount"].as_str().unwrap().parse::<u128>()? - want);
+    assert_eq!(st["cover_paid"], want.to_string());
+    assert_eq!(cw.claim(cw.w.funder.id()).await - cl0, want);
+    let c = cw.cover().await;
+    assert_eq!(c["paid"], want.to_string());
+    assert_eq!(c["needs_clear"], true);
+    assert_eq!(cw.rec("INV-OVER").await["claim"]["Upheld"]["payout"], want.to_string());
+    bench("B40", "partial loss: paid 3, lost 1, 20% share: the guarantor pays 0.8, no more", "0.8 of a link", "0.8 of a link", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a99_revoking_cannot_release_the_lock_early() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts { valid_secs: 20, window: 12, dispute: 2, premium: 1000, ..Default::default() }).await?;
+    cw.activate().await.unwrap();
+    let earned = cw.stake().await["earned"].clone();
+    cw.act(&cw.w.verifier, "revoke", json!({"cell": cw.root(), "evidence": "guarantor walks away"})).await.unwrap();
+    let release = || cw.act(&cw.w.verifier, "release_cover", json!({"root": cw.root()}));
+    must(release().await, "TOO_EARLY");
+    assert_eq!(cw.stake().await["exposure"], (50 * UNIT).to_string(), "the lock stays");
+    bench("A99", "guarantor collects the fee, revokes and takes its lock back", "TOO_EARLY", "TOO_EARLY", gain(&cw.w).await);
+    wait_secs(34).await;
+    release().await.unwrap();
+    let st = cw.stake().await;
+    assert_eq!((st["exposure"].clone(), st["earned"].clone()), (json!("0"), earned));
+    assert_eq!(cw.cover().await["state"], "Released");
+    bench("B41", "after valid_until + claim_window the lock comes back; the fee stays", "Released", "Released", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a100_an_upheld_claim_cannot_jump_the_guarantors_debt() -> anyhow::Result<()> {
+    // Little in the vault: a 5-link default reaches the guarantor and freezes the company
+    let cw = cover_world(CvOpts { credit: true, vault: 6 * UNIT, ..Default::default() }).await?;
+    cw.activate().await.unwrap();
+    cw.paid(1, 1, "INV-PAID").await;
+    let id = cw.open_order(6, 5, 1, "INV-DEFAULT").await;
+    cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
+    cw.seller("mark_delivered", json!({"credit": id, "delivery_hash": hex::encode([1u8; 32])})).await.unwrap();
+    wait_secs(2).await;
+    cw.seller("claim_default", json!({"credit": id})).await.unwrap();
+    let cr: Value = cw.w.writ.view("credit_of").args_json(json!({"credit": id})).await?.json()?;
+    assert_ne!(cr["debt"], "0", "{}", cr);
+    let v0: u128 = cw.cell_state().await["vault"].as_str().unwrap().parse()?;
+    cw.file("INV-PAID").await.unwrap();
+    cw.uphold("INV-PAID", UNIT).await.unwrap();
+    let want = UNIT * 8 / 10;
+    assert_eq!(cw.claim(cw.w.funder.id()).await, 0, "nothing to take");
+    must(cw.act(&cw.w.funder, "withdraw", json!({})).await, "NOTHING_TO_WITHDRAW");
+    assert_eq!(cw.cell_state().await["vault"].as_str().unwrap().parse::<u128>()?, v0 + want, "it stays in the root's vault");
+    assert!(cw.solvent().await);
+    bench("A100", "company in default gets a claim upheld and withdraws the money past its debt", "payout stays in the vault", "payout stays in the vault", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b42_cover_alone_works_from_activation_to_withdrawal_in_near() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts { premium: 200, ..Default::default() }).await?;
+    assert_eq!(cw.cover().await["state"], "Offered");
+    let card: Value = cw.w.writ.view("risk_card").args_json(json!({"cell": cw.root()})).await?.json()?;
+    assert!(card.is_null(), "no credit, no credit card");
+    let p: Value = cw.w.writ.view("present").args_json(json!({"cell": cw.root()})).await?.json()?;
+    assert_eq!((p["cover"].clone(), p["credit"].clone()), (json!(true), json!(false)));
+    let v0: u128 = cw.cell_state().await["vault"].as_str().unwrap().parse()?;
+    cw.activate().await.unwrap();
+    let premium = 50 * UNIT * 200 / 10_000;
+    assert_eq!(cw.cell_state().await["vault"].as_str().unwrap().parse::<u128>()?, v0 - premium);
+    let st = cw.stake().await;
+    assert_eq!((st["earned"].clone(), st["exposure"].clone()), (json!(premium.to_string()), json!((50 * UNIT).to_string())));
+    cw.paid(2, 2, "INV-1").await;
+    let rec = cw.rec("INV-1").await;
+    assert_eq!(rec["context_hash"], h("invoice text and model output of INV-1"), "bound at payment");
+    assert_eq!(rec["amount"], (2 * UNIT).to_string());
+    cw.file("INV-1").await.unwrap();
+    cw.uphold("INV-1", 2 * UNIT).await.unwrap();
+    let v = cw.pay(&cw.agent, cw.pw.link(3), 1, "INV-2").await;
+    assert_eq!(v["Rejected"]["reason"], "NOT_CLEARED");
+    cw.clear().await.unwrap();
+    cw.paid(3, 1, "INV-2").await;
+    assert_eq!(cw.claim(cw.w.funder.id()).await, 2 * UNIT * 8 / 10);
+    cw.act(&cw.w.funder, "withdraw", json!({})).await.unwrap();
+    assert_eq!(cw.claim(cw.w.funder.id()).await, 0, "the company took its money");
+    assert!(cw.solvent().await);
+    bench("B42", "mandate with cover only, in NEAR: fee, lock, payment, claim, repayment, clear, pay again", "works end to end", "works end to end", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b43_cover_alone_works_in_a_token_with_no_near_reserve() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts { token: true, vault: 30 * T, stake: 60, premium: 200, ..Default::default() }).await?;
+    let t = cw.token.as_ref().unwrap();
+    assert_eq!(cw.cell_state().await["near_reserve"], "0", "the extra NEAR goes back");
+    cw.activate().await.unwrap();
+    let premium = 50 * T * 200 / 10_000;
+    assert_eq!(cw.cell_state().await["vault"].as_str().unwrap().parse::<u128>()?, 30 * T - premium);
+    assert_eq!(cw.stake().await["amount"], (60 * T + premium).to_string());
+    cw.paid(2, 2, "INV-T").await;
+    assert_eq!(ft_balance(&cw.w, t, cw.w.merchant.id()).await, 2 * T);
+    cw.file("INV-T").await.unwrap();
+    cw.uphold("INV-T", 2 * T).await.unwrap();
+    let want = 2 * T * 8 / 10;
+    assert_eq!(cw.claim(cw.w.funder.id()).await, want);
+    let f0 = ft_balance(&cw.w, t, cw.w.funder.id()).await;
+    cw.act(&cw.w.funder, "withdraw", json!({"asset": t.id()})).await.unwrap();
+    assert_eq!(ft_balance(&cw.w, t, cw.w.funder.id()).await - f0, want);
+    let total: String = cw.w.writ.view("token_total").args_json(json!({"asset": t.id()})).await?.json()?;
+    assert_eq!(total.parse::<u128>()?, ft_balance(&cw.w, t, cw.w.writ.id()).await, "books match the token balance");
+    assert!(cw.solvent().await);
+    bench("B43", "mandate with cover only, in a token, no NEAR reserve: same story, paid in the token", "works end to end", "works end to end", 0);
+    Ok(())
+}
+
+// M7: how much storage one payment really takes, measured on the worst case: the longest account name, a context hash, and an upheld claim.
+#[tokio::test]
+async fn b44_the_storage_fee_pays_for_the_largest_record() -> anyhow::Result<()> {
+    let mut cw = cover_world(CvOpts { n: 10, max_links: 1, limit_links: 10, ded: 1000, window: 3600, dispute: 60, stake: 1, vault: UNIT * 10, ..Default::default() }).await?;
+    // A 64-character implicit account as the payee: a NEAR transfer creates it. Needs a mandate of its own.
+    let long: AccountId = "ab".repeat(32).parse()?;
+    cw.x.n = 10;
+    let mut x = cw.x.clone();
+    x.stake = 0;
+    let (mut args, agent_sk, pw) = cover_args(&cw.w, &x, cw.arbiter.id(), None, UNIT).await?;
+    args["scope"] = json!([long]);
+    sign_args(&cw.w, &mut args);
+    let base = cw.w.writ.view_account().await?.storage_usage;
+    let id = try_register(&cw.w, &args, cover_fee(10) + 2 * NEAR_RESERVE).await.map_err(|e| anyhow::anyhow!(e))?;
+    let opened = cw.w.writ.view_account().await?.storage_usage - base;
+    cw.cell = id.parse()?;
+    cw.agent = Account::from_secret_key(cw.w.writ.id().clone(), agent_sk, &cw.w.worker);
+    cw.pw = pw;
+    cw.w.verifier.call(cw.w.writ.id(), "stake").deposit(NearToken::from_near(1)).transact().await?.into_result()?;
+    cw.activate().await.unwrap();
+    // The first claim also opens the company's claimable row, so measure from the second
+    let mut per_payment = 0u64;
+    for k in 1..=10u32 {
+        let inv = format!("INV-{}", k);
+        let s0 = cw.w.writ.view_account().await?.storage_usage;
+        let v: Value = cw.agent.call(cw.w.writ.id(), "spend").args_json(json!({"preimage": cw.pw.link(k), "j": 1, "to": long, "invoice_hash": h(&inv), "context_hash": h("largest context")}))
+            .gas(near_workspaces::types::Gas::from_tgas(100)).transact().await?.into_result()?.json()?;
+        assert!(v.get("Paid").is_some(), "{}", v);
+        cw.file(&inv).await.unwrap();
+        cw.uphold(&inv, UNIT).await.unwrap();
+        cw.clear().await.unwrap();
+        let used = cw.w.writ.view_account().await?.storage_usage - s0;
+        if k > 1 { assert!(per_payment == 0 || per_payment == used, "{} then {}", per_payment, used); per_payment = used; }
+    }
+    // The payment also takes one row in paid_invoices (45 of key, 40 of overhead), which the base fee pays for
+    let record = per_payment - 85;
+    assert!(record as u128 * 10_000_000_000_000_000_000 <= COVER_LINK, "a record of {} bytes is more than the fee pays", record);
+    assert!(per_payment as u128 * 10_000_000_000_000_000_000 <= COVER_LINK + 1_000_000_000_000_000_000_000);
+    // And the whole mandate, keys aside, is paid for by what register kept
+    let all = cw.w.writ.view_account().await?.storage_usage - base;
+    let kept = cover_fee(10) - 250_000_000_000_000_000_000_000;
+    assert!(all as u128 * 10_000_000_000_000_000_000 <= kept, "{} bytes", all);
+    assert!(cw.solvent().await, "solvency holds after every link was used and claimed");
+    println!("COVER_STORAGE|record={}|per_payment={}|mandate_open={}|mandate_total={}", record, per_payment, opened, all);
+    bench("B44", "storage per payment: longest account, context hash, upheld claim", "fee covers it", &format!("{} bytes per record, {} yocto per link", record, COVER_LINK), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a101_one_open_claim_one_claim_per_payment_inside_the_window() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts { window: 14, dispute: 2, ..Default::default() }).await?;
+    cw.activate().await.unwrap();
+    cw.paid(1, 1, "INV-1").await;
+    cw.paid(2, 1, "INV-2").await;
+    cw.paid(3, 1, "INV-3").await;
+    must(cw.file("INV-NEVER-PAID").await, "NO_PAYMENT");
+    cw.file("INV-1").await.unwrap();
+    must(cw.file("INV-2").await, "CLAIM_OPEN");
+    bench("A101", "company files twenty claims before the arbiter rules on the first", "CLAIM_OPEN", "CLAIM_OPEN", gain(&cw.w).await);
+    cw.deny("INV-1").await.unwrap();
+    must(cw.file("INV-1").await, "ALREADY_CLAIMED");
+    bench("A102", "company files again on a payment the arbiter denied", "ALREADY_CLAIMED", "ALREADY_CLAIMED", gain(&cw.w).await);
+    wait_secs(15).await;
+    must(cw.file("INV-3").await, "WINDOW_CLOSED");
+    bench("A103", "company claims on an old payment after the window", "WINDOW_CLOSED", "WINDOW_CLOSED", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a104_a_late_ruling_is_refused_and_a_timeout_can_be_filed_again() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts { window: 60, dispute: 6, ..Default::default() }).await?;
+    cw.activate().await.unwrap();
+    cw.paid(1, 1, "INV-1").await;
+    cw.file("INV-1").await.unwrap();
+    let timeout = || cw.act(&cw.w.attacker, "claim_timeout", json!({"root": cw.root()}));
+    must(timeout().await, "ARBITER_STILL_HAS_TIME");
+    wait_secs(7).await;
+    must(cw.uphold("INV-1", UNIT).await, "RULING_TOO_LATE");
+    bench("A104", "arbiter rules after its time ran out", "RULING_TOO_LATE", "RULING_TOO_LATE", gain(&cw.w).await);
+    let exposure = cw.stake().await["exposure"].clone();
+    timeout().await.unwrap();
+    let c = cw.cover().await;
+    assert_eq!((c["timed_out"].clone(), c["denied"].clone(), c["open_claim"].clone()), (json!(1), json!(0), Value::Null));
+    assert_eq!(cw.stake().await["exposure"], exposure, "nothing paid, nothing released");
+    assert_eq!(cw.rec("INV-1").await["claim"], "None");
+    cw.paid(2, 1, "INV-2").await;
+    cw.file("INV-1").await.unwrap();
+    cw.deny("INV-1").await.unwrap();
+    assert_eq!(cw.cover().await["denied"], 1);
+    bench("B45", "arbiter runs out of time: no payment, no denial, the company can file again, the count is public", "filed again", "filed again", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a105_void_needs_a_denied_claim_and_ends_the_records() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts { premium: 100, ..Default::default() }).await?;
+    cw.activate().await.unwrap();
+    cw.paid(1, 1, "INV-1").await;
+    cw.paid(2, 1, "INV-2").await;
+    let void = |inv: &'static str| cw.act(&cw.arbiter, "void_cover", json!({"root": cw.root(), "invoice_hash": h(inv)}));
+    must(void("INV-1").await, "NOT_DENIED");
+    bench("A105", "arbiter ends a company's cover with no denied claim to point at", "NOT_DENIED", "NOT_DENIED", gain(&cw.w).await);
+    cw.file("INV-1").await.unwrap();
+    cw.deny("INV-1").await.unwrap();
+    let earned = cw.stake().await["earned"].clone();
+    void("INV-1").await.unwrap();
+    let c = cw.cover().await;
+    assert_eq!((c["state"].clone(), c["remaining"].clone()), (json!("Voided"), json!("0")));
+    let st = cw.stake().await;
+    assert_eq!((st["exposure"].clone(), st["earned"].clone()), (json!("0"), earned), "lock back, fee kept");
+    cw.paid(3, 1, "INV-3").await;
+    assert!(cw.rec("INV-3").await.is_null(), "no record after void");
+    must(cw.file("INV-2").await, "COVER_NOT_ACTIVE");
+    bench("A106", "company keeps claiming after the arbiter found fraud", "COVER_NOT_ACTIVE", "COVER_NOT_ACTIVE", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a107_a_stop_costs_no_strike_settle_works_and_a_seller_cannot_accept() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts { credit: true, max_strikes: 2, ..Default::default() }).await?;
+    cw.activate().await.unwrap();
+    let accepted = cw.open_order(1, 1, 3600, "INV-A").await;
+    cw.seller("accept_credit", json!({"credit": accepted})).await.unwrap();
+    let waiting = cw.open_order(2, 1, 3600, "INV-W").await;
+    cw.paid(3, 1, "INV-P").await;
+    cw.file("INV-P").await.unwrap();
+    for k in 0..4 {
+        let v = cw.pay(&cw.agent, cw.pw.link(4), 1, &format!("INV-R{}", k)).await;
+        assert_eq!((v["Rejected"]["reason"].clone(), v["Rejected"]["strikes"].clone(), v["Rejected"]["tripped"].clone()), (json!("UNDER_CLAIM"), json!(0), json!(false)), "{}", v);
+    }
+    assert_eq!(cw.cell_state().await["status"], "Active");
+    bench("A107", "retrying during its company's claim gets the agent's key deleted", "no strike, key stays", "no strike, key stays", gain(&cw.w).await);
+    must(cw.seller("accept_credit", json!({"credit": waiting})).await, "UNDER_CLAIM");
+    bench("A108", "seller takes on the guarantor's money while the agent is under a claim", "UNDER_CLAIM", "UNDER_CLAIM", gain(&cw.w).await);
+    // Settling is not stopped: that would manufacture a default
+    let v: Value = cw.agent.call(cw.w.writ.id(), "settle").args_json(json!({"credit": accepted})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
+    assert!(v.get("CreditSettled").is_some(), "{}", v);
+    bench("B46", "a claim on the tree does not stop settling an order", "settled", "settled", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a109_cover_and_credit_draw_on_one_stake() -> anyhow::Result<()> {
+    // Cover locks everything: stake exactly the limit, 5 NEAR = 500 links
+    let cw = cover_world(CvOpts { credit: true, n: 600, limit_links: 500, stake: 5, ..Default::default() }).await?;
+    cw.activate().await.unwrap();
+    let id = cw.open_order(1, 1, 3600, "INV-C").await;
+    must(cw.seller("accept_credit", json!({"credit": id})).await, "GUARANTOR_CAPACITY");
+    cw.act(&cw.w.verifier, "request_unstake", json!({})).await.unwrap();
+    wait_secs(2).await;
+    must(cw.act(&cw.w.verifier, "withdraw_stake", json!({"amount": "1"})).await, "STAKE_EXPOSED");
+    bench("A109", "cover locks the whole stake, then a seller's order or a withdrawal draws on it again", "GUARANTOR_CAPACITY, STAKE_EXPOSED", "GUARANTOR_CAPACITY, STAKE_EXPOSED", gain(&cw.w).await);
+    // The other way: an order takes capacity before the cover locks. 1 NEAR = 100 links of stake, limit 100 links
+    let cw = cover_world(CvOpts { credit: true, n: 200, limit_links: 100, stake: 1, ..Default::default() }).await?;
+    let id = cw.open_order(1, 1, 3600, "INV-C").await;
+    cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
+    must(cw.activate().await, "GUARANTOR_CAPACITY");
+    assert_eq!(cw.cover().await["state"], "Offered");
+    bench("A110", "an order holds the stake, then the guarantor locks the same stake for cover", "GUARANTOR_CAPACITY", "GUARANTOR_CAPACITY", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a111_one_invoice_one_record() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts { credit: true, ..Default::default() }).await?;
+    cw.activate().await.unwrap();
+    let id = cw.open_order(1, 1, 3600, "INV-1").await;
+    let v = cw.pay(&cw.agent, cw.pw.link(2), 1, "INV-1").await;
+    assert_eq!(v["Rejected"]["reason"], "DUPLICATE");
+    assert!(cw.rec("INV-1").await.is_null(), "credit keeps no payment record");
+    cw.act(&cw.w.funder, "cancel_open", json!({"credit": id})).await.unwrap();
+    cw.paid(2, 1, "INV-1").await;
+    let first = cw.rec("INV-1").await;
+    assert_eq!(first["amount"], UNIT.to_string());
+    let due = now_ns(&cw.w).await? + 3600 * SEC;
+    let v: Value = cw.agent.call(cw.w.writ.id(), "open_credit").args_json(json!({"preimage": cw.pw.link(3), "j": 1, "to": cw.w.merchant.id(), "invoice_hash": h("INV-1"), "due_at": due.to_string()}))
+        .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
+    assert_eq!(v["Rejected"]["reason"], "DUPLICATE");
+    assert_eq!(cw.rec("INV-1").await, first, "the record is not replaced");
+    bench("A111", "cancelled order and payment on one invoice make two claims; a paid invoice is reopened as an order", "one record, DUPLICATE", "one record, DUPLICATE", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a112_a_short_vault_buys_no_cover_and_the_bond_does_not_pay() -> anyhow::Result<()> {
+    // 20% of 50 links is 10 links; the vault holds 5 and all of it would be a bond
+    let cw = cover_world(CvOpts { credit: true, premium: 2000, bond: 10_000, vault: 11 * UNIT, ..Default::default() }).await?;
+    let id = cw.open_order(5, 5, 3600, "INV-B").await;
+    cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
+    let (vault0, st0) = (cw.cell_state().await["vault"].clone(), cw.stake().await);
+    must(cw.activate().await, "PREMIUM_SHORT");
+    assert_eq!(cw.cover().await["state"], "Offered");
+    assert_eq!(cw.cell_state().await["vault"], vault0, "state unchanged, bond untouched");
+    assert_eq!(cw.stake().await["amount"], st0["amount"]);
+    bench("A112", "guarantor activates against a vault that can only pay from a seller's bond", "PREMIUM_SHORT", "PREMIUM_SHORT", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a113_every_cover_field_is_signed_and_register_refuses_bad_terms() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts::default()).await?;
+    let w = &cw.w;
+    let x = CvOpts::default();
+    let dep = cover_fee(x.n) + UNIT;
+    let (good, _, _) = cover_args(w, &x, cw.arbiter.id(), None, UNIT).await?;
+    let tampers: Vec<(&str, Value)> = vec![
+        ("limit", json!((60 * UNIT).to_string())), ("deductible_bps", json!(1000)), ("premium_bps", json!(1)), ("claim_window", json!("601")),
+        ("arbiter", json!(w.attacker.id())), ("terms_hash", json!(h("other terms"))),
+    ];
+    for (field, value) in tampers {
+        let mut bad = good.clone();
+        bad["cover"][field] = value;
+        let e = try_register(w, &bad, dep).await.unwrap_err();
+        assert!(e.contains("BAD_ATTESTATION"), "{}: {}", field, e);
+    }
+    let mut bad = good.clone();
+    bad["cover"] = Value::Null;
+    assert!(try_register(w, &bad, dep).await.unwrap_err().contains("BAD_ATTESTATION"), "cover cannot be dropped");
+    bench("A113", "company changes any cover term after the guarantor signed", "BAD_ATTESTATION", "BAD_ATTESTATION", gain(w).await);
+
+    // Each term a guarantor could sign by mistake, one by one, with a good signature
+    let bad_terms: Vec<(&str, Box<dyn Fn(&mut Value)>)> = vec![
+        ("COVER_SCOPE", Box::new({ let s = json!([w.merchant.id(), cw.arbiter.id()]); move |a| a["scope"] = s.clone() })),
+        ("COVER_SCOPE", Box::new({ let s = json!([w.merchant.id(), w.funder.id()]); move |a| a["scope"] = s.clone() })),
+        ("COVER_LIMIT_THIN", Box::new(|a| a["cover"]["limit"] = json!((50 * UNIT - 1).to_string()))),
+        ("COVER_LIMIT_HIGH", Box::new(|a| a["cover"]["limit"] = json!((100 * UNIT + 1).to_string()))),
+        ("COVER_DEDUCTIBLE", Box::new(|a| a["cover"]["deductible_bps"] = json!(999))),
+    ];
+    for (code, edit) in bad_terms {
+        let (mut args, _, _) = cover_args(w, &x, cw.arbiter.id(), None, UNIT).await?;
+        edit(&mut args);
+        sign_args(w, &mut args);
+        let e = try_register(w, &args, dep).await.unwrap_err();
+        assert!(e.contains(code), "{}: {}", code, e);
+    }
+    bench("A114", "cover signed over a scope with the arbiter or the company, a thin limit, or under 10% share", "COVER_SCOPE, COVER_LIMIT_THIN, COVER_DEDUCTIBLE", "COVER_SCOPE, COVER_LIMIT_THIN, COVER_DEDUCTIBLE", gain(w).await);
+
+    // The arbiter cannot be any party with a stake in the ruling, including the owner
+    for (who, code) in [(w.writ.id(), "COVER_ARBITER"), (w.verifier.id(), "COVER_ARBITER"), (w.funder.id(), "COVER_ARBITER")] {
+        let (args, _, _) = cover_args(w, &x, who, None, UNIT).await?;
+        let e = try_register(w, &args, dep).await.unwrap_err();
+        assert!(e.contains(code), "{}", e);
+    }
+    bench("A115", "the arbiter is the owner, the guarantor or the company", "COVER_ARBITER", "COVER_ARBITER", gain(w).await);
+    // Fee for the records: one yocto below is refused, whatever else is attached
+    let (args, _, _) = cover_args(w, &x, cw.arbiter.id(), None, UNIT).await?;
+    let e = try_register(w, &args, cover_fee(x.n)).await.unwrap_err();
+    assert!(e.contains("DEPOSIT_BELOW_FEE"), "{}", e);
+    bench("A116", "a mandate with cover opens without paying for its payment records", "DEPOSIT_BELOW_FEE", "DEPOSIT_BELOW_FEE", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a117_only_the_named_party_can_act_on_a_claim() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts::default()).await?;
+    let a = &cw.w.attacker;
+    must(cw.act(a, "activate_cover", json!({"root": cw.root()})).await, "ONLY_GUARANTOR");
+    cw.activate().await.unwrap();
+    must(cw.activate().await, "COVER_NOT_OFFERED");
+    cw.paid(1, 1, "INV-1").await;
+    cw.paid(2, 1, "INV-2").await;
+    let file = json!({"root": cw.root(), "invoice_hash": h("INV-1"), "evidence_hash": h("e")});
+    must(cw.act(a, "file_claim", file.clone()).await, "ONLY_FUNDER");
+    must(cw.act(&cw.arbiter, "file_claim", file).await, "ONLY_FUNDER");
+    cw.file("INV-1").await.unwrap();
+    let rule = json!({"root": cw.root(), "invoice_hash": h("INV-1"), "ruling": {"Uphold": {"loss": UNIT.to_string()}}, "ruling_hash": h("r")});
+    for who in [a, &cw.w.funder, &cw.w.verifier] {
+        must(cw.act(who, "resolve_claim", rule.clone()).await, "ONLY_ARBITER");
+    }
+    must(cw.act(a, "void_cover", json!({"root": cw.root(), "invoice_hash": h("INV-1")})).await, "ONLY_ARBITER");
+    must(cw.act(a, "clear_agent", json!({"root": cw.root()})).await, "ONLY_FUNDER");
+    must(cw.act(a, "release_cover", json!({"root": cw.root()})).await, "ONLY_GUARANTOR");
+    cw.uphold("INV-1", UNIT).await.unwrap();
+    must(cw.act(a, "clear_agent", json!({"root": cw.root()})).await, "ONLY_FUNDER");
+    bench("A117", "a stranger files, rules on, voids, clears or releases a cover; the company rules on its own claim", "ONLY_FUNDER, ONLY_ARBITER, ONLY_GUARANTOR", "ONLY_FUNDER, ONLY_ARBITER, ONLY_GUARANTOR", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a118_no_claim_without_a_covered_payment_and_no_bad_context() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts::default()).await?;
+    // Paid before the guarantor activated: nothing to claim on, however it is reported later
+    cw.paid(1, 1, "INV-OLD").await;
+    must(cw.file("INV-OLD").await, "COVER_NOT_ACTIVE");
+    cw.activate().await.unwrap();
+    must(cw.file("INV-OLD").await, "NO_PAYMENT");
+    bench("A118", "company claims on a payment made before the cover was active", "NO_PAYMENT", "NO_PAYMENT", gain(&cw.w).await);
+    let v: Value = cw.agent.call(cw.w.writ.id(), "spend").args_json(json!({"preimage": cw.pw.link(2), "j": 1, "to": cw.w.merchant.id(), "invoice_hash": h("INV-X"), "context_hash": "not-a-hash"}))
+        .gas(near_workspaces::types::Gas::from_tgas(100)).transact().await?.into_result()?.json()?;
+    assert_eq!(v["Rejected"]["reason"], "INVOICE");
+    bench("A119", "agent pays with a context hash nobody can check later", "Rejected:INVOICE", "Rejected:INVOICE", gain(&cw.w).await);
     Ok(())
 }

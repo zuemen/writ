@@ -49,12 +49,12 @@ export async function present(cell: string) {
 }
 
 /** Agent payment: get link idx+j from the human (off-chain) and hand it to the contract */
-export async function pay(cell: string, j: number, to: string, invoice: string): Promise<CallOut & { preimageIndex: number }> {
+export async function pay(cell: string, j: number, to: string, invoice: string, contextHash?: string): Promise<CallOut & { preimageIndex: number }> {
   const c: any = await view(W(), "get_cell", { cell });
   const k = (c?.idx ?? 0) + j;
   const preimage = releaseLink(Math.min(k, c?.n ?? k));
   const agent = new WritAgent({ contract: W(), rpc: RPC, agentKey: keriPrivate().agent_near_secret_key as KeyPairString });
-  const r = await agent.pay({ invoice, to, links: j, preimage });
+  const r = await agent.pay({ invoice, to, links: j, preimage, contextHash });
   const base = { logs: [], preimageIndex: k };
   if (r.outcome === "paid") return { ...base, hash: r.txHash, value: { Paid: { cell, amount: r.amount, idx: k, remaining_links: r.remainingLinks } } };
   if (r.outcome === "rejected") return { ...base, hash: r.txHash, value: { Rejected: { cell, reason: r.reason, strikes: r.strikes, tripped: r.tripped } } };
@@ -73,6 +73,29 @@ export async function revoke(cell: string, submitter = "merchant") {
   const r = await call(who, a.writ.id, "revoke_by_kel", { cell, ixn: b64(rv.ixn_hex), signature: b64(rv.sig_hex), ecr: readJson(join(DEMO, "ecr_opening.json")) }, { gas: teraToGas("100") });
   return { ...r, rev: rv, events: events(r.logs) };
 }
+
+// ---------------- Cover: who pays when the agent was fooled ----------------
+
+const hash = (s: string) => createHash("sha256").update(s).digest("hex");
+const signer = (name: string) => as(A()[name].id, A()[name].sk);
+
+/** The guarantor takes the fee and locks the limit. */
+export const activateCover = (root: string) => call(signer("verifier"), W(), "activate_cover", { root });
+
+/** The company claims on one payment; the whole tree stops. evidence is the document whose hash goes in the event. */
+export const fileClaim = (root: string, invoice: string, evidence: string) =>
+  call(signer("acme"), W(), "file_claim", { root, invoice_hash: hash(invoice), evidence_hash: hash(evidence) });
+
+/** The arbiter rules. The reasons stay off chain; their hash goes on the record. */
+export const resolveClaim = (root: string, invoice: string, ruling: "Deny" | { Uphold: { loss: string } }, reasons: string) =>
+  call(signer("arbiter"), W(), "resolve_claim", { root, invoice_hash: hash(invoice), ruling, ruling_hash: hash(reasons) });
+
+/** After an upheld claim, the company says it dealt with its agent. A record, not a control. */
+export const clearAgent = (root: string) => call(signer("acme"), W(), "clear_agent", { root });
+
+export const withdrawFor = (name: string, asset: string | null = null) => call(signer(name), W(), "withdraw", asset ? { asset } : {});
+export const coverOf = (cell: string) => view(W(), "cover_of", { cell });
+export const paymentOf = (cell: string, invoice: string) => view(W(), "payment_of", { cell, invoice_hash: hash(invoice) });
 
 export function verifierCheck() {
   const v = pyBoth("verify.py", "check");

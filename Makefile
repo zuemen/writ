@@ -41,6 +41,11 @@ credit-usdc-demo: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && npx tsx src/setup.ts && npx tsx src/credit-usdc-demo.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
+# An agent fooled inside its limits, and the guarantor named beforehand repays part of the loss, in NEAR and in a token. Uses real KERI signatures; local sandbox only
+cover-demo: setup
+	scripts/sandbox.sh stop; scripts/sandbox.sh start
+	cd app && npx tsx src/setup.ts && npx tsx src/cover-demo.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
+
 # Optional: a real LLM as the agent (needs NEARAI_API_KEY). Local sandbox only. Results go to docs/attack-live.md
 attack-live: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
@@ -75,7 +80,7 @@ verify:
 
 clean:
 	scripts/sandbox.sh stop; rm -rf .demo .sandbox keri/.keystore keri/bundle keri/registrar
-.PHONY: setup test keri-check demo ui clean testnet testnet-usdc attack-live bounty pool live-agent verify credit-demo credit-usdc-demo credit-testnet attack-credit-live
+.PHONY: setup test keri-check demo ui clean testnet testnet-usdc attack-live bounty pool live-agent verify credit-demo credit-usdc-demo cover-demo credit-testnet attack-credit-live
 
 # Needs the owner's consent: creates accounts on NEAR testnet, deploys, signs transactions (test tokens, free). Results go to docs/testnet.md
 testnet: setup

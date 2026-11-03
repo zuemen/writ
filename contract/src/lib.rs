@@ -50,6 +50,28 @@ fn register_fee(n: u32) -> u128 {
     REGISTER_FEE.as_yoctonear() + (n as u128) * STORAGE_PER_INVOICE
 }
 
+/// Extra storage a mandate with cover pays at register, one payment record per link. A sub-agent's links come out of its parent's, so the whole tree makes at most n payments.
+/// Taken from the attached NEAR, so a token mandate with no NEAR reserve pays it too. Mandates without cover pay nothing extra.
+/// Measured in the bench (B44): the largest record, an upheld claim on a 64-character account with a context hash, takes 355 bytes, or 3.55e21 yocto at 1e19 per byte. 400 bytes leaves room.
+const COVER_STORAGE_PER_LINK: u128 = 4_000_000_000_000_000_000_000;
+/// The limit must be at least this many maximum payments, so reaching it takes many rulings, not one.
+const MIN_CLAIMS_IN_LIMIT: u128 = 10;
+/// Share of each loss the company keeps. It is there against carelessness; it does not make false claims unprofitable.
+const MIN_DEDUCTIBLE_BPS: u32 = 1_000;
+const MAX_DEDUCTIBLE_BPS: u32 = 9_000;
+const NS_PER_SEC: u64 = 1_000_000_000;
+
+/// What the guarantor pays on an upheld loss: loss x (1 - deductible), rounded down. Written so a very large token amount cannot overflow.
+fn cover_payout(loss: u128, deductible_bps: u32) -> u128 {
+    let share = (10_000 - deductible_bps) as u128;
+    loss / 10_000 * share + loss % 10_000 * share / 10_000
+}
+
+/// A value that must be 32 bytes of hex when present.
+fn hex32_or_none(s: &Option<String>) -> bool {
+    s.as_ref().map(|h| hex::decode(h).map(|v| v.len() == 32).unwrap_or(false)).unwrap_or(true)
+}
+
 /// How many periods an order pays: max(1, ceil((due_at - now) / 30 days)). A started period counts in full; a past due date counts as one.
 fn fee_periods(due_at: u64, now: u64) -> u128 {
     let left = due_at.saturating_sub(now) as u128;
@@ -62,9 +84,10 @@ fn guarantee_fee(amount: u128, premium_bps: u32, periods: u128) -> u128 {
     (amount * (premium_bps as u128) * periods / 10_000).min(amount)
 }
 
-/// Refusals that are not the agent being fooled, so they cost no strike: FROZEN is the company's debt, RESERVE is a reserve other agents used up.
+/// Refusals that are not the agent being fooled, so they cost no strike: FROZEN is the company's debt, RESERVE is a reserve other agents used up,
+/// UNDER_CLAIM and NOT_CLEARED are the company's own claim. Without this a retry during a claim would delete the company's agent.
 fn no_strike(reason: &str) -> bool {
-    reason == "FROZEN" || reason == "RESERVE"
+    reason == "FROZEN" || reason == "RESERVE" || reason == "UNDER_CLAIM" || reason == "NOT_CLEARED"
 }
 
 /// A required Option. Serde would read a missing field as None; a rule must say which asset it accepts (null means NEAR).
@@ -114,6 +137,8 @@ enum StorageKey {
     Policies,
     SellerExposure,
     TokenTotal,
+    Covers,
+    Payments,
 }
 
 /// Status of a cell. After Revoked or Tripped the key is no longer on the contract account.
@@ -206,6 +231,76 @@ pub struct RegisterArgs {
     /// Credit terms: omitted = this cell cannot buy on credit.
     #[serde(default)]
     pub credit: Option<CreditArgs>,
+    /// Fooled-agent cover: omitted = no cover. Signed into the attestation by the verifier, who is the guarantor.
+    #[serde(default)]
+    pub cover: Option<CoverArgs>,
+}
+
+/// Cover terms: if the named arbiter upholds a claim on a payment, the guarantor repays part of the loss, up to the limit.
+#[near(serializers = [borsh, json])]
+#[derive(Clone)]
+pub struct CoverArgs {
+    pub limit: U128,         // most the guarantor can pay in total under this mandate, locked in full at activation
+    pub deductible_bps: u32, // the company's share of each loss, 1000..=9000
+    pub premium_bps: u32,    // fee on the limit per 30 days, at most 2000; charged once, at activation, never refunded
+    pub claim_window: U64,   // seconds after a payment during which it can be claimed
+    pub arbiter: AccountId,  // rules on claims; not the company, the guarantor or the owner
+    pub terms_hash: String,  // hash of the terms: what is covered and excluded, the seller's chance to respond, the no-refund statement, transfer of rights
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub enum CoverState {
+    Offered,  // signed at register, nothing locked yet
+    Active,   // fee paid, limit locked; payments are recorded and claimable
+    Voided,   // the arbiter found a denied claim fraudulent: cover ended, lock released, fee kept
+    Released, // the guarantor took the lock back after valid_until + claim_window
+}
+
+/// The cover of a whole tree, kept on the root. The Cell struct does not change: a claim stops the whole tree, so hiring a sub-agent and dismissing it cannot dodge the stop.
+#[near(serializers = [borsh, json])]
+#[derive(Clone)]
+pub struct Cover {
+    pub args: CoverArgs,
+    pub guarantor: AccountId,
+    pub state: CoverState,
+    pub premium: U128,
+    pub paid: U128,                 // total paid on upheld claims
+    pub locked: U128,               // the part of stake.exposure held for this cover
+    pub open_claim: Option<String>, // invoice_hash of the open claim; while set, the whole tree is refused with UNDER_CLAIM
+    pub needs_clear: bool,          // set by an upheld claim; while set, the whole tree is refused with NOT_CLEARED
+    pub upheld: u32,
+    pub denied: u32,
+    pub timed_out: u32,
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClaimState {
+    None,
+    Open { filed_at: U64 }, // the evidence hash goes only to the event
+    Upheld { loss: U128, payout: U128, ruling_hash: String },
+    Denied { ruling_hash: String },
+}
+
+/// One payment made while cover was active. Each payment has at most one claim, keyed like the invoice.
+#[near(serializers = [borsh, json])]
+#[derive(Clone)]
+pub struct PaymentRecord {
+    pub cell: U64,
+    pub to: AccountId,
+    pub amount: U128,
+    pub paid_at: U64,
+    pub context_hash: Option<String>, // hash of the invoice text and the model's input and output, bound at payment time
+    pub claim: ClaimState,
+}
+
+/// The arbiter's ruling. loss is what the company really lost, at most the amount paid.
+#[near(serializers = [json])]
+#[derive(Clone, Debug, PartialEq)]
+pub enum Ruling {
+    Uphold { loss: U128 },
+    Deny,
 }
 
 /// Who pays the guarantee fee. Buyer: charged to the root's vault when the seller accepts. Seller: taken from the amount when the seller is paid; a cancelled order pays nothing.
@@ -293,9 +388,10 @@ pub struct Stake {
     pub exposure: U128,
     pub unstake_at: U64, // 0 = no withdrawal requested
     pub earned: U128,    // total guarantee fees received
-    pub claims_paid: U128, // total paid to sellers from the stake
+    pub claims_paid: U128, // total paid from the stake: to sellers on default, and on upheld cover claims
     pub recovered: U128,   // total recovered from the company
     pub sellers: Vec<AccountId>, // sellers the exposure comes from (capped, see MAX_BOOK_SELLERS)
+    pub cover_paid: U128,  // the part of claims_paid that went to cover claims; nobody owes it back
 }
 
 /// A seller's automatic credit rule: an order that fits ships, one that does not comes back with reasons.
@@ -427,6 +523,8 @@ pub struct Contract {
     policies: LookupMap<AccountId, SellerPolicy>,
     seller_exposure: LookupMap<(AccountId, Option<AccountId>, AccountId), u128>, // (guarantor, asset, seller) -> exposure; deleted at zero
     token_total: LookupMap<AccountId, u128>, // sum of books per token; the contract's balance in that token must be >= this
+    covers: LookupMap<u64, Cover>, // root cell id -> cover
+    payments: LookupMap<Vec<u8>, PaymentRecord>, // invoice_key(root, hash) -> the payment, only those made while cover was active
 }
 
 // ---------------- helpers ----------------
@@ -446,7 +544,7 @@ fn event(name: &str, data: Value) {
 pub fn attestation_message(a: &RegisterArgs, funder: &AccountId, contract: &AccountId) -> String {
     let scope: Vec<&str> = a.scope.iter().map(|s| s.as_str()).collect();
     format!(
-        "writ:attest:v6\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}\ncredit={}",
+        "writ:attest:v7\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}\ncredit={}\ncover={}",
         contract,
         a.amc_said,
         a.issuer_aid,
@@ -466,7 +564,8 @@ pub fn attestation_message(a: &RegisterArgs, funder: &AccountId, contract: &Acco
         a.verifier,
         a.attested_at.0,
         a.asset.as_ref().map(|t| t.as_str()).unwrap_or("near"),
-        a.credit.as_ref().map(|c| format!("{},{},{},{},{},{},{},{},{},{:?},{},{}", c.limit.0, c.bond_bps, c.premium_bps, c.min_tenor.0, c.max_tenor.0, c.terms_hash, c.terms_sig, c.entity_tag, c.arbiter, c.fee_payer, c.seller_cap_bps, c.asset.as_ref().map(|t| t.as_str()).unwrap_or("near"))).unwrap_or_else(|| "none".to_string())
+        a.credit.as_ref().map(|c| format!("{},{},{},{},{},{},{},{},{},{:?},{},{}", c.limit.0, c.bond_bps, c.premium_bps, c.min_tenor.0, c.max_tenor.0, c.terms_hash, c.terms_sig, c.entity_tag, c.arbiter, c.fee_payer, c.seller_cap_bps, c.asset.as_ref().map(|t| t.as_str()).unwrap_or("near"))).unwrap_or_else(|| "none".to_string()),
+        a.cover.as_ref().map(|c| format!("{},{},{},{},{},{}", c.limit.0, c.deductible_bps, c.premium_bps, c.claim_window.0, c.arbiter, c.terms_hash)).unwrap_or_else(|| "none".to_string())
     )
 }
 
@@ -510,6 +609,8 @@ impl Contract {
             policies: LookupMap::new(StorageKey::Policies),
             seller_exposure: LookupMap::new(StorageKey::SellerExposure),
             token_total: LookupMap::new(StorageKey::TokenTotal),
+            covers: LookupMap::new(StorageKey::Covers),
+            payments: LookupMap::new(StorageKey::Payments),
         }
     }
 
@@ -536,7 +637,7 @@ impl Contract {
     pub fn register(&mut self, args: RegisterArgs) -> U64 {
         let funder = env::predecessor_account_id();
         let deposit = env::attached_deposit();
-        let fee = register_fee(args.n);
+        let fee = register_fee(args.n) + args.cover.as_ref().map_or(0, |_| (args.n as u128) * COVER_STORAGE_PER_LINK);
         require!(deposit.as_yoctonear() > fee, "DEPOSIT_BELOW_FEE");
         require!(args.n > 0 && args.daily_links > 0 && args.max_links > 0, "BAD_LIMITS");
         require!(env::block_timestamp().saturating_sub(args.attested_at.0) <= MAX_ATTESTATION_AGE_NS, "STALE_ATTESTATION");
@@ -621,6 +722,24 @@ impl Contract {
             if !self.entities.contains_key(&key) {
                 self.entities.insert(key, EntityRecord { first_seen: U64(env::block_timestamp()), ..Default::default() });
             }
+        }
+        if let Some(cv) = &args.cover {
+            Self::check_cover_terms(cv, &args, &funder, &self.owner, self.windows.dispute_timeout.0);
+            self.covers.insert(id, Cover {
+                args: cv.clone(),
+                guarantor: args.verifier.clone(),
+                state: CoverState::Offered,
+                premium: U128(0),
+                paid: U128(0),
+                locked: U128(0),
+                open_claim: None,
+                needs_clear: false,
+                upheld: 0,
+                denied: 0,
+                timed_out: 0,
+            });
+        }
+        if args.credit.is_some() || args.cover.is_some() {
             // Open the stake account only for a token the verifier has signed: anyone can pose as a token contract to call ft_on_transfer, and a fake token must not inflate storage
             let sk = (args.verifier.clone(), args.asset.clone());
             if args.asset.is_some() && !self.stakes.contains_key(&sk) {
@@ -672,7 +791,8 @@ impl Contract {
     /// Callable only by an agent's function-call key: signer and predecessor must both be the contract account.
     /// preimage: the link a person released to the agent (hex); j: links to spend; amount = j x unit.
     /// invoice_hash: sha256 of this payment's invoice (hex). A tree cannot pay the same invoice twice; it is also the basis for reconciliation.
-    pub fn spend(&mut self, preimage: String, j: u32, to: AccountId, invoice_hash: String) -> PromiseOrValue<Verdict> {
+    /// context_hash (optional): hash of the invoice text and the model's input and output, bound now so a normal purchase cannot be reported as a fooled one later.
+    pub fn spend(&mut self, preimage: String, j: u32, to: AccountId, invoice_hash: String, context_hash: Option<String>) -> PromiseOrValue<Verdict> {
         require!(env::signer_account_id() == env::current_account_id() && env::predecessor_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
         let pk = env::signer_account_pk();
         let id = *self.key_to_cell.get(&pk).unwrap_or_else(|| env::panic_str("NO_CELL"));
@@ -690,16 +810,18 @@ impl Contract {
         // An invoice can be paid only once in the whole tree, not once per cell
         let invoice_key = Self::invoice_key(c.root, &invoice_hash);
         let free = self.free_vault(id, &c);
-        // Checks in order: expired -> upper level suspended -> counterparty -> invoice -> per-payment cap -> limit (chain length) -> hash chain -> rate -> vault
+        // Checks in order: expired -> upper level suspended -> company's debt -> claim on the tree -> counterparty -> invoice -> per-payment cap -> limit (chain length) -> hash chain -> rate -> vault
         let reason: Option<&str> = if now > c.valid_until.0 {
             Some("EXPIRED")
         } else if self.suspended(&c) {
             Some("SUSPENDED")
         } else if self.owes_guarantor(c.root) {
             Some("FROZEN")
+        } else if let Some(b) = self.cover_block(c.root) {
+            Some(b)
         } else if !c.scope.iter().any(|s| *s == to) {
             Some("SCOPE")
-        } else if invoice_key.is_none() {
+        } else if invoice_key.is_none() || !hex32_or_none(&context_hash) {
             Some("INVOICE")
         } else if self.paid_invoices.contains(invoice_key.as_ref().unwrap()) {
             Some("DUPLICATE")
@@ -745,7 +867,7 @@ impl Contract {
         let payout = Self::send(&asset, to.clone(), amount, format!("writ cell {}", id));
         // The transaction's final result is the transfer's real result: Paid appears only when the money really arrived
         payout
-            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_CALLBACK).on_transfer(U64(id), U128(amount), invoice_hash, to, idx, remaining))
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_CALLBACK).on_transfer(U64(id), U128(amount), invoice_hash, to, idx, remaining, context_hash))
             .into()
     }
 
@@ -788,6 +910,8 @@ impl Contract {
             Some("SUSPENDED")
         } else if self.owes_guarantor(c.root) {
             Some("FROZEN")
+        } else if let Some(b) = self.cover_block(c.root) {
+            Some(b)
         } else if token_tree && !self.terms.contains_key(&c.root) {
             Some("HIRE_TOKEN")
         } else if child.scope.is_empty() || child.scope.len() > MAX_SCOPE || !child.scope.iter().all(|s| c.scope.contains(s)) {
@@ -962,7 +1086,7 @@ impl Contract {
     }
 
     #[private]
-    pub fn on_transfer(&mut self, cell: U64, amount: U128, invoice_hash: String, to: AccountId, idx: u32, remaining: u32, #[callback_result] r: Result<(), PromiseError>) -> Verdict {
+    pub fn on_transfer(&mut self, cell: U64, amount: U128, invoice_hash: String, to: AccountId, idx: u32, remaining: u32, context_hash: Option<String>, #[callback_result] r: Result<(), PromiseError>) -> Verdict {
         let Some(mut c) = self.cells.get(&cell.0).cloned() else { env::panic_str("NO_CELL") };
         if r.is_ok() {
             self.stats.paid += 1;
@@ -971,6 +1095,11 @@ impl Contract {
             }
             if let Some(k) = Self::invoice_key(c.root, &invoice_hash) {
                 self.pending_invoices.remove(&k);
+                // Only a payment made under live cover can be claimed. A callback landing after release or void writes nothing, so no claim can reach stake that is no longer locked for it.
+                let active = self.covers.get(&c.root).is_some_and(|v| v.state == CoverState::Active);
+                if active && !self.payments.contains_key(&k) {
+                    self.payments.insert(k, PaymentRecord { cell, to: to.clone(), amount, paid_at: U64(env::block_timestamp()), context_hash: context_hash.map(|h| h.to_lowercase()), claim: ClaimState::None });
+                }
             }
             event("paid", serde_json::json!({"cell": cell.0.to_string(), "to": to, "amount": amount.0.to_string(), "idx": idx, "invoice": invoice_hash}));
             return Verdict::Paid { cell, amount, idx, remaining_links: remaining };
@@ -1393,6 +1522,7 @@ impl Contract {
             "cell": cell.0.to_string(),
             "chain_valid": self.verifiers.contains_key(&c.verifier),
             "credit": self.terms.contains_key(&c.root),
+            "cover": self.covers.contains_key(&c.root),
             "verifier": c.verifier,
             "not_revoked": c.status == Status::Active,
             "not_expired": now <= c.valid_until.0,
@@ -1429,7 +1559,7 @@ impl Contract {
         top.truncate(TOP_SELLERS);
         Some(serde_json::json!({
             "asset": asset, "stake": st.amount, "exposure": st.exposure, "utilisation_bps": utilisation.min(u64::MAX as u128) as u64,
-            "earned": st.earned, "claims_paid": st.claims_paid, "recovered": st.recovered, "net_loss": U128(net_loss),
+            "earned": st.earned, "claims_paid": st.claims_paid, "cover_paid": st.cover_paid, "recovered": st.recovered, "net_loss": U128(net_loss),
             "loss_ratio_bps": loss_ratio.map(|r| r.min(u64::MAX as u128) as u64),
             "top_sellers": top.iter().map(|(e, s)| serde_json::json!({"seller": s, "exposure": U128(*e)})).collect::<Vec<_>>(),
         }))
@@ -1579,6 +1709,8 @@ impl Contract {
             Some("SUSPENDED")
         } else if terms.as_ref().unwrap().open_debts > 0 {
             Some("FROZEN")
+        } else if let Some(b) = self.cover_block(c.root) {
+            Some(b)
         } else if !c.scope.iter().any(|s| *s == to) {
             Some("SCOPE")
         } else if invoice_key.is_none() {
@@ -1714,6 +1846,8 @@ impl Contract {
         // Company revoked or suspended, already frozen, period passed: this quote can no longer stand, otherwise the guarantor's money would be fronted
         no(cell.status != Status::Active || self.suspended(cell), "AGENT_NOT_ACTIVE");
         no(t.open_debts != 0, "COMPANY_FROZEN");
+        // Stopped by a claim: the guarantor's exposure must not grow while the agent's judgement is in question
+        no(self.cover_block(cr.root.0).is_some(), "UNDER_CLAIM");
         // Removal from the allowlist is the only emergency measure after locking: this guarantor takes no new orders, accepted ones run on
         no(!self.verifiers.contains_key(&t.guarantor), "GUARANTOR_DELISTED");
         no(now > cell.valid_until.0, "MANDATE_EXPIRED");
@@ -2378,6 +2512,242 @@ impl Contract {
     }
 }
 
+// ================= Cover: a guarantor repays part of what a fooled agent paid =================
+//
+// The limit is the guarantee. Nothing here can tell whether an agent was fooled: a named arbiter decides, and an arbiter who is bought costs the guarantor up to the limit, no more.
+// None of these methods takes a deposit, so restricted keys can call them.
+#[near]
+impl Contract {
+    /// The guarantor takes the fee and locks the limit. All or nothing: a short vault panics and the cover stays Offered.
+    pub fn activate_cover(&mut self, root: U64) {
+        let mut cv = self.cover_get(root.0);
+        let who = env::predecessor_account_id();
+        require!(who == cv.guarantor, "ONLY_GUARANTOR");
+        require!(self.verifiers.contains_key(&who), "GUARANTOR_DELISTED");
+        require!(cv.state == CoverState::Offered, "COVER_NOT_OFFERED");
+        let mut r = self.cells.get(&root.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
+        require!(r.status == Status::Active, "NOT_ACTIVE");
+        let now = env::block_timestamp();
+        require!(now <= r.valid_until.0, "MANDATE_EXPIRED");
+        require!(!self.owes_guarantor(root.0), "COMPANY_FROZEN");
+        let premium = guarantee_fee(cv.args.limit.0, cv.args.premium_bps, fee_periods(r.valid_until.0, now));
+        require!(self.free_vault(root.0, &r) >= premium, "PREMIUM_SHORT");
+        let asset = r.asset.clone();
+        let mut st = self.stake_get(&who, &asset);
+        require!(st.amount.0.saturating_add(premium).saturating_sub(st.exposure.0) >= cv.args.limit.0, "GUARANTOR_CAPACITY");
+        r.vault = U128(r.vault.0 - premium);
+        self.cells.insert(root.0, r);
+        st.amount = U128(st.amount.0 + premium);
+        st.earned = U128(st.earned.0 + premium);
+        st.exposure = U128(st.exposure.0 + cv.args.limit.0);
+        self.stake_put(&who, &asset, st);
+        cv.state = CoverState::Active;
+        cv.premium = U128(premium);
+        cv.locked = cv.args.limit;
+        let limit = cv.args.limit;
+        self.covers.insert(root.0, cv);
+        event("cover_activated", serde_json::json!({"cell": root.0.to_string(), "guarantor": who, "premium": premium.to_string(), "limit": limit.0.to_string()}));
+    }
+
+    /// The company claims on one payment. The whole tree stops until the arbiter rules or runs out of time.
+    pub fn file_claim(&mut self, root: U64, invoice_hash: String, evidence_hash: String) {
+        let mut cv = self.cover_get(root.0);
+        let r = self.cells.get(&root.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
+        require!(env::predecessor_account_id() == r.funder, "ONLY_FUNDER");
+        hex32(&evidence_hash, "evidence_hash");
+        require!(cv.state == CoverState::Active, "COVER_NOT_ACTIVE");
+        require!(cv.open_claim.is_none(), "CLAIM_OPEN");
+        require!(cv.paid.0 < cv.args.limit.0, "COVER_EXHAUSTED");
+        let key = Self::invoice_key(root.0, &invoice_hash).unwrap_or_else(|| env::panic_str("NO_PAYMENT"));
+        let mut rec = self.payments.get(&key).cloned().unwrap_or_else(|| env::panic_str("NO_PAYMENT"));
+        require!(rec.claim == ClaimState::None, "ALREADY_CLAIMED");
+        let now = env::block_timestamp();
+        // Counted from valid_until at the latest, so no window outlasts the moment release_cover opens, whatever block the callback landed in
+        let closes = rec.paid_at.0.min(r.valid_until.0).saturating_add(cv.args.claim_window.0.saturating_mul(NS_PER_SEC));
+        require!(now <= closes, "WINDOW_CLOSED");
+        rec.claim = ClaimState::Open { filed_at: U64(now) };
+        let invoice = invoice_hash.to_lowercase();
+        let amount = rec.amount;
+        self.payments.insert(key, rec);
+        cv.open_claim = Some(invoice.clone());
+        self.covers.insert(root.0, cv);
+        event("claim_filed", serde_json::json!({"cell": root.0.to_string(), "invoice": invoice, "amount": amount.0.to_string(), "evidence_hash": evidence_hash}));
+    }
+
+    /// The arbiter rules, before dispute_timeout. Upheld: the guarantor pays loss x (1 - deductible), and the tree stays stopped until the company calls clear_agent.
+    /// While the tree has open credit or a debt the money stays in the root's vault, so it pays the guarantor and sellers first.
+    pub fn resolve_claim(&mut self, root: U64, invoice_hash: String, ruling: Ruling, ruling_hash: String) {
+        let mut cv = self.cover_get(root.0);
+        require!(env::predecessor_account_id() == cv.args.arbiter, "ONLY_ARBITER");
+        hex32(&ruling_hash, "ruling_hash");
+        let invoice = invoice_hash.to_lowercase();
+        require!(cv.open_claim.as_deref() == Some(invoice.as_str()), "NO_OPEN_CLAIM");
+        let key = Self::invoice_key(root.0, &invoice).unwrap_or_else(|| env::panic_str("NO_OPEN_CLAIM"));
+        let mut rec = self.payments.get(&key).cloned().unwrap_or_else(|| env::panic_str("NO_OPEN_CLAIM"));
+        let ClaimState::Open { filed_at } = rec.claim else { env::panic_str("NO_OPEN_CLAIM") };
+        require!(env::block_timestamp() <= filed_at.0.saturating_add(self.windows.dispute_timeout.0.saturating_mul(NS_PER_SEC)), "RULING_TOO_LATE");
+        match ruling {
+            Ruling::Uphold { loss } => {
+                require!(loss.0 > 0 && loss.0 <= rec.amount.0, "BAD_LOSS");
+                let payout = cover_payout(loss.0, cv.args.deductible_bps).min(cv.locked.0);
+                let mut r = self.cells.get(&root.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
+                let asset = r.asset.clone();
+                let mut st = self.stake_get(&cv.guarantor, &asset);
+                st.amount = U128(st.amount.0 - payout);
+                st.exposure = U128(st.exposure.0 - payout);
+                st.claims_paid = U128(st.claims_paid.0 + payout);
+                st.cover_paid = U128(st.cover_paid.0 + payout);
+                self.stake_put(&cv.guarantor, &asset, st);
+                cv.paid = U128(cv.paid.0 + payout);
+                cv.locked = U128(cv.locked.0 - payout);
+                cv.needs_clear = true;
+                cv.upheld += 1;
+                // Stake and claimable or vault sit in the same book, so the totals do not move. A repayment must not get around what the tree still owes.
+                let retained = self.terms.get(&root.0).is_some_and(|t| t.outstanding.0 > 0 || t.open_debts > 0);
+                if retained {
+                    r.vault = U128(r.vault.0 + payout);
+                    self.cells.insert(root.0, r);
+                } else {
+                    self.credit_seller(&r.funder, &asset, payout);
+                }
+                rec.claim = ClaimState::Upheld { loss, payout: U128(payout), ruling_hash: ruling_hash.clone() };
+                event("claim_upheld", serde_json::json!({"cell": root.0.to_string(), "invoice": invoice, "loss": loss.0.to_string(), "payout": payout.to_string(), "retained": retained, "ruling_hash": ruling_hash}));
+            }
+            Ruling::Deny => {
+                cv.denied += 1;
+                rec.claim = ClaimState::Denied { ruling_hash: ruling_hash.clone() };
+                event("claim_denied", serde_json::json!({"cell": root.0.to_string(), "invoice": invoice, "ruling_hash": ruling_hash}));
+            }
+        }
+        cv.open_claim = None;
+        self.payments.insert(key, rec);
+        self.covers.insert(root.0, cv);
+    }
+
+    /// The arbiter found a denied claim fraudulent: cover ends, the lock comes back, the fee stays. A separate method, so a key that can only rule cannot end a mandate.
+    pub fn void_cover(&mut self, root: U64, invoice_hash: String) {
+        let mut cv = self.cover_get(root.0);
+        require!(env::predecessor_account_id() == cv.args.arbiter, "ONLY_ARBITER");
+        require!(cv.state == CoverState::Active, "COVER_NOT_ACTIVE");
+        require!(cv.open_claim.is_none(), "CLAIM_OPEN");
+        let rec = Self::invoice_key(root.0, &invoice_hash).and_then(|k| self.payments.get(&k));
+        require!(matches!(rec.map(|x| &x.claim), Some(ClaimState::Denied { .. })), "NOT_DENIED");
+        let released = self.unlock_cover(root.0, &mut cv, CoverState::Voided);
+        cv.needs_clear = false;
+        self.covers.insert(root.0, cv);
+        event("cover_voided", serde_json::json!({"cell": root.0.to_string(), "invoice": invoice_hash.to_lowercase(), "released": released.to_string()}));
+    }
+
+    /// Anyone, once the arbiter's time has run out. Nothing is paid and nothing is denied: the payment can be claimed again while its window lasts.
+    pub fn claim_timeout(&mut self, root: U64) {
+        let mut cv = self.cover_get(root.0);
+        let invoice = cv.open_claim.clone().unwrap_or_else(|| env::panic_str("NO_OPEN_CLAIM"));
+        let key = Self::invoice_key(root.0, &invoice).unwrap_or_else(|| env::panic_str("NO_OPEN_CLAIM"));
+        let mut rec = self.payments.get(&key).cloned().unwrap_or_else(|| env::panic_str("NO_OPEN_CLAIM"));
+        let ClaimState::Open { filed_at } = rec.claim else { env::panic_str("NO_OPEN_CLAIM") };
+        require!(env::block_timestamp() > filed_at.0.saturating_add(self.windows.dispute_timeout.0.saturating_mul(NS_PER_SEC)), "ARBITER_STILL_HAS_TIME");
+        rec.claim = ClaimState::None;
+        self.payments.insert(key, rec);
+        cv.open_claim = None;
+        cv.timed_out += 1;
+        self.covers.insert(root.0, cv);
+        event("claim_timed_out", serde_json::json!({"cell": root.0.to_string(), "invoice": invoice}));
+    }
+
+    /// After an upheld claim the company says it has dealt with its agent. This leaves a record; it is not a security control. The guarantor's control is revoke.
+    pub fn clear_agent(&mut self, root: U64) {
+        let mut cv = self.cover_get(root.0);
+        let r = self.cells.get(&root.0).unwrap_or_else(|| env::panic_str("NO_CELL"));
+        require!(env::predecessor_account_id() == r.funder, "ONLY_FUNDER");
+        require!(cv.needs_clear, "NOTHING_TO_CLEAR");
+        require!(cv.open_claim.is_none(), "CLAIM_OPEN");
+        cv.needs_clear = false;
+        self.covers.insert(root.0, cv);
+        event("agent_cleared", serde_json::json!({"cell": root.0.to_string()}));
+    }
+
+    /// The only way the guarantor gets its lock back: after valid_until + claim_window, with no open claim. Revoking the mandate does not bring this forward,
+    /// and a delisted guarantor can still do it.
+    pub fn release_cover(&mut self, root: U64) {
+        let mut cv = self.cover_get(root.0);
+        require!(env::predecessor_account_id() == cv.guarantor, "ONLY_GUARANTOR");
+        require!(cv.state == CoverState::Active, "COVER_NOT_ACTIVE");
+        require!(cv.open_claim.is_none(), "CLAIM_OPEN");
+        let until = self.cells.get(&root.0).map(|c| c.valid_until.0).unwrap_or_else(|| env::panic_str("NO_CELL"));
+        require!(env::block_timestamp() > until.saturating_add(cv.args.claim_window.0.saturating_mul(NS_PER_SEC)), "TOO_EARLY");
+        let released = self.unlock_cover(root.0, &mut cv, CoverState::Released);
+        self.covers.insert(root.0, cv);
+        event("cover_released", serde_json::json!({"cell": root.0.to_string(), "released": released.to_string()}));
+    }
+
+    /// The terms of the cover as anyone can read them. `cell` can be any cell in the tree. Null if the tree has no cover.
+    pub fn cover_of(&self, cell: U64) -> Option<Value> {
+        let root = self.cells.get(&cell.0)?.root;
+        let cv = self.covers.get(&root)?;
+        let asset = self.cells.get(&root)?.asset.clone();
+        let st = self.stake_get(&cv.guarantor, &asset);
+        Some(serde_json::json!({
+            "root": root.to_string(), "asset": asset, "state": cv.state, "guarantor": cv.guarantor, "arbiter": cv.args.arbiter,
+            "limit": cv.args.limit, "remaining": cv.locked, "paid": cv.paid, "premium": cv.premium,
+            "deductible_bps": cv.args.deductible_bps, "premium_bps": cv.args.premium_bps, "claim_window": cv.args.claim_window, "terms_hash": cv.args.terms_hash,
+            "upheld": cv.upheld, "denied": cv.denied, "timed_out": cv.timed_out, "open_claim": cv.open_claim, "needs_clear": cv.needs_clear,
+            "guarantor_stake": st.amount, "guarantor_exposure": st.exposure, "guarantor_unstake_at": st.unstake_at,
+        }))
+    }
+
+    /// The payment behind a claim: amount, payee, time, the context hash bound at payment, and the claim's state. `cell` can be any cell in the tree.
+    pub fn payment_of(&self, cell: U64, invoice_hash: String) -> Option<PaymentRecord> {
+        let root = self.cells.get(&cell.0)?.root;
+        self.payments.get(&Self::invoice_key(root, &invoice_hash)?).cloned()
+    }
+
+    fn cover_get(&self, root: u64) -> Cover {
+        self.covers.get(&root).cloned().unwrap_or_else(|| env::panic_str("NO_COVER"))
+    }
+
+    /// Whether a claim stops the tree. Only the root holds this, so a closed or dismissed cell makes no difference.
+    fn cover_block(&self, root: u64) -> Option<&'static str> {
+        let c = self.covers.get(&root)?;
+        if c.open_claim.is_some() {
+            Some("UNDER_CLAIM")
+        } else if c.needs_clear {
+            Some("NOT_CLEARED")
+        } else {
+            None
+        }
+    }
+
+    /// Ends the lock: stake.exposure drops by what is still locked.
+    fn unlock_cover(&mut self, root: u64, cv: &mut Cover, state: CoverState) -> u128 {
+        let asset = self.cells.get(&root).and_then(|c| c.asset.clone());
+        let mut st = self.stake_get(&cv.guarantor, &asset);
+        let released = cv.locked.0;
+        st.exposure = U128(st.exposure.0 - released);
+        self.stake_put(&cv.guarantor, &asset, st);
+        cv.locked = U128(0);
+        cv.state = state;
+        released
+    }
+
+    /// Cover terms a verifier signed must still make sense. Panics COVER_*.
+    fn check_cover_terms(cv: &CoverArgs, a: &RegisterArgs, funder: &AccountId, owner: &AccountId, dispute_timeout: u64) {
+        let (limit, unit) = (cv.limit.0, a.unit.0);
+        require!(limit > 0, "COVER_LIMIT_ZERO");
+        require!(limit >= MIN_CLAIMS_IN_LIMIT.saturating_mul(a.max_links as u128).saturating_mul(unit), "COVER_LIMIT_THIN");
+        // More than the links can ever pay would lock money no claim can reach
+        require!(limit <= (a.n as u128).saturating_mul(unit), "COVER_LIMIT_HIGH");
+        require!((MIN_DEDUCTIBLE_BPS..=MAX_DEDUCTIBLE_BPS).contains(&cv.deductible_bps), "COVER_DEDUCTIBLE");
+        require!(cv.premium_bps <= 2_000, "COVER_PREMIUM");
+        require!(dispute_timeout.saturating_mul(2) <= cv.claim_window.0 && cv.claim_window.0 <= MAX_TENOR_SECS, "COVER_WINDOW");
+        // Past this the release time could overflow and the stake would be stuck
+        require!(a.valid_until.0 <= env::block_timestamp().saturating_add(MAX_TENOR_SECS.saturating_mul(NS_PER_SEC)), "COVER_TENOR");
+        require!(cv.arbiter != a.verifier && cv.arbiter != *funder && cv.arbiter != *owner, "COVER_ARBITER");
+        // Scope only narrows when hiring, so these can never receive a covered payment in this tree
+        require!(!a.scope.iter().any(|s| s == funder || *s == a.verifier || *s == cv.arbiter), "COVER_SCOPE");
+        hex32(&cv.terms_hash, "cover_terms_hash");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2409,14 +2779,14 @@ mod tests {
         w.cells.insert(2, cell(Status::Active));
 
         ctx(vec![PromiseResult::Failed]);
-        assert!(matches!(w.on_transfer(U64(1), U128(5), "00".repeat(32), funder.clone(), 1, 0, Err(PromiseError::Failed)), Verdict::Rejected { .. }));
+        assert!(matches!(w.on_transfer(U64(1), U128(5), "00".repeat(32), funder.clone(), 1, 0, None, Err(PromiseError::Failed)), Verdict::Rejected { .. }));
         assert_eq!(w.cells.get(&1).unwrap().vault.0, 0, "closed cell must not hold money");
         assert_eq!(w.vault_total, 0);
         let receipts = get_created_receipts();
         assert!(receipts.iter().any(|r| r.receiver_id == funder), "refund goes to the funder");
 
         ctx(vec![PromiseResult::Failed]);
-        assert!(matches!(w.on_transfer(U64(2), U128(5), "00".repeat(32), funder.clone(), 1, 0, Err(PromiseError::Failed)), Verdict::Rejected { .. }));
+        assert!(matches!(w.on_transfer(U64(2), U128(5), "00".repeat(32), funder.clone(), 1, 0, None, Err(PromiseError::Failed)), Verdict::Rejected { .. }));
         assert_eq!(w.cells.get(&2).unwrap().vault.0, 5, "active cell gets the money back");
         assert_eq!(w.vault_total, 5);
 
@@ -2424,7 +2794,7 @@ mod tests {
         let args = CreditArgs { limit: U128(1), bond_bps: 0, premium_bps: 0, min_tenor: U64(0), max_tenor: U64(1), terms_hash: String::new(), terms_sig: String::new(), entity_tag: String::new(), arbiter: writ.clone(), fee_payer: FeePayer::Buyer, seller_cap_bps: 0, asset: None };
         w.terms.insert(1, CreditTerms { args, guarantor: writ.clone(), terms_ecr_commit: String::new(), outstanding: U128(0), bond_locked: U128(0), open_debts: 1 });
         ctx(vec![PromiseResult::Failed]);
-        assert!(matches!(w.on_transfer(U64(1), U128(5), "00".repeat(32), funder.clone(), 1, 0, Err(PromiseError::Failed)), Verdict::Rejected { .. }));
+        assert!(matches!(w.on_transfer(U64(1), U128(5), "00".repeat(32), funder.clone(), 1, 0, None, Err(PromiseError::Failed)), Verdict::Rejected { .. }));
         assert_eq!(w.cells.get(&1).unwrap().vault.0, 5, "the money stays for the guarantor");
         assert_eq!(w.vault_total, 10);
         assert!(!get_created_receipts().iter().any(|r| r.receiver_id == funder), "nothing goes back to a company that owes");

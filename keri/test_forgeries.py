@@ -5,7 +5,7 @@ Each scenario builds credentials with real keripy in a temporary folder, then ha
 The first case is an honest chain and must pass, proving the other cases are not rejected only because the environment is broken.
 The last line KERI_FORGERIES|PASS|<n> is for machine checking.
 """
-import os, secrets, shutil, sys, tempfile
+import hashlib, os, secrets, shutil, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = tempfile.mkdtemp(prefix="writ-forge-")
@@ -34,8 +34,16 @@ def anchor(hab, reg, serder, sn):
     return msg
 
 
+CONTRACT = "writ.test.near"
+VERIFIER = "verifier.test.near"
+COVER_TEXT = "cover terms under test"
+# With 100 links of unit 1 and at most 5 per payment, a limit from 50 to 100 is allowed
+COVER_OK = dict(limit="50", deductible_bps=2000, premium_bps=200, claim_window="2419200", arbiter="arbiter.test.near", terms_hash=hashlib.sha256(COVER_TEXT.encode()).hexdigest())
+
+
 def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge_o="I2I", pin_other=False,
-          revoke_after_bundle=None, rogue_qvi=False, ecr_lei="WRITDEMO000000000017", no_rules=False, bad_edge_said=False, altered_rules=False):
+          revoke_after_bundle=None, rogue_qvi=False, ecr_lei="WRITDEMO000000000017", no_rules=False, bad_edge_said=False, altered_rules=False,
+          cover=None, cover_after=None, cover_signer="le", scope=("merchant.test.near",)):
     """Build a chain and write the bundle/registrar. The parameters decide where to forge."""
     with habbing.openHby(name=name, temp=True) as hby:
         rgy = credentialing.Regery(hby=hby, name=name, temp=True)
@@ -87,9 +95,9 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
         # forge_amc: whoever holds the agent key issues an AMC with i = the employee, adding limit for themselves
         reg_a, hab_a = (reg_ag, agent) if forge_amc else (reg_hu, human)
         amc = proving.credential(issuer=human.pre, schema=AMC.said, recipient=agent.pre, status=reg_a.regk, private=True,
-                                 data=dict(actionClass="supplier-payment", counterparties=["merchant.test.near"],
+                                 data=dict(actionClass="supplier-payment", counterparties=list(scope),
                                            validUntil="2099-01-01T00:00:00+00:00", unitYocto="1", paywordRoot="00" * 32,
-                                           paywordLength=5, dailyLinks=5, maxLinksPerPayment=5, maxStrikes=3, settlementRail="acme.test.near"),
+                                           paywordLength=100 if cover is not None else 5, dailyLinks=5, maxLinksPerPayment=5, maxStrikes=3, settlementRail="acme.test.near"),
                                  source=block(ecr=dict(n=ecr.said, s=edge_s or sch.said, o=edge_o)))
         iss_a = reg_a.issue(said=amc.said)
         anchor(hab_a, reg_a, iss_a, "0")
@@ -113,6 +121,13 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
             f.write(allkel() + alltel() + acdc(qvc, iss_q.said) + acdc(lev, iss_l.said) + acdc(ecr, iss_e.said) + acdc(amc, iss_a.said))
         write_json(os.path.join(BUNDLE, "presentation.json"), dict(qvi_said=qvc.said, lev_said=lev.said, ecr_said=ecr.said, amc_said=amc.said, agent_aid=agent.pre))
         write_json(V.POLICY, dict(root_aid=("E" + secrets.token_urlsafe(32)[:43]) if pin_other else root.pre))
+
+        # Cover terms: signed by the legal entity (cover), then possibly changed by the holder (cover_after)
+        if cover is not None:
+            c = dict(COVER_OK, **cover)
+            signer = {"le": le, "human": human}[cover_signer]
+            sig = signer.sign(ser=common.cover_message(CONTRACT, amc.said, c), indexed=False)[0].raw.hex()
+            write_json(os.path.join(BUNDLE, "cover.json"), {**c, "terms_text": COVER_TEXT, "le_sig": sig, **(cover_after or {})})
 
         # revocation happened after the holder got the bundle: only the registrar shows it
         if revoke_after_bundle == "ecr":
@@ -144,6 +159,25 @@ CASES = [
     ("F12 ECR has no rules section", dict(no_rules=True), False),
     ("F13 ECR edge section is not self-addressing", dict(bad_edge_said=True), False),
     ("F14 ECR replaces the official rules text with its own", dict(altered_rules=True), False),
+    ("honest chain with cover terms", dict(cover={}), True),
+    ("F15 holder raises the cover limit after the legal entity signed", dict(cover={}, cover_after=dict(limit="60")), False),
+    ("F16 holder lowers the company's share after the legal entity signed", dict(cover={}, cover_after=dict(deductible_bps=1000)), False),
+    ("F17 holder changes the cover fee", dict(cover={}, cover_after=dict(premium_bps=100)), False),
+    ("F18 holder lengthens the claim window", dict(cover={}, cover_after=dict(claim_window="2419201")), False),
+    ("F19 holder swaps in a friendly arbiter", dict(cover={}, cover_after=dict(arbiter="friend.test.near")), False),
+    ("F20 holder points at other terms", dict(cover={}, cover_after=dict(terms_hash="ab" * 32)), False),
+    ("F21 terms text does not match the signed hash", dict(cover={}, cover_after=dict(terms_text="other terms")), False),
+    ("F22 cover terms signed by the employee, not the legal entity", dict(cover={}, cover_signer="human"), False),
+    ("F23 cover terms with no signature", dict(cover={}, cover_after=dict(le_sig="")), False),
+    ("F24 cover limit under ten maximum payments", dict(cover=dict(limit="49")), False),
+    ("F25 cover limit more than the links can pay", dict(cover=dict(limit="101")), False),
+    ("F26 company's share under 10%", dict(cover=dict(deductible_bps=999)), False),
+    ("F27 cover fee above 20% per period", dict(cover=dict(premium_bps=2001)), False),
+    ("F28 arbiter is the guarantor", dict(cover=dict(arbiter=VERIFIER)), False),
+    ("F29 arbiter is the company", dict(cover=dict(arbiter="acme.test.near")), False),
+    ("F30 agent's scope includes the arbiter", dict(cover={}, scope=("merchant.test.near", "arbiter.test.near")), False),
+    ("F31 agent's scope includes the company", dict(cover={}, scope=("merchant.test.near", "acme.test.near")), False),
+    ("F32 limit written in a non-canonical form", dict(cover=dict(limit="050")), False),
 ]
 
 fails = 0
@@ -152,7 +186,7 @@ for i, (label, kw, expect_ok) in enumerate(CASES):
     shutil.rmtree(REGISTRAR, ignore_errors=True)
     build(f"forge{i}", **kw)
     try:
-        V.verify_chain()
+        V.read_cover(V.verify_chain(), VERIFIER, CONTRACT)
         accepted, why = True, ""
     except V.ChainError as e:
         accepted, why = False, str(e)
@@ -163,5 +197,5 @@ for i, (label, kw, expect_ok) in enumerate(CASES):
     print(f"{'✓' if good else '✗'} {label} → {'accepted' if accepted else 'REFUSED: ' + why[:90]}")
 
 shutil.rmtree(WORK, ignore_errors=True)
-print(f"KERI_FORGERIES|{'PASS' if not fails else 'FAIL'}|{len(CASES) - 1}")
+print(f"KERI_FORGERIES|{'PASS' if not fails else 'FAIL'}|{sum(1 for c in CASES if not c[2])}")
 sys.exit(1 if fails else 0)

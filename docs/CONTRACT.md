@@ -7,7 +7,7 @@ Source: `contract/src/lib.rs` (near-sdk 5.30). Deployed at `writ-net30.testnet`.
 ## Calling conventions
 
 - Parameters are named JSON: `{"credit":"7"}`.
-- `U64` and `U128` are **strings**: `"7"`, `"1000000000000000000000000"`. Plain `u32` and `u64` are JSON numbers (`j`, `n`, `daily_links`, `max_links`, `max_strikes`, `bond_bps`, `premium_bps`, `seller_cap_bps`, `min_bond_bps`, `max_fee_bps`, `max_defaults`, `unseal_delay_secs`).
+- `U64` and `U128` are **strings**: `"7"`, `"1000000000000000000000000"`. Plain `u32` and `u64` are JSON numbers (`j`, `n`, `daily_links`, `max_links`, `max_strikes`, `bond_bps`, `premium_bps`, `seller_cap_bps`, `deductible_bps`, `min_bond_bps`, `max_fee_bps`, `max_defaults`, `unseal_delay_secs`).
 - Timestamps are nanoseconds since the Unix epoch, as `U64`. Tenors and windows are seconds, as `U64`.
 - Amounts are in the mandate's asset: yoctoNEAR (1 NEAR = 10^24) when `asset` is null, otherwise the token's smallest unit. Fees and storage in the [deposit table](#fees-and-deposits) are always NEAR.
 - Hashes are lowercase hex of 32 bytes unless stated. `ixn` and `signature` in `revoke_by_kel` are base64.
@@ -20,7 +20,7 @@ Callable only with a function-call key on the contract account (signer and prede
 
 | Method | Parameters | Effect |
 |---|---|---|
-| `spend` | `preimage` string, `j` u32, `to` AccountId, `invoice_hash` string | Pays `j × unit` to `to`. Returns `Verdict::Paid` after the transfer succeeded, or `Rejected`. |
+| `spend` | `preimage` string, `j` u32, `to` AccountId, `invoice_hash` string, `context_hash` hex string optional | Pays `j × unit` to `to`. Returns `Verdict::Paid` after the transfer succeeded, or `Rejected`. `context_hash` binds the invoice text and the model's decision to the payment; under active cover it is kept with the payment for a later claim. |
 | `hire` | `preimage` string, `j` u32, `child` HireArgs | Spends `j` links to open a narrower mandate for a new key. Returns `Hired` or `Rejected`. The hire fee is paid by the root. |
 | `dismiss` | `child` U64 | Closes that sub-agent and everything under it. Only its parent. Panics rather than rejects. |
 | `open_credit` | `preimage` string, `j` u32, `to` AccountId, `invoice_hash` string, `due_at` U64 | Spends links, takes no money, charges 0.007 NEAR storage to the root. Returns `CreditOpened` or `Rejected`. |
@@ -58,7 +58,7 @@ A rejection is a successful transaction with a hash, not a failure.
 
 | Method | Parameters | Caller | Deposit | Effect |
 |---|---|---|---|---|
-| `register` | `args` RegisterArgs | the company; the attestation is signed for this account | more than 0.35 NEAR + 0.001 NEAR × `n` | Verifies the attestation, opens the mandate, adds the agent key. NEAR mandate: vault = deposit − fee. Token mandate with credit: the excess becomes `near_reserve`. Token mandate without credit: the excess is returned. Each AMC registers once; the attestation must be under 1 hour old. Returns the mandate id as U64. |
+| `register` | `args` RegisterArgs | the company; the attestation is signed for this account | more than 0.35 NEAR + 0.001 NEAR × `n`; with cover, 0.004 NEAR × `n` more, in NEAR even on a token mandate | Verifies the attestation, opens the mandate, adds the agent key. NEAR mandate: vault = deposit − fee. Token mandate with credit: the excess becomes `near_reserve`. Token mandate without credit: the excess is returned. A token mandate with credit or cover opens the guarantor's stake record in that token. Each AMC registers once; the attestation must be under 1 hour old. Returns the mandate id as U64. |
 | `top_up` | `cell` U64 | funder | any | NEAR mandate: adds to the vault. Token root with credit: adds to `near_reserve`. Other token mandates panic. |
 | `settle_by_funder` | `credit` U64 | funder | 0 to pay from the root vault, or at least the order's amount; excess goes to `claimable`. Token trees use `ft_transfer_call`. | Pays the seller. Works after revocation and expiry. |
 | `dispute` | `credit` U64, `reason_hash` hex string | funder | at least the order's amount, or `ft_transfer_call` | Stops a default. From `Accepted` or `Delivered`. |
@@ -88,6 +88,7 @@ A rejection is a successful transaction with a hash, not a failure.
 | `signature` | hex, 64 bytes | The verifier's Ed25519 signature over the attestation message. |
 | `asset` | AccountId, optional | NEP-141 settlement token. Omitted = NEAR. |
 | `credit` | CreditArgs, optional | Omitted = this mandate cannot buy on credit. |
+| `cover` | CoverArgs, optional | Omitted = no fooled-agent cover. |
 
 `CreditArgs`:
 
@@ -105,7 +106,22 @@ A rejection is a successful transaction with a hash, not a failure.
 | `seller_cap_bps` | u32 | Largest exposure to one seller, as a share of stake; 0 = no cap. |
 | `asset` | AccountId or null | Must equal the mandate's `asset`. |
 
-The attestation message is `attestation_message` in `lib.rs`: a `writ:attest:v6` line, then `contract=`, `amc=`, `issuer_aid=`, `issuer_pk=`, `agent_pk=`, `w0=`, `n=`, `unit=`, `scope=` (comma-separated), `valid_until=`, `daily_links=`, `max_links=`, `max_strikes=`, `lei_commit=`, `ecr_commit=`, `funder=`, `verifier=`, `attested_at=`, `asset=` (`near` if none), `credit=` (`none`, or the CreditArgs values comma-separated in the order of the table above, with `near` for no asset). Check yours with the view `attestation_preview`.
+`CoverArgs`, signed by the verifier, who is the guarantor:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `limit` | U128 | The most the guarantor pays in total under this mandate. At least 10 × `max_links` × `unit`, at most `n` × `unit`. |
+| `deductible_bps` | u32 | The company's share of each loss, 1000 to 9000. |
+| `premium_bps` | u32 | Fee on `limit` per 30 days or part of it, at most 2000. Charged once, at activation, for all of `valid_until`. Never refunded. |
+| `claim_window` | U64 | Seconds after a payment during which it can be claimed. At least 2 × `dispute_timeout`, at most 10 years. |
+| `arbiter` | AccountId | Rules on claims. Not the company, the guarantor or the contract owner. |
+| `terms_hash` | hex | Hash of the terms the arbiter rules on: what is covered and excluded, the seller's chance to respond, the company's statement that it was not refunded, transfer of rights. |
+
+With cover, `valid_until` must be within 10 years, and `scope` must not contain the company, the guarantor or the arbiter. A hired agent's scope can only narrow, so this holds for the whole tree.
+
+The attestation message is `attestation_message` in `lib.rs`: a `writ:attest:v7` line, then `contract=`, `amc=`, `issuer_aid=`, `issuer_pk=`, `agent_pk=`, `w0=`, `n=`, `unit=`, `scope=` (comma-separated), `valid_until=`, `daily_links=`, `max_links=`, `max_strikes=`, `lei_commit=`, `ecr_commit=`, `funder=`, `verifier=`, `attested_at=`, `asset=` (`near` if none), `credit=` (`none`, or the CreditArgs values comma-separated in the order of the table above, with `near` for no asset), `cover=` (`none`, or `limit,deductible_bps,premium_bps,claim_window,arbiter,terms_hash`). Check yours with the view `attestation_preview`.
+
+`keri/issuer.py init --cover-limit … --cover-arbiter …` has the legal entity sign the cover terms (`writ:cover:v1\ncontract=…\namc=…\ncover=…`) into `keri/bundle/cover.json`. They are not in the AMC, whose schema does not change. `keri/verify.py attest` refuses terms the legal entity did not sign or the contract would refuse.
 
 ## Guarantor methods
 
@@ -120,6 +136,26 @@ The attestation message is `attestation_message` in `lib.rs`: a `writ:attest:v6`
 | `release_unseal` | `cell` U64, `lei` string, `salt` string | the mandate's still-listed verifier | none | After a supervisor's request and the waiting period. |
 
 `EcrOpening`: `le_aid`, `le_pk` (hex), `ecr_said`, `salt`, all strings.
+
+## Cover methods
+
+The contract cannot tell whether an agent was fooled. A named arbiter decides, and the limit caps what a wrong or bought ruling costs. None of these takes a deposit, so restricted keys can call them. `root` is the root mandate.
+
+| Method | Parameters | Caller | Needs | Effect |
+|---|---|---|---|---|
+| `activate_cover` | `root` U64 | the guarantor, still on the whitelist | cover `Offered`; root `Active` and not expired; no debt to the guarantor; free vault at least the fee; stake + fee − exposure at least `limit` | Fee = `limit` × `premium_bps` / 10000 × started 30-day periods to `valid_until`, at most `limit`. Moves it from the root's vault to the stake and `earned`. Adds `limit` to `exposure`. Cover becomes `Active`. All or nothing. |
+| `file_claim` | `root` U64, `invoice_hash` hex, `evidence_hash` hex | funder | cover `Active`; no open claim; `paid` below `limit`; a payment recorded under active cover with no claim yet; inside the window, which runs from the earlier of the payment and `valid_until` | Opens the claim. The whole tree is refused with `UNDER_CLAIM`. `evidence_hash` goes only to the event. |
+| `resolve_claim` | `root` U64, `invoice_hash` hex, `ruling` Ruling, `ruling_hash` hex | arbiter | this is the open claim; up to and including `dispute_timeout` after filing | Uphold: 0 < `loss` ≤ the amount paid. Pays `loss` × (10000 − `deductible_bps`) / 10000 rounded down, at most what is locked, from the stake and from `exposure`. Goes to the root's vault if the tree has open credit or a debt, otherwise to the company's `claimable`. The tree is then refused with `NOT_CLEARED`. Deny: nothing moves. |
+| `void_cover` | `root` U64, `invoice_hash` hex | arbiter | cover `Active`; no open claim; that payment's claim was denied | Fraud found: cover ends, the lock comes back, the fee stays. Becomes `Voided`. Later payments are not recorded. |
+| `claim_timeout` | `root` U64 | anyone | an open claim, past `dispute_timeout` | The payment goes back to no claim, `timed_out` + 1, nothing moves. It can be filed again inside its window. |
+| `clear_agent` | `root` U64 | funder | an upheld claim to clear; no open claim | The tree works again. A record, not a security control; the guarantor's control is `revoke`. |
+| `release_cover` | `root` U64 | the guarantor, listed or not | cover `Active`; no open claim; past `valid_until` + `claim_window` | The lock comes back. Becomes `Released`. Revoking the mandate does not bring this forward. |
+
+`Ruling` is `"Deny"` or `{"Uphold":{"loss":"…"}}`. `CoverState` is `Offered`, `Active`, `Voided` or `Released`.
+
+While a claim stops a tree, `spend`, `hire` and `open_credit` return `Rejected` with no strike, and `accept_credit` panics `UNDER_CLAIM`. `settle` and `settle_by_funder` still work: stopping them would manufacture a default. A sub-agent's payment is claimed on its root, and dismissing the sub-agent does not lift the stop.
+
+Only a payment whose money arrived while cover was `Active` is recorded. A transfer that bounced, a payment before activation, an order on credit, and a callback landing after release or void leave no record, so they cannot be claimed.
 
 ## Other methods
 
@@ -148,9 +184,11 @@ Free to call. `Option` results are JSON null when the item does not exist.
 | `credit_of` | `credit` U64 | The Credit: `id`, `cell`, `root`, `seller`, `amount`, `original_amount`, `asset`, `invoice_hash`, `opened_at`, `due_at`, `status`, `bond_locked`, `exposure`, `fee`, `fee_periods`, `delivery_hash`, `delivered_at`, `dispute_escrow`, `debt`, `recourse_until`. |
 | `liability_receipt` | `credit` U64 | `credit`, `status`, `seller`, `amount`, `asset`, `due_at`, `invoice_hash`, `agent_path`, `amc_said`, `guarantor`, `terms_hash`, `entity_tag`, `lei_commit`, `legal_entity`. |
 | `claimable_of` | `account` AccountId, `asset` AccountId optional | U128. |
-| `stake_of` | `account` AccountId, `asset` AccountId optional | `amount`, `exposure`, `unstake_at`, `earned`, `claims_paid`, `recovered`, `sellers`. |
-| `guarantor_book` | `account` AccountId, `asset` AccountId optional | `asset`, `stake`, `exposure`, `utilisation_bps`, `earned`, `claims_paid`, `recovered`, `net_loss`, `loss_ratio_bps` (null before any fee), `top_sellers` (at most 5 `{seller, exposure}`). |
-| `present` | `cell` U64 | `cell`, `chain_valid`, `credit`, `verifier`, `not_revoked`, `not_expired`, `within_limit`, `scope`, `amc_said`, `lei`, `lei_commit`, `status`, `parent`, `children`, `depth`. |
+| `stake_of` | `account` AccountId, `asset` AccountId optional | `amount`, `exposure`, `unstake_at`, `earned`, `claims_paid` (all payments from the stake), `recovered`, `sellers`, `cover_paid` (the part of `claims_paid` on cover claims; nobody owes it back). `exposure` counts orders and locked cover together. |
+| `guarantor_book` | `account` AccountId, `asset` AccountId optional | `asset`, `stake`, `exposure`, `utilisation_bps`, `earned`, `claims_paid`, `cover_paid`, `recovered`, `net_loss`, `loss_ratio_bps` (null before any fee), `top_sellers` (at most 5 `{seller, exposure}`). |
+| `cover_of` | `cell` U64, any mandate in the tree | `root`, `asset`, `state`, `guarantor`, `arbiter`, `limit`, `remaining` (what is locked now), `paid`, `premium`, `deductible_bps`, `premium_bps`, `claim_window`, `terms_hash`, `upheld`, `denied`, `timed_out`, `open_claim` (invoice hash or null), `needs_clear`, `guarantor_stake`, `guarantor_exposure`, `guarantor_unstake_at`. Null if the tree has no cover. |
+| `payment_of` | `cell` U64, any mandate in the tree, `invoice_hash` hex | `cell` (the mandate that paid), `to`, `amount`, `paid_at`, `context_hash`, `claim`: `"None"`, `{"Open":{"filed_at"}}`, `{"Upheld":{"loss","payout","ruling_hash"}}` or `{"Denied":{"ruling_hash"}}`. Null if not recorded. |
+| `present` | `cell` U64 | `cell`, `chain_valid`, `credit`, `cover` (boolean), `verifier`, `not_revoked`, `not_expired`, `within_limit`, `scope`, `amc_said`, `lei`, `lei_commit`, `status`, `parent`, `children`, `depth`. |
 | `get_cell` | `cell` U64 | The whole mandate record. |
 | `cell_of` | `agent_pk` PublicKey | Mandate id or null. |
 | `get_unseal` | `cell` U64 | `requester`, `reason_hash`, `requested_at`, `objected`, `lei`. |
@@ -187,7 +225,7 @@ Seconds, set once by `new`. No view returns them, and demo deployments use short
 | `inspect` | 259200 (3 days) | Delivery to the earliest default. |
 | `grace` | 259200 (3 days) | Due date to the earliest default; also to the earliest cancel of an undelivered order. |
 | `recourse` | 1209600 (14 days) | Default to the earliest `enforce_recourse`; also how long a seller can stay silent before the guarantor can claim for it. |
-| `dispute_timeout` | 1209600 (14 days) | How long the arbiter has. |
+| `dispute_timeout` | 1209600 (14 days) | How long the arbiter has, on disputes and on cover claims. |
 | `unstake_delay` | 2592000 (30 days) | Request to withdrawal of stake. |
 | `unseal_delay_secs` (separate parameter) | 120 | Supervisor's request to `release_unseal`. |
 
@@ -196,6 +234,8 @@ Seconds, set once by `new`. No view returns them, and demo deployments use short
 | Item | Amount | Paid by |
 |---|---|---|
 | Register | 0.35 NEAR + 0.001 NEAR per link | Attached by the company |
+| Cover records | 0.004 NEAR per link, on a mandate with cover. The largest record, measured in the bench (`B44`), is 355 bytes, or 0.00355 NEAR | Attached by the company at register |
+| Cover fee | see `activate_cover`, in the mandate's asset | Root vault, to the guarantor |
 | Hire | 0.1 NEAR allowance + 0.02 NEAR storage + 0.001 NEAR per link | Root vault, or `near_reserve` in a token tree |
 | Order storage | 0.007 NEAR, not refunded | Root vault, or `near_reserve` in a token tree |
 | Seller's rule | 0.015 NEAR once | Attached by the seller |
@@ -203,4 +243,4 @@ Seconds, set once by `new`. No view returns them, and demo deployments use short
 
 ## Limits in code
 
-16 accounts in a scope; 3 levels of hires below the root; 16 agents in a tree; 8 guarantors and 8 arbiters in a seller's rule; `max_tenor` of 10 years; 8 sellers in the guarantor's book; `evidence` up to 128 bytes; attestation under 1 hour old.
+16 accounts in a scope; 3 levels of hires below the root; 16 agents in a tree; 8 guarantors and 8 arbiters in a seller's rule; `max_tenor` of 10 years; 8 sellers in the guarantor's book; `evidence` up to 128 bytes; attestation under 1 hour old; one open claim per tree; cover limit at least 10 maximum payments.

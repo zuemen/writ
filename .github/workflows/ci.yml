@@ -29,6 +29,7 @@ jobs:
       - run: make keri-check
       - run: make credit-demo
       - run: make credit-usdc-demo
+      - run: make cover-demo
       - uses: actions/upload-artifact@v4
         if: always()
         with:

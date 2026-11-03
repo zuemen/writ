@@ -42,6 +42,21 @@ EVENT_JSON:{"standard":"writ","version":"1.0.0","event":"credit_opened","data":[
 | `credit_enforced` | `credit` | `enforce_recourse` when a debt remains. |
 | `credit_unsealed` | `credit`, `lei`, `le_aid` | `credit_unseal`: the company is named. |
 
+## Cover
+
+`cell` is the root mandate. `invoice` is the lowercase invoice hash.
+
+| Event | Fields | Emitted by |
+|---|---|---|
+| `cover_activated` | `cell`, `guarantor`, `premium`, `limit` | `activate_cover` |
+| `claim_filed` | `cell`, `invoice`, `amount`, `evidence_hash` | `file_claim`. The evidence hash is on chain only here. |
+| `claim_upheld` | `cell`, `invoice`, `loss`, `payout`, `retained` (boolean: true means it stayed in the root's vault because the tree owes), `ruling_hash` | `resolve_claim` |
+| `claim_denied` | `cell`, `invoice`, `ruling_hash` | `resolve_claim` |
+| `claim_timed_out` | `cell`, `invoice` | `claim_timeout` |
+| `cover_voided` | `cell`, `invoice`, `released` | `void_cover` |
+| `agent_cleared` | `cell` | `clear_agent` |
+| `cover_released` | `cell`, `released` | `release_cover` |
+
 ## Guarantors and sellers
 
 | Event | Fields | Emitted by |

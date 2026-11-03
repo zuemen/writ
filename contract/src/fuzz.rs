@@ -38,6 +38,7 @@ mod fuzz {
         token: Option<AccountId>, // None = NEAR world; Some = token world, vault, stake and seller funds are all this token
         tbal: u128,               // the contract's token balance (model)
         tsur: u128,
+        invs: Vec<(u64, String)>, // (root, invoice) of every spend tried, to find payments to claim on
     }
 
     impl Cx {
@@ -117,7 +118,7 @@ mod fuzz {
             match cb.method.as_str() {
                 "on_transfer" => {
                     self.run("cb_on_transfer", &writ(), None, 0, |w| {
-                        let _ = w.on_transfer(U64(a["cell"].as_str().unwrap().parse().unwrap()), U128(amt), a["invoice_hash"].as_str().unwrap().to_string(), a["to"].as_str().unwrap().parse().unwrap(), a["idx"].as_u64().unwrap() as u32, a["remaining"].as_u64().unwrap() as u32, r);
+                        let _ = w.on_transfer(U64(a["cell"].as_str().unwrap().parse().unwrap()), U128(amt), a["invoice_hash"].as_str().unwrap().to_string(), a["to"].as_str().unwrap().parse().unwrap(), a["idx"].as_u64().unwrap() as u32, a["remaining"].as_u64().unwrap() as u32, a["context_hash"].as_str().map(|s| s.to_string()), r);
                     }).expect("on_transfer must not panic");
                 }
                 "on_refund" => { self.run("cb_on_refund", &writ(), None, 0, |w| w.on_refund(U64(a["cell"].as_str().unwrap().parse().unwrap()), U128(amt), r)).expect("on_refund must not panic"); }
@@ -144,6 +145,7 @@ mod fuzz {
             let bal = self.bal;
             let asset = self.token.clone();
             let tbal = self.tbal;
+            let invs = self.invs.clone();
             let errs: Vec<String> = self.peek(|w| {
                 let mut e = vec![];
                 let mut sum = 0u128;
@@ -185,11 +187,47 @@ mod fuzz {
                     if matches!(rc.status, Status::Revoked { .. }) && t.outstanding.0 == 0 && t.open_debts == 0 && rc.vault.0 > 0 { e.push(format!("closed root stuck vault {}", rc.vault.0)); }
                 }
                 for k in &credits { let c = w.credits.get(k).unwrap(); if c.status == CreditStatus::Disputed { sum += c.dispute_escrow.0; } }
+                // Cover: stake locked only while active, and paid plus locked is always the limit; every open claim points at an open record; payouts add up
+                let mut cover_paid = 0u128;
+                for r in &roots {
+                    let Some(cv) = w.covers.get(r) else { continue };
+                    let (lim, paid, lock) = (cv.args.limit.0, cv.paid.0, cv.locked.0);
+                    cover_paid += paid;
+                    if paid > lim || lock > lim - paid { e.push(format!("locked {} over limit {} less paid {}", lock, lim, paid)); }
+                    match cv.state {
+                        CoverState::Active => { exp += lock; if paid + lock != lim { e.push(format!("active cover: paid {} + locked {} != limit {}", paid, lock, lim)); } }
+                        CoverState::Offered => { if lock != 0 || paid != 0 || cv.premium.0 != 0 { e.push("offered cover moved money".into()); } }
+                        CoverState::Released | CoverState::Voided => { if lock != 0 { e.push(format!("{:?} cover still locks {}", cv.state, lock)); } }
+                    }
+                    if let Some(inv) = &cv.open_claim {
+                        if cv.state != CoverState::Active { e.push("open claim on a cover that is not active".into()); }
+                        let rec = Contract::invoice_key(*r, inv).and_then(|k| w.payments.get(&k));
+                        if !rec.is_some_and(|x| matches!(x.claim, ClaimState::Open { .. })) { e.push("open claim without an open record".into()); }
+                    }
+                    let mut total = 0u128;
+                    let mut open = 0u32;
+                    for (root, inv) in invs.iter().filter(|(root, _)| root == r) {
+                        let Some(rec) = Contract::invoice_key(*root, inv).and_then(|k| w.payments.get(&k)) else { continue };
+                        match &rec.claim {
+                            ClaimState::Upheld { loss, payout, .. } => {
+                                total += payout.0;
+                                if loss.0 > rec.amount.0 { e.push(format!("loss {} above amount {}", loss.0, rec.amount.0)); }
+                                if payout.0 > cover_payout(loss.0, cv.args.deductible_bps) { e.push(format!("payout {} above the share of loss {}", payout.0, loss.0)); }
+                            }
+                            ClaimState::Open { .. } => open += 1,
+                            _ => {}
+                        }
+                    }
+                    if total != paid { e.push(format!("records paid {} vs cover paid {}", total, paid)); }
+                    if open != u32::from(cv.open_claim.is_some()) { e.push(format!("{} open records", open)); }
+                }
+                if st.cover_paid.0 != cover_paid { e.push(format!("stake cover_paid {} vs {}", st.cover_paid.0, cover_paid)); }
                 if st.exposure.0 != exp { e.push(format!("exposure {} vs {}", st.exposure.0, exp)); }
                 // Books: paid out - recovered = what all orders still owe the guarantor; the seller list has a cap
                 for k in &credits { if w.credits.get(k).unwrap().asset != asset { e.push("credit in the wrong asset".into()); } }
                 let owed: u128 = credits.iter().map(|k| w.credits.get(k).unwrap().debt.0).sum();
-                if st.claims_paid.0 < st.recovered.0 || st.claims_paid.0 - st.recovered.0 != owed { e.push(format!("book claims {} recovered {} owed {}", st.claims_paid.0, st.recovered.0, owed)); }
+                // Cover payments are in claims_paid too, but nobody owes them back
+                if st.claims_paid.0 < st.cover_paid.0 + st.recovered.0 || st.claims_paid.0 - st.cover_paid.0 - st.recovered.0 != owed { e.push(format!("book claims {} cover {} recovered {} owed {}", st.claims_paid.0, st.cover_paid.0, st.recovered.0, owed)); }
                 if st.sellers.len() > MAX_BOOK_SELLERS { e.push("book sellers over the cap".into()); }
                 // Each seller's exposure = the exposure of all its open orders; at zero no record is kept
                 for s in ["s1.near", "s2.near"] {
@@ -248,12 +286,17 @@ mod fuzz {
 
     /// Token world: half of the seeds run this. NEAR reserve is random too, so the reserve-short paths are reached.
     fn world_in(seed: u64, token: Option<AccountId>) -> Cx {
-        let mut cx = Cx { snap: HashMap::new(), now: 1_000_000 * NS, bal: 5_000 * 1_000_000_000_000_000_000_000_000u128, rng: seed.wrapping_mul(0x9E3779B97F4A7C15) | 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0, last_err: String::new(), token: token.clone(), tbal: 0, tsur: 0 };
+        let mut cx = Cx { snap: HashMap::new(), now: 1_000_000 * NS, bal: 5_000 * 1_000_000_000_000_000_000_000_000u128, rng: seed.wrapping_mul(0x9E3779B97F4A7C15) | 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0, last_err: String::new(), token: token.clone(), tbal: 0, tsur: 0, invs: vec![] };
         cx.up(&writ(), None, 0);
         let w = Contract::new(acc("owner.near"), None, Some(Windows { accept_ttl: U64(100), inspect: U64(50), grace: U64(50), recourse: U64(100), dispute_timeout: U64(200), unstake_delay: U64(30) }));
         env::state_write(&w);
         drop(w);
         cx.snap = near_sdk::mock::with_mocked_blockchain(|b| b.take_storage());
+        // Roots 0 and 2 carry cover (root 0 with credit too, root 2 alone); root 1 has none
+        let cover_limit = (cx.r(10) as u128 + 3) * UNIT;
+        let cover_ded = [1000u32, 2000, 5000, 9000][cx.r(4) as usize];
+        let cover_fee = [0u32, 150, 2000][cx.r(3) as usize];
+        let cover_window = [400u64, 600, 3000][cx.r(3) as usize];
         let vaults = [(cx.r(4) as u128 + 1) * UNIT, (cx.r(3) as u128 + 1) * UNIT, 10 * UNIT];
         let stake = (cx.r(25) as u128 + 6) * UNIT;
         let bps = [0u32, 0, 2000, 5000][cx.r(4) as usize];
@@ -279,6 +322,9 @@ mod fuzz {
                 w.add_total(&tk, v);
                 if i < 2 { w.vault_total += reserve_near; }
                 if tk.is_some() { w.stakes.insert((acc("g.near"), tk.clone()), Stake::default()); }
+                if i != 1 {
+                    w.covers.insert(id, Cover { args: CoverArgs { limit: U128(cover_limit), deductible_bps: cover_ded, premium_bps: cover_fee, claim_window: U64(cover_window), arbiter: acc("arb.near"), terms_hash: "00".repeat(32) }, guarantor: acc("g.near"), state: CoverState::Offered, premium: U128(0), paid: U128(0), locked: U128(0), open_claim: None, needs_clear: false, upheld: 0, denied: 0, timed_out: 0 });
+                }
                 if i < 2 {
                     w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(20 * UNIT), bond_bps: bps, premium_bps: 150, min_tenor: U64(10), max_tenor: U64(1000), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: format!("t{}", i), arbiter: acc("arb.near"), fee_payer: payer, seller_cap_bps: cap, asset: tk.clone() }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
                 }
@@ -309,7 +355,7 @@ mod fuzz {
         let ci = cx.r(n) as usize;
         let (cid, cpk) = (cx.cells[ci].id, cx.cells[ci].pk.clone());
         let links = cx.cells[ci].links.clone();
-        let op = cx.r(26);
+        let op = cx.r(36);
         let all: Vec<Credit> = { let ids = cx.credits.clone(); cx.peek(|w| ids.iter().map(|k| w.credits.get(k).cloned().unwrap()).collect()) };
         let want = |c: &Credit| -> bool { use CreditStatus::*; match op {
             7 | 8 => c.status == Open, 9 | 10 => matches!(c.status, Accepted | Disputed), 11 | 12 | 13 => matches!(c.status, Accepted | Delivered),
@@ -319,6 +365,10 @@ mod fuzz {
             if all.is_empty() { None } else { let k = cx.r(all.len() as u64) as usize; Some(all[k].clone()) }
         } else { let k = cx.r(fit.len() as u64) as usize; Some(fit[k].clone()) };
         let (idx, rootid) = cx.peek(|w| { let c = w.cells.get(&cid).unwrap(); (c.idx as usize, c.root) });
+        // Any cell's tree: a claim on the root must stop it whichever cell acts
+        let (stopped, strikes0) = cx.peek(|w| (w.cover_block(rootid).is_some(), w.cells.get(&cid).unwrap().strikes));
+        let cover_pick = if cx.r(2) == 0 { 0 } else { 2 };
+        let cover_root = cx.roots[cover_pick];
         let j = cx.r(3) as u32 + 1;
         let good = idx + j as usize <= links.len() - 1 && cx.r(50) != 0;
         let pre = if good { links[idx + j as usize].clone() } else { "11".repeat(32) };
@@ -329,7 +379,13 @@ mod fuzz {
         let owes_before: BTreeMap<u64, u32> = { let rs = cx.roots.clone(); cx.peek(|w| rs.iter().filter_map(|r| w.terms.get(r).map(|t| (*r, t.open_debts))).collect()) };
         let tv_before: BTreeMap<u64, u128> = { let rs = cx.roots.clone(); rs.iter().filter(|r| owes_before.get(r).copied().unwrap_or(0) > 0).map(|r| (*r, tree_vault(cx, *r))).collect() };
         let opname: String = match op {
-            0 | 1 => { let now = cx.now; let _ = now; let (p, s) = (pre.clone(), seller.clone()); cx.run("spend", &writ_, Some(&cpk), 0, |w| { let _ = w.spend(p, j, s, inv); }); "spend".into() }
+            0 | 1 => {
+                let (p, s) = (pre.clone(), seller.clone());
+                let context = match cx.r(8) { 0 => None, 1 => Some("zz".to_string()), _ => Some("ce".repeat(32)) };
+                cx.invs.push((rootid, inv.clone()));
+                cx.run("spend", &writ_, Some(&cpk), 0, |w| { let _ = w.spend(p, j, s, inv, context); });
+                "spend".into()
+            }
             2 => {
                 cx.nextpk = cx.nextpk.wrapping_add(1); let np = cx.nextpk;
                 if np > 200 { return "skip".into(); }
@@ -412,9 +468,66 @@ mod fuzz {
                 }
             }
             23 | 24 => { let fail = cx.r(4) == 0; cx.resolve(fail); "cb".into() }
+            26 | 27 => {
+                let who = if cx.r(8) == 0 { funder.clone() } else { g.clone() };
+                let done = cx.run("activate_cover", &who, None, 0, |w| w.activate_cover(U64(cover_root))).is_some();
+                if done && who != g { panic!("INVARIANT activate_cover by {}", who); }
+                "activate_cover".into()
+            }
+            28 | 29 | 30 => {
+                let invs: Vec<String> = cx.invs.iter().filter(|x| x.0 == cover_root).map(|x| x.1.clone()).collect();
+                let fresh: Vec<String> = cx.peek(|w| invs.iter().filter(|i| Contract::invoice_key(cover_root, i).and_then(|k| w.payments.get(&k)).is_some_and(|p| p.claim == ClaimState::None)).cloned().collect());
+                let pool = if fresh.is_empty() || cx.r(10) == 0 { invs } else { fresh };
+                if pool.is_empty() { return "skip".into(); }
+                let pick = pool[cx.r(pool.len() as u64) as usize].clone();
+                let who = if cx.r(10) == 0 { arb.clone() } else { funder.clone() };
+                let done = cx.run("file_claim", &who, None, 0, |w| w.file_claim(U64(cover_root), pick, "ef".repeat(32))).is_some();
+                if done && who != funder { panic!("INVARIANT file_claim by {}", who); }
+                "file_claim".into()
+            }
+            31 | 32 => {
+                let open = cx.peek(|w| w.covers.get(&cover_root).and_then(|v| v.open_claim.clone()).map(|i| { let a = w.payments.get(&Contract::invoice_key(cover_root, &i).unwrap()).unwrap().amount.0; (i, a) }));
+                let Some((pick, amt)) = open else { return "skip".into() };
+                let ruling = match cx.r(7) { 0 | 1 => Ruling::Deny, 2 => Ruling::Uphold { loss: U128(amt) }, 3 | 4 => Ruling::Uphold { loss: U128(amt / 2) }, 5 => Ruling::Uphold { loss: U128(amt + 1) }, _ => Ruling::Uphold { loss: U128(0) } };
+                let name = if ruling == Ruling::Deny { "resolve_deny" } else { "resolve_uphold" };
+                let upheld = ruling != Ruling::Deny;
+                let who = if cx.r(10) == 0 { funder.clone() } else { arb.clone() };
+                let done = cx.run(name, &who, None, 0, |w| w.resolve_claim(U64(cover_root), pick, ruling, "ab".repeat(32))).is_some();
+                if done && who != arb { panic!("INVARIANT resolve_claim by {}", who); }
+                if done && upheld { let h = if cx.token.is_some() { "UPHELD_IN_TOKEN" } else { "UPHELD_IN_NEAR" }; cx.hit(h); }
+                name.into()
+            }
+            33 | 34 => {
+                match cx.r(4) {
+                    0 => {
+                        if cx.r(2) == 0 { cx.now += 201 * NS; }
+                        cx.run("claim_timeout", &acc("x.near"), None, 0, |w| w.claim_timeout(U64(cover_root)));
+                        "claim_timeout".into()
+                    }
+                    1 => { cx.run("clear_agent", &funder, None, 0, |w| w.clear_agent(U64(cover_root))); "clear_agent".into() }
+                    2 => {
+                        let invs: Vec<String> = cx.invs.iter().filter(|x| x.0 == cover_root).map(|x| x.1.clone()).collect();
+                        let denied: Vec<String> = cx.peek(|w| invs.iter().filter(|i| Contract::invoice_key(cover_root, i).and_then(|k| w.payments.get(&k)).is_some_and(|p| matches!(p.claim, ClaimState::Denied { .. }))).cloned().collect());
+                        let pool = if denied.is_empty() || cx.r(8) == 0 { invs } else { denied };
+                        if pool.is_empty() { return "skip".into(); }
+                        let pick = pool[cx.r(pool.len() as u64) as usize].clone();
+                        cx.run("void_cover", &arb, None, 0, |w| w.void_cover(U64(cover_root), pick));
+                        "void_cover".into()
+                    }
+                    _ => { cx.run("release_cover", &g, None, 0, |w| w.release_cover(U64(cover_root))); "release_cover".into() }
+                }
+            }
             _ => { let dt = if cx.r(4) == 0 { cx.r(150) + 1 } else { cx.r(20) + 1 }; cx.now += dt * NS; "time".into() }
         };
-        let _ = rootid;
+        // Property: a tree stopped by a claim consumes no links and takes no strikes, so a claim cannot cost the company its agent
+        if stopped && ["spend", "hire", "open_credit"].contains(&opname.as_str()) {
+            let (idx2, strikes2) = cx.peek(|w| { let c = w.cells.get(&cid).unwrap(); (c.idx as usize, c.strikes) });
+            if idx2 != idx { panic!("INVARIANT {} moved links in a stopped tree", opname); }
+            // Earlier checks (expired, parent closed, no credit terms) are not the claim's doing and keep their strike
+            let now = cx.now;
+            let earlier = cx.peek(|w| { let c = w.cells.get(&cid).unwrap(); now > c.valid_until.0 || w.suspended(c) || (opname == "open_credit" && !w.terms.contains_key(&rootid)) });
+            if strikes2 != strikes0 && !earlier { panic!("INVARIANT {} cost a strike in a stopped tree", opname); }
+        }
         // Property: when the guarantor is owed, this tree's vault can shrink only through repayment or default payout
         let rs = cx.roots.clone();
         for r in rs {
@@ -461,6 +574,14 @@ mod fuzz {
                 }
             }
             cx.check(seed, "drain2");
+        }
+        // Cover ends too: an open claim times out, the lock comes back, and a stopped tree can be cleared
+        for r in roots.iter().copied() {
+            let Some(cv) = cx.peek(|w| w.covers.get(&r).cloned()) else { continue };
+            if cv.open_claim.is_some() { cx.run("claim_timeout", &acc("x.near"), None, 0, |w| w.claim_timeout(U64(r))).unwrap_or_else(|| panic!("stuck claim_timeout seed {}", seed)); }
+            if cv.state == CoverState::Active { cx.run("release_cover", &acc("g.near"), None, 0, |w| w.release_cover(U64(r))).unwrap_or_else(|| panic!("stuck release_cover seed {}", seed)); }
+            if cv.needs_clear { cx.run("clear_agent", &acc("funder.near"), None, 0, |w| w.clear_agent(U64(r))).unwrap_or_else(|| panic!("stuck clear_agent seed {}", seed)); }
+            cx.check(seed, "drain_cover");
         }
         for r in roots { cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())); cx.check(seed, "drain3"); }
         while !cx.pending.is_empty() { cx.resolve(false); }
@@ -547,6 +668,15 @@ mod fuzz {
         println!("HITS {:?}", hits);
         println!("END-STATE enforced={} debt={} FAILURES {}", e, d, failures);
         assert_eq!(failures, 0);
+        // A real run must reach the cover paths in both worlds, or the invariants above prove nothing about them
+        if seeds >= 10 && steps >= 200 {
+            for op in ["activate_cover", "file_claim", "resolve_deny", "resolve_uphold", "claim_timeout", "clear_agent", "void_cover", "release_cover"] {
+                assert!(ok.get(op).copied().unwrap_or(0) > 0, "fuzz never reached {}", op);
+            }
+            for h in ["UPHELD_IN_NEAR", "UPHELD_IN_TOKEN"] {
+                assert!(hits.get(h).copied().unwrap_or(0) > 0, "fuzz never reached {}", h);
+            }
+        }
     }
 
     include!("exact.rs");

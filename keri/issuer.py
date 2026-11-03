@@ -25,7 +25,7 @@ from keri.core.eventing import SealEvent
 from keri.vc import proving
 from keri.vdr import credentialing, viring
 
-from common import AMC, BUNDLE, ECR, KEYSTORE, LEV, PRIVATE, QVI, REGISTRAR, b58, block, read_json, rules_for, write_json
+from common import AMC, BUNDLE, ECR, KEYSTORE, LEV, PRIVATE, QVI, REGISTRAR, b58, block, cover_message, read_json, rules_for, write_json
 
 LEI = "WRITDEMO000000000017"  # fictional LEI: ISO 17442 check digits correct, but belongs to no real legal entity
 QVI_LEI = "WRITDEMOQVI00000000" + "0"  # fictional QVI identifier, used only in the mock chain
@@ -61,6 +61,23 @@ def payword(seed: bytes, n: int):
 # Demo terms: a real deployment needs the company and its lawyers to finalize them
 TERMS = "Writ demo credit terms. Not reviewed by counsel. Governing law and arbitration are placeholders. The company consents to disclosure of its LEI after an unpaid recourse period."
 TERMS_HASH = hashlib.sha256(TERMS.encode()).hexdigest()
+
+
+# What an arbiter rules on. Placeholder text: a real deployment needs the guarantor, the company and their lawyers to finalize it.
+COVER_TERMS = ("Writ demo cover terms. Not reviewed by counsel. Covered: a payment by the agent inside its mandate that the company did not owe, made because the agent was deceived, such as a duplicate "
+               "invoice under a new number. Excluded: a purchase the company wanted, a payment to the company's own accounts, loss from a stolen key unless the arbiter finds otherwise. "
+               "Process: the seller gets a chance to respond and refund first. The company states it has not been refunded. After repayment, the company's rights against the seller pass to the guarantor.")
+
+
+def cover_doc(a, le, amc_said):
+    """The legal entity signs the cover terms for this contract and this AMC."""
+    if not a.cover_limit:
+        return None
+    if not (a.contract and a.cover_arbiter):
+        sys.exit("--cover-limit needs --contract and --cover-arbiter")
+    c = dict(limit=str(int(decimal.Decimal(a.cover_limit))), deductible_bps=a.cover_deductible_bps, premium_bps=a.cover_premium_bps,
+             claim_window=str(a.cover_claim_window), arbiter=a.cover_arbiter, terms_hash=hashlib.sha256(COVER_TERMS.encode()).hexdigest())
+    return dict(c, terms_text=COVER_TERMS, le_sig=le.sign(ser=cover_message(a.contract, amc_said, c), indexed=False)[0].raw.hex())
 
 
 def credit_attrs(a):
@@ -144,6 +161,9 @@ def cmd_init(a):
         msg = f"writ:terms:v1\ncontract={a.contract}\namc={amc.said}\nterms={TERMS_HASH}\nlei={LEI}".encode()
         terms_sig = le.sign(ser=msg, indexed=False)[0].raw.hex()
     write_json(os.path.join(KEYSTORE, "terms.json"), dict(terms_sig=terms_sig))
+    cover = cover_doc(a, le, amc.said)
+    if cover:
+        write_json(os.path.join(KEYSTORE, "cover.json"), cover)
 
     write_json(PRIVATE, dict(agent_near_secret_key=near_sk, payword_seed=seed.hex(), lei_salt_hint="verifier picks its own salt"))
     write_json(STATE, dict(root=root.pre, qvi=qvi.pre, le=le.pre, human=human.pre, agent=agent.pre, agent_near_pk=near_pk,
@@ -189,6 +209,8 @@ def cmd_export(a):
     write_json(os.path.join(BUNDLE, "schemas.json"), {ECR.said: ECR.sed, AMC.said: AMC.sed})
     # the holder presents "which one I want verified"; the trust anchor is not here, the verifier pins it itself (verify.py pin)
     write_json(os.path.join(BUNDLE, "terms.json"), read_json(os.path.join(KEYSTORE, "terms.json")))
+    if os.path.exists(os.path.join(KEYSTORE, "cover.json")):
+        write_json(os.path.join(BUNDLE, "cover.json"), read_json(os.path.join(KEYSTORE, "cover.json")))
     write_json(os.path.join(BUNDLE, "presentation.json"), dict(qvi_said=st["qvc"], lev_said=st["lev"], ecr_said=st["ecr"], amc_said=st["amc"], agent_aid=st["agent"]))
     # the issuer's public state: the verifier reads the latest KEL/TEL here directly, so a holder with an old bundle cannot hide a revocation
     os.makedirs(REGISTRAR, exist_ok=True)
@@ -277,6 +299,11 @@ if __name__ == "__main__":
     i.add_argument("--fee-payer", choices=["Buyer", "Seller"], default="Buyer", help="Buyer：賣方接受時從公司金庫收；Seller：賣方收款時從貨款扣")
     i.add_argument("--seller-cap-bps", type=int, default=0, help="單一賣方的曝險上限（質押的萬分比）；0 = 不限")
     i.add_argument("--credit-asset", default=None, help="信用的計價資產（NEP-141 合約）；省略 = 跟 --asset 相同。必須等於格的資產")
+    i.add_argument("--cover-limit", default=None, help="fooled-agent cover: most the guarantor pays in total (yocto or token units); omit = no cover. Not in the AMC; the legal entity signs it separately")
+    i.add_argument("--cover-deductible-bps", type=int, default=2000, help="the company's share of each loss, 1000 to 9000")
+    i.add_argument("--cover-premium-bps", type=int, default=200, help="fee on the limit per 30 days, at most 2000")
+    i.add_argument("--cover-claim-window", type=int, default=2419200, help="seconds after a payment during which it can be claimed; at least twice the contract's dispute_timeout")
+    i.add_argument("--cover-arbiter", default=None, help="who rules on claims; not the company, the guarantor or the contract owner")
     i.add_argument("--min-tenor", type=int, default=60)
     i.add_argument("--max-tenor", type=int, default=2592000)
     i.add_argument("--arbiter", default=None)

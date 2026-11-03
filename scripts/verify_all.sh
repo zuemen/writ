@@ -15,6 +15,7 @@ make test > "$LOG/test.log" 2>&1; s_test=$?
 make demo > "$LOG/demo.log" 2>&1; s_demo=$?
 make keri-check > "$LOG/keri.log" 2>&1; s_keri=$?
 make credit-demo > "$LOG/credit.log" 2>&1; s_credit=$?
+make cover-demo > "$LOG/cover.log" 2>&1; s_cover=$?
 
 echo
 echo "WRIT VERIFY"
@@ -23,6 +24,7 @@ row "attack bench (make test)" "$([ $s_test = 0 ] && echo PASS || echo FAIL)" "$
 row "unit + bench tests" "$([ $s_test = 0 ] && echo PASS || echo FAIL)" "$(grep -E '^test result' /tmp/writ_bench.log | tail -1 | cut -c1-40)"
 row "end-to-end story (make demo)" "$([ $s_demo = 0 ] && echo PASS || echo FAIL)" "$(grep -m1 DEMO_RESULT "$LOG/demo.log" | cut -c1-90)"
 row "who pays (make credit-demo)" "$([ $s_credit = 0 ] && echo PASS || echo FAIL)" "$(grep -m1 CREDIT_RESULT "$LOG/credit.log" | cut -c1-90)"
+row "fooled agent (make cover-demo)" "$([ $s_cover = 0 ] && echo PASS || echo FAIL)" "$(grep -m1 COVER_RESULT "$LOG/cover.log" | cut -c1-90)"
 row "credential chain (make keri-check)" "$([ $s_keri = 0 ] && echo PASS || echo FAIL)" "$(awk '/verify.py check/{f=1} /test_forgeries/{f=0} f' "$LOG/keri.log" | grep -c '^✓') checks on official vLEI schemas"
 row "forged credentials refused" "$([ $s_keri = 0 ] && echo PASS || echo FAIL)" "$(grep -m1 KERI_FORGERIES "$LOG/keri.log")"
 

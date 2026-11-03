@@ -10,7 +10,7 @@ import { Account, JsonRpcProvider, KeyPairSigner, actions, teraToGas, type KeyPa
 
 export type PayResult =
   | { outcome: "paid"; amount: string; remainingLinks: number; txHash: string }
-  /** The contract refused: the transaction succeeded and has a hash. reason is EXPIRED, SUSPENDED, FROZEN, SCOPE, INVOICE, DUPLICATE, PER_TX, LIMIT, CHAIN, RATE, FUNDS or TRANSFER_FAILED. */
+  /** The contract refused: the transaction succeeded and has a hash. reason is EXPIRED, SUSPENDED, FROZEN, UNDER_CLAIM, NOT_CLEARED, SCOPE, INVOICE, DUPLICATE, PER_TX, LIMIT, CHAIN, RATE, FUNDS or TRANSFER_FAILED. */
   | { outcome: "rejected"; reason: string; strikes: number; tripped: boolean; txHash: string }
   /** The key was revoked or deleted by the tripwire, so no transaction can be sent. */
   | { outcome: "revoked"; detail: string }
@@ -19,7 +19,49 @@ export type PayResult =
   /** Any other error (network, protocol refusal). Do not treat it as the payment having failed or succeeded. */
   | { outcome: "error"; detail: string };
 
-export type PayRequest = { invoice: string; to: string; links: number; preimage: string };
+/** contextHash (optional): binds the invoice and the model's decision to the payment, so a claim can show them later. See contextHash below. */
+export type PayRequest = { invoice: string; to: string; links: number; preimage: string; contextHash?: string };
+
+/** sha256(invoice text ‖ model ‖ JSON of the call). Anyone with the three can recompute it. */
+export const contextHash = (invoiceText: string, model: string, call: unknown) =>
+  createHash("sha256").update(`${invoiceText}\n${model}\n${JSON.stringify(call)}`).digest("hex");
+
+/** Hash of the invoice id, as the contract keys it. */
+const invoiceHash = (invoice: string) => createHash("sha256").update(invoice).digest("hex");
+
+/** One account's cover actions. Which methods work depends on who the account is: guarantor, company (funder) or arbiter. None of them takes a deposit. */
+export class WritCover {
+  private account: Account;
+  private provider: JsonRpcProvider;
+  constructor(private cfg: { contract: string; rpc: string; account: string; key: KeyPairString }) {
+    this.provider = new JsonRpcProvider({ url: cfg.rpc });
+    this.account = new Account(cfg.account, this.provider, KeyPairSigner.fromSecretKey(cfg.key));
+  }
+  private send(method: string, args: object) {
+    return this.account.signAndSendTransaction({ receiverId: this.cfg.contract, actions: [actions.functionCall(method, args, teraToGas("100"), 0n)], waitUntil: "FINAL" });
+  }
+  /** Guarantor: take the fee, lock the limit. Fails with PREMIUM_SHORT or GUARANTOR_CAPACITY and nothing changes. */
+  activate(root: string) { return this.send("activate_cover", { root }); }
+  /** Company: claim on one payment. The whole tree stops until the arbiter rules or runs out of time. */
+  fileClaim(root: string, invoice: string, evidenceHash: string) { return this.send("file_claim", { root, invoice_hash: invoiceHash(invoice), evidence_hash: evidenceHash }); }
+  /** Arbiter: rule before dispute_timeout. loss is at most the amount paid. */
+  resolveClaim(root: string, invoice: string, ruling: "Deny" | { Uphold: { loss: string } }, rulingHash: string) { return this.send("resolve_claim", { root, invoice_hash: invoiceHash(invoice), ruling, ruling_hash: rulingHash }); }
+  /** Arbiter: end the cover because a denied claim was fraud. */
+  voidCover(root: string, invoice: string) { return this.send("void_cover", { root, invoice_hash: invoiceHash(invoice) }); }
+  /** Anyone, after dispute_timeout. Nothing is paid; the company can file again inside the window. */
+  claimTimeout(root: string) { return this.send("claim_timeout", { root }); }
+  /** Company: after an upheld claim. A record, not a security control. */
+  clearAgent(root: string) { return this.send("clear_agent", { root }); }
+  /** Guarantor: after valid_until + claim_window. */
+  release(root: string) { return this.send("release_cover", { root }); }
+  /** `cell` can be any cell in the tree. Null if it has no cover. */
+  coverOf(cell: string): Promise<Record<string, unknown> | null> {
+    return this.provider.callFunction({ contractId: this.cfg.contract, method: "cover_of", args: { cell } }) as Promise<Record<string, unknown> | null>;
+  }
+  paymentOf(cell: string, invoice: string): Promise<Record<string, unknown> | null> {
+    return this.provider.callFunction({ contractId: this.cfg.contract, method: "payment_of", args: { cell, invoice_hash: invoiceHash(invoice) } }) as Promise<Record<string, unknown> | null>;
+  }
+}
 
 /** A seller's automatic credit rule. asset is required (null means NEAR). Empty guarantors or arbiters means any. */
 export type SellerPolicy = { max_amount: string; max_tenor_secs: string; min_bond_bps: number; max_defaults: number; guarantors: string[]; asset: string | null; max_fee_bps: number; arbiters: string[] };
@@ -88,12 +130,12 @@ export class WritAgent {
     return this.account.signAndSendTransaction({ receiverId: this.cfg.contract, actions: [actions.functionCall("settle", { credit }, teraToGas("50"), 0n)], throwOnFailure: false, waitUntil: "FINAL" } as any);
   }
 
-  async pay({ invoice, to, links, preimage }: PayRequest): Promise<PayResult> {
-    const invoice_hash = createHash("sha256").update(invoice).digest("hex");
+  async pay({ invoice, to, links, preimage, contextHash }: PayRequest): Promise<PayResult> {
+    const invoice_hash = invoiceHash(invoice);
     try {
       const r: any = await this.account.signAndSendTransaction({
         receiverId: this.cfg.contract,
-        actions: [actions.functionCall("spend", { preimage, j: links, to, invoice_hash }, teraToGas("80"), 0n)],
+        actions: [actions.functionCall("spend", contextHash ? { preimage, j: links, to, invoice_hash, context_hash: contextHash } : { preimage, j: links, to, invoice_hash }, teraToGas("80"), 0n)],
         throwOnFailure: false,
         waitUntil: "FINAL",
       });

@@ -111,6 +111,21 @@ AMC = _schema(
 )
 
 
+# Cover terms are between the guarantor and the company, so they stay out of the AMC schema (its SAID does not change).
+# The legal entity signs them for this contract and AMC; the verifier checks that signature, then signs them into the attestation.
+COVER_FIELDS = ("limit", "deductible_bps", "premium_bps", "claim_window", "arbiter", "terms_hash")
+
+
+def cover_line(c) -> str:
+    """The value of the attestation's cover= line. Must match the contract's attestation_message."""
+    return ",".join(str(c[k]) for k in COVER_FIELDS) if c else "none"
+
+
+def cover_message(contract: str, amc_said: str, c) -> bytes:
+    """What the legal entity signs."""
+    return f"writ:cover:v1\ncontract={contract}\namc={amc_said}\ncover={cover_line(c)}".encode()
+
+
 def write_json(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:

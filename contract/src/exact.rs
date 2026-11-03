@@ -14,7 +14,7 @@ mod exact {
     }
 
     fn world(o: Opt) -> (Cx, u64) {
-        let mut cx = Cx { snap: HashMap::new(), now: T0, bal: 5_000_000 * 1_000_000_000_000_000_000_000_000u128, rng: 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0, last_err: String::new(), token: None, tbal: 0, tsur: 0 };
+        let mut cx = Cx { snap: HashMap::new(), now: T0, bal: 5_000_000 * 1_000_000_000_000_000_000_000_000u128, rng: 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0, last_err: String::new(), token: None, tbal: 0, tsur: 0, invs: vec![] };
         cx.up(&writ(), None, 0);
         let w = Contract::new(acc("owner.near"), None, Some(Windows { accept_ttl: U64(100), inspect: U64(50), grace: U64(50), recourse: U64(100), dispute_timeout: U64(200), unstake_delay: U64(30) }));
         env::state_write(&w);
@@ -98,11 +98,11 @@ mod exact {
         let (mut cx, r) = world(opt());
         cx.now = VALID;
         let (p, k) = (link(&cx, r, 1), key(&cx, r));
-        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), "aa".repeat(32)); }).unwrap();
+        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), "aa".repeat(32), None); }).unwrap();
         assert_eq!(cell(&cx, r).idx, 1, "still valid at valid_until");
         cx.now = VALID + 1;
         let p = link(&cx, r, 1);
-        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), "bb".repeat(32)); }).unwrap();
+        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), "bb".repeat(32), None); }).unwrap();
         assert!(get_logs().iter().any(|l| l.contains("EXPIRED")));
         assert_eq!(cell(&cx, r).idx, 1, "expired one nanosecond later");
         assert_eq!(cell(&cx, r).rejects, 1);
@@ -209,7 +209,7 @@ mod exact {
                 let mut t = w.terms.get(&r).cloned().unwrap();
                 t.outstanding = U128(out); t.open_debts = debts;
                 w.terms.insert(r, t);
-                let _ = w.on_transfer(U64(r), U128(5), "00".repeat(32), acc("s1.near"), 1, 0, Err(PromiseError::Failed));
+                let _ = w.on_transfer(U64(r), U128(5), "00".repeat(32), acc("s1.near"), 1, 0, None, Err(PromiseError::Failed));
             }).unwrap();
             assert_eq!(cell(&cx, r).vault.0, if retained { 5 } else { 0 }, "out {} debts {}", out, debts);
             assert_eq!(cx.pending.is_empty(), retained, "out {} debts {}", out, debts);
@@ -1126,14 +1126,14 @@ mod exact {
     fn a_token_transfer_that_fails_on_spend_goes_back_to_the_token_vault() {
         let (mut cx, r, _) = tworld(opt());
         let (p, k, t, bal) = (link(&cx, r, 1), key(&cx, r), ttotal(&cx), cx.tbal);
-        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), "aa".repeat(32)); }).unwrap();
+        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), "aa".repeat(32), None); }).unwrap();
         assert_eq!((ttotal(&cx), cx.tbal), (t - U, bal - U));
         cx.resolve(true);
         assert_eq!((ttotal(&cx), cx.tbal, cell(&cx, r).vault.0), (t, bal, 100 * U));
         // fails during revocation, open orders remain: stays in the root cell
         let (mut cx, r, _) = tworld(opt());
         let (p, k2) = (link(&cx, r, 1), key(&cx, r));
-        cx.run("spend", &writ(), Some(&k2), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), "aa".repeat(32)); }).unwrap();
+        cx.run("spend", &writ(), Some(&k2), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), "aa".repeat(32), None); }).unwrap();
         let o = opened(open(&mut cx, r, 1));
         cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
         let (v, t) = (cell(&cx, r).vault.0, ttotal(&cx));
@@ -1317,7 +1317,7 @@ mod exact {
         let (p, pk_, evil) = (link(&cx, r, 1), key(&cx, r), acc("usdc.near"));
         let before = cell(&cx, r).idx;
         let (p2, p3, p4) = (p.clone(), p.clone(), p.clone());
-        assert!(cx.run("x", &evil, Some(&pk_), 0, |w| { let _ = w.spend(p2, 1, acc("s1.near"), "aa".repeat(32)); }).is_none());
+        assert!(cx.run("x", &evil, Some(&pk_), 0, |w| { let _ = w.spend(p2, 1, acc("s1.near"), "aa".repeat(32), None); }).is_none());
         assert!(cx.last_err.contains("NOT_AGENT_KEY"), "{}", cx.last_err);
         assert!(cx.run("x", &evil, Some(&pk_), 0, |w| { let _ = w.open_credit(p3, 1, acc("s1.near"), "ab".repeat(32), U64(T0 + 500 * NS)); }).is_none());
         assert!(cx.last_err.contains("NOT_AGENT_KEY"));
@@ -1630,7 +1630,7 @@ mod exact {
         let (mut cx, r) = world(opt());
         let (p, k) = (link(&cx, r, 1), key(&cx, r));
         let i2 = inv.clone();
-        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), i2); }).unwrap();
+        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), i2, None); }).unwrap();
         assert!(!paid(&cx, r, &inv), "still in flight");
         cx.resolve(false);
         assert!(paid(&cx, r, &inv), "the transfer landed");
@@ -1638,11 +1638,11 @@ mod exact {
         let (mut cx, r) = world(opt());
         let (p, k) = (link(&cx, r, 1), key(&cx, r));
         let i2 = inv.clone();
-        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), i2); }).unwrap();
+        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), i2, None); }).unwrap();
         cx.resolve(true);
         assert!(!paid(&cx, r, &inv), "the transfer failed");
         let (p, i2) = (link(&cx, r, 1), inv.clone());
-        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), i2); }).unwrap();
+        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), i2, None); }).unwrap();
         assert_eq!(cell(&cx, r).spends, 1, "and the invoice can be paid again");
     }
 
@@ -1672,5 +1672,843 @@ mod exact {
         cx.run("sf", &acc("funder.near"), None, 2 * U, |w| w.settle_by_funder(U64(b))).unwrap();
         let c = cell(&cx, r);
         assert_eq!((c.vault.0, c.unclaimed.0), (0, v), "everything is settled, the rest is refundable");
+    }
+
+    // ---------------- Cover: who pays when the agent was fooled ----------------
+    // Numbered comments refer to the required list in the design review.
+    mod cover {
+    use super::*;
+    use near_sdk::test_utils::get_logs;
+
+    const DAY: u64 = 86_400;
+
+    /// Puts a cover on the root, as register would. Default world: dispute_timeout 200 s.
+    fn offer(cx: &mut Cx, r: u64, limit: u128, ded: u32, fee: u32, window: u64) {
+        cx.run("offer", &writ(), None, 0, |w| {
+            w.covers.insert(r, Cover { args: CoverArgs { limit: U128(limit), deductible_bps: ded, premium_bps: fee, claim_window: U64(window), arbiter: acc("arb.near"), terms_hash: "00".repeat(32) }, guarantor: acc("g.near"), state: CoverState::Offered, premium: U128(0), paid: U128(0), locked: U128(0), open_claim: None, needs_clear: false, upheld: 0, denied: 0, timed_out: 0 });
+        }).unwrap();
+    }
+    fn activate(cx: &mut Cx, r: u64) -> bool { cx.run("activate", &acc("g.near"), None, 0, |w| w.activate_cover(U64(r))).is_some() }
+    /// A world with cover already active: limit 8 units, 20% deductible, no fee, window 1000 s.
+    fn active() -> (Cx, u64) {
+        let (mut cx, r) = world(opt());
+        offer(&mut cx, r, 8 * U, 2000, 0, 1000);
+        assert!(activate(&mut cx, r));
+        (cx, r)
+    }
+    fn inv(n: u64) -> String { hex::encode(env_hash(1_000_000 + n)) }
+    fn try_pay(cx: &mut Cx, id: u64, j: u32, n: u64, context: Option<String>) -> Option<Verdict> {
+        let (p, k, i) = (link(cx, id, j), key(cx, id), inv(n));
+        let root = cell(cx, id).root;
+        cx.invs.push((root, i.clone()));
+        let v = cx.run("spend", &writ(), Some(&k), 0, |w| match w.spend(p, j, acc("s1.near"), i, context) { PromiseOrValue::Value(v) => Some(v), _ => None }).expect("spend must not panic");
+        while !cx.pending.is_empty() { cx.resolve(false); }
+        v
+    }
+    fn pay(cx: &mut Cx, id: u64, j: u32, n: u64) { let v = try_pay(cx, id, j, n, None); assert!(v.is_none(), "refused: {}", v.map(|x| why(&x)).unwrap()); }
+    fn refused(cx: &mut Cx, id: u64, n: u64) -> String { why(&try_pay(cx, id, 1, n, None).expect("not refused")) }
+    fn file(cx: &mut Cx, r: u64, n: u64) -> bool { let i = inv(n); cx.run("file", &acc("funder.near"), None, 0, |w| w.file_claim(U64(r), i, "ef".repeat(32))).is_some() }
+    fn rule(cx: &mut Cx, r: u64, n: u64, ruling: Ruling) -> bool { let i = inv(n); cx.run("rule", &acc("arb.near"), None, 0, |w| w.resolve_claim(U64(r), i, ruling, "ab".repeat(32))).is_some() }
+    fn uphold(cx: &mut Cx, r: u64, n: u64, loss: u128) -> bool { rule(cx, r, n, Ruling::Uphold { loss: U128(loss) }) }
+    fn clear(cx: &mut Cx, r: u64) -> bool { cx.run("clear", &acc("funder.near"), None, 0, |w| w.clear_agent(U64(r))).is_some() }
+    fn cover(cx: &Cx, r: u64) -> Cover { cx.peek(|w| w.covers.get(&r).cloned().unwrap()) }
+    fn rec(cx: &Cx, id: u64, n: u64) -> Option<PaymentRecord> { let i = inv(n); cx.peek(|w| w.payment_of(U64(id), i)) }
+    fn drop_credit(cx: &mut Cx, r: u64) { cx.run("poke", &writ(), None, 0, |w| { w.terms.remove(&r); }).unwrap(); }
+    #[track_caller]
+    fn err(cx: &Cx, code: &str) { assert!(cx.last_err.contains(code), "{} vs {}", cx.last_err, code); }
+
+    #[test]
+    fn cover_payout_rounds_down_and_cannot_overflow() {
+        assert_eq!(cover_payout(10_000, 2000), 8000);
+        assert_eq!(cover_payout(9_999, 2000), 7999);
+        assert_eq!(cover_payout(1, 9000), 0);
+        assert_eq!(cover_payout(u128::MAX, 1000), u128::MAX / 10_000 * 9000 + (u128::MAX % 10_000) * 9000 / 10_000);
+    }
+
+    #[test]
+    fn activation_moves_the_fee_and_locks_the_limit_exactly() {
+        let (mut cx, r) = world(opt());
+        // 2% per 30 days on 8 units, valid for 1e6 s: one period
+        offer(&mut cx, r, 8 * U, 2000, 200, 1000);
+        let t0 = total(&cx);
+        let v0 = cell(&cx, r).vault.0;
+        assert!(activate(&mut cx, r));
+        let fee = 8 * U * 200 / 10_000;
+        assert_eq!(cell(&cx, r).vault.0, v0 - fee);
+        let st = stake(&cx);
+        assert_eq!((st.amount.0, st.exposure.0, st.earned.0), (10 * U + fee, 8 * U, fee));
+        let c = cover(&cx, r);
+        assert_eq!((c.state.clone(), c.premium.0, c.locked.0, c.paid.0), (CoverState::Active, fee, 8 * U, 0));
+        assert_eq!(total(&cx), t0, "the fee moves inside the books");
+        assert!(!activate(&mut cx, r));
+        err(&cx, "COVER_NOT_OFFERED");
+        // A longer mandate pays by the period, and never more than the limit
+        let (mut cx, r) = world(opt());
+        cx.run("poke", &writ(), None, 0, |w| { let mut c = w.cells.get(&r).cloned().unwrap(); c.valid_until = U64(T0 + 61 * DAY * NS); w.cells.insert(r, c); }).unwrap();
+        offer(&mut cx, r, 8 * U, 2000, 200, 1000);
+        assert!(activate(&mut cx, r));
+        assert_eq!(cover(&cx, r).premium.0, 3 * (8 * U * 200 / 10_000), "61 days is three periods");
+        // Only the named, still-listed guarantor, on a live mandate
+        let (mut cx, r) = world(opt());
+        offer(&mut cx, r, U, 2000, 0, 1000);
+        assert!(cx.run("x", &acc("funder.near"), None, 0, |w| w.activate_cover(U64(r))).is_none());
+        err(&cx, "ONLY_GUARANTOR");
+        cx.run("poke", &writ(), None, 0, |w| { w.verifiers.remove(&acc("g.near")); }).unwrap();
+        assert!(!activate(&mut cx, r));
+        err(&cx, "GUARANTOR_DELISTED");
+        cx.run("poke", &writ(), None, 0, |w| { w.verifiers.insert(acc("g.near"), "00".repeat(32)); }).unwrap();
+        cx.now = VALID + 1;
+        assert!(!activate(&mut cx, r));
+        err(&cx, "MANDATE_EXPIRED");
+        cx.now = VALID;
+        assert!(activate(&mut cx, r), "still valid at valid_until");
+        let (mut cx, r) = world(opt());
+        offer(&mut cx, r, U, 2000, 0, 1000);
+        cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        assert!(!activate(&mut cx, r));
+        err(&cx, "NOT_ACTIVE");
+        // No cover at all
+        let (mut cx, r) = world(opt());
+        assert!(!activate(&mut cx, r));
+        err(&cx, "NO_COVER");
+    }
+
+    #[test]
+    fn a_payment_is_recorded_only_under_live_cover() {
+        let (mut cx, r) = world(opt());
+        offer(&mut cx, r, 8 * U, 2000, 0, 1000);
+        pay(&mut cx, r, 1, 1);
+        assert!(rec(&cx, r, 1).is_none(), "cover only offered: no record");
+        assert!(activate(&mut cx, r));
+        assert!(!file(&mut cx, r, 1));
+        err(&cx, "NO_PAYMENT");
+        let ctx = "AB".repeat(32);
+        assert!(try_pay(&mut cx, r, 2, 2, Some(ctx)).is_none());
+        let p = rec(&cx, r, 2).unwrap();
+        assert_eq!((p.cell.0, p.to.clone(), p.amount.0, p.paid_at.0, p.context_hash.clone(), p.claim.clone()), (r, acc("s1.near"), 2 * U, T0, Some("ab".repeat(32)), ClaimState::None));
+        // Bad context hash: refused with a strike, like a bad invoice hash
+        let idx = cell(&cx, r).idx;
+        assert_eq!(why(&try_pay(&mut cx, r, 1, 3, Some("zz".into())).unwrap()), "INVOICE");
+        assert_eq!(why(&try_pay(&mut cx, r, 1, 3, Some("ab".repeat(31))).unwrap()), "INVOICE");
+        assert_eq!(cell(&cx, r).idx, idx, "no link spent");
+        assert_eq!(cell(&cx, r).strikes, 2);
+        // A failed transfer leaves no record: nobody lost money
+        let (p2, k, i) = (link(&cx, r, 1), key(&cx, r), inv(4));
+        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p2, 1, acc("s1.near"), i, None); }).unwrap();
+        cx.resolve(true);
+        assert!(rec(&cx, r, 4).is_none(), "a bounced transfer cannot be claimed");
+        // No cover: the mandate behaves as before and keeps no records
+        let (mut cx, r) = world(opt());
+        pay(&mut cx, r, 1, 1);
+        assert!(rec(&cx, r, 1).is_none());
+        assert!(cx.peek(|w| w.cover_of(U64(r)).is_none()));
+    }
+
+    // 1. M2: the stop is on the root, so a dismissed sub-agent's payment still stops the whole tree
+    #[test]
+    fn a_claim_on_a_dismissed_sub_agent_still_stops_the_whole_tree() {
+        let (mut cx, r) = active();
+        let child = hired(hire(&mut cx, r, 4, |_| {}));
+        let sib = hired(hire(&mut cx, r, 4, |_| {}));
+        pay(&mut cx, child, 2, 1);
+        let k = key(&cx, r);
+        cx.run("dismiss", &writ(), Some(&k), 0, |w| w.dismiss(U64(child))).unwrap();
+        assert!(matches!(cell(&cx, child).status, Status::Revoked { .. }));
+        assert!(rec(&cx, r, 1).is_some(), "the record is on the tree");
+        assert!(file(&mut cx, r, 1));
+        assert_eq!(refused(&mut cx, r, 2), "UNDER_CLAIM", "root stops");
+        assert_eq!(refused(&mut cx, sib, 3), "UNDER_CLAIM", "sibling stops");
+        assert_eq!(why(&hire(&mut cx, r, 1, |_| {})), "UNDER_CLAIM", "hiring stops");
+        assert_eq!(cx.peek(|w| { let c = w.cover_of(U64(sib)).unwrap(); (c["open_claim"].clone(), c["root"].clone()) }), (Value::from(inv(1)), Value::from(r.to_string())), "any cell finds the cover");
+        assert!(uphold(&mut cx, r, 1, 2 * U));
+        assert_eq!(refused(&mut cx, sib, 4), "NOT_CLEARED", "and stays stopped until the company clears");
+        assert_eq!(why(&hire(&mut cx, r, 1, |_| {})), "NOT_CLEARED");
+        assert!(clear(&mut cx, r));
+        pay(&mut cx, sib, 1, 5);
+        cx.check(1, "m2");
+    }
+
+    // 2. M1: the loss is what is repaid, not the payment
+    #[test]
+    fn the_loss_is_repaid_not_the_payment() {
+        let (mut cx, r) = active();
+        pay(&mut cx, r, 3, 1);
+        assert!(file(&mut cx, r, 1));
+        let st0 = stake(&cx);
+        assert!(!uphold(&mut cx, r, 1, 3 * U + 1));
+        err(&cx, "BAD_LOSS");
+        assert!(!uphold(&mut cx, r, 1, 0));
+        err(&cx, "BAD_LOSS");
+        assert!(uphold(&mut cx, r, 1, U), "the invoice was 2, the agent paid 3: the loss is 1");
+        let want = U * 8 / 10;
+        assert!(get_logs().iter().any(|l| l.contains("claim_upheld") && l.contains(&format!("\"payout\":\"{}\"", want)) && l.contains("\"retained\":false")));
+        let st = stake(&cx);
+        assert_eq!((st.amount.0, st.exposure.0), (st0.amount.0 - want, st0.exposure.0 - want));
+        assert_eq!((st.claims_paid.0, st.cover_paid.0), (want, want));
+        assert_eq!(claim(&cx, "funder.near"), Some(want));
+        let c = cover(&cx, r);
+        assert_eq!((c.paid.0, c.locked.0, c.upheld, c.needs_clear, c.open_claim.clone()), (want, 8 * U - want, 1, true, None));
+        assert!(matches!(rec(&cx, r, 1).unwrap().claim, ClaimState::Upheld { loss, payout, .. } if loss.0 == U && payout.0 == want));
+        // The whole amount is the most it can be
+        assert!(clear(&mut cx, r));
+        pay(&mut cx, r, 2, 2);
+        assert!(file(&mut cx, r, 2));
+        assert!(uphold(&mut cx, r, 2, 2 * U));
+        assert_eq!(cover(&cx, r).paid.0, want + 2 * want);
+        cx.check(1, "m1");
+    }
+
+    #[test]
+    fn the_last_payout_stops_at_what_is_locked() {
+        let (mut cx, r) = world(opt());
+        offer(&mut cx, r, 5 * U, 1000, 0, 1000);
+        assert!(activate(&mut cx, r));
+        for (n, want_paid) in [(1u64, 45 * U / 10), (2, 5 * U)] {
+            pay(&mut cx, r, 5, n);
+            assert!(file(&mut cx, r, n));
+            assert!(uphold(&mut cx, r, n, 5 * U));
+            assert_eq!(cover(&cx, r).paid.0, want_paid);
+            assert!(clear(&mut cx, r));
+        }
+        assert_eq!((cover(&cx, r).locked.0, stake(&cx).exposure.0), (0, 0));
+        // Nothing is left to pay, so no more claims
+        pay(&mut cx, r, 1, 3);
+        assert!(!file(&mut cx, r, 3));
+        err(&cx, "COVER_EXHAUSTED");
+        cx.check(1, "cap");
+    }
+
+    // 3. M3: only one way out for the lock
+    #[test]
+    fn revoking_does_not_bring_the_release_forward() {
+        let (mut cx, r) = active();
+        pay(&mut cx, r, 1, 1);
+        // The guarantor is the verifier: it can revoke and keep its fee, but not take its lock back
+        cx.run("revoke", &acc("g.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        let release = |cx: &mut Cx| cx.run("release", &acc("g.near"), None, 0, |w| w.release_cover(U64(r))).is_some();
+        cx.now = T0 + 10_000 * NS;
+        assert!(!release(&mut cx));
+        err(&cx, "TOO_EARLY");
+        // And the company can still claim after a revocation
+        cx.now = T0;
+        assert!(file(&mut cx, r, 1));
+        assert!(rule(&mut cx, r, 1, Ruling::Deny));
+        let end = VALID + 1000 * NS;
+        cx.now = end;
+        assert!(!release(&mut cx));
+        err(&cx, "TOO_EARLY");
+        assert!(cx.run("x", &acc("funder.near"), None, 0, |w| w.release_cover(U64(r))).is_none());
+        err(&cx, "ONLY_GUARANTOR");
+        cx.now = end + 1;
+        // A delisted guarantor can still get out
+        cx.run("poke", &writ(), None, 0, |w| { w.verifiers.remove(&acc("g.near")); }).unwrap();
+        assert!(release(&mut cx));
+        assert!(get_logs().iter().any(|l| l.contains("cover_released") && l.contains(&format!("\"released\":\"{}\"", 8 * U))));
+        let c = cover(&cx, r);
+        assert_eq!((c.state.clone(), c.locked.0), (CoverState::Released, 0));
+        assert_eq!(stake(&cx).exposure.0, 0);
+        assert!(!release(&mut cx));
+        err(&cx, "COVER_NOT_ACTIVE");
+    }
+
+    #[test]
+    fn an_open_claim_blocks_the_release_and_the_window_closes_when_it_opens() {
+        let (mut cx, r) = active();
+        cx.now = VALID - 10 * NS;
+        pay(&mut cx, r, 1, 1);
+        // The payment's window is counted from valid_until at the latest: a late callback cannot outlast the release
+        cx.run("poke", &writ(), None, 0, |w| { let k = Contract::invoice_key(r, &inv(1)).unwrap(); let mut p = w.payments.get(&k).cloned().unwrap(); p.paid_at = U64(VALID + 5 * NS); w.payments.insert(k, p); }).unwrap();
+        cx.now = VALID + 1000 * NS + 1;
+        assert!(!file(&mut cx, r, 1));
+        err(&cx, "WINDOW_CLOSED");
+        cx.now = VALID + 1000 * NS;
+        assert!(file(&mut cx, r, 1), "open at the exact nanosecond");
+        cx.now = VALID + 1000 * NS + 1;
+        assert!(cx.run("release", &acc("g.near"), None, 0, |w| w.release_cover(U64(r))).is_none());
+        err(&cx, "CLAIM_OPEN");
+        assert!(uphold(&mut cx, r, 1, U), "the claim filed in time can still be ruled on");
+        assert!(cx.run("release", &acc("g.near"), None, 0, |w| w.release_cover(U64(r))).is_some());
+        assert_eq!(stake(&cx).exposure.0, 0);
+        assert_eq!(cover(&cx, r).paid.0, U * 8 / 10);
+    }
+
+    // 4. M4: a callback in flight when the lock goes
+    #[test]
+    fn a_callback_after_release_or_void_writes_nothing() {
+        for void in [false, true] {
+            let (mut cx, r) = active();
+            pay(&mut cx, r, 1, 1);
+            let (p, k, i) = (link(&cx, r, 1), key(&cx, r), inv(2));
+            if void {
+                assert!(file(&mut cx, r, 1));
+                assert!(rule(&mut cx, r, 1, Ruling::Deny));
+                let i0 = inv(1);
+                cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), i, None); }).unwrap();
+                cx.run("void", &acc("arb.near"), None, 0, |w| w.void_cover(U64(r), i0)).unwrap();
+            } else {
+                cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), i, None); }).unwrap();
+                cx.now = VALID + 1000 * NS + 1;
+                cx.run("release", &acc("g.near"), None, 0, |w| w.release_cover(U64(r))).unwrap();
+            }
+            cx.resolve(false);
+            assert!(rec(&cx, r, 2).is_none(), "no record, so no claim on stake that is no longer locked");
+            assert!(cx.peek(|w| w.invoice_paid(U64(r), inv(2))), "the payment itself still counts");
+            assert!(!file(&mut cx, r, 2));
+            err(&cx, "COVER_NOT_ACTIVE");
+            cx.check(1, "m4");
+        }
+    }
+
+    #[test]
+    fn a_record_is_never_overwritten() {
+        let (mut cx, r) = active();
+        pay(&mut cx, r, 1, 1);
+        assert!(file(&mut cx, r, 1));
+        assert!(rule(&mut cx, r, 1, Ruling::Deny));
+        cx.run("cb", &writ(), None, 0, |w| { let _ = w.on_transfer(U64(r), U128(9 * U), inv(1), acc("s2.near"), 1, 0, Some("cd".repeat(32)), Ok(())); }).unwrap();
+        let p = rec(&cx, r, 1).unwrap();
+        assert_eq!((p.amount.0, p.to.clone()), (U, acc("s1.near")));
+        assert!(matches!(p.claim, ClaimState::Denied { .. }));
+    }
+
+    // 5. M5: repayment cannot get around what the tree owes
+    #[test]
+    fn a_payout_stays_in_the_vault_while_the_company_owes() {
+        // A debt to the guarantor
+        let (mut cx, r) = active();
+        pay(&mut cx, r, 2, 1);
+        assert!(file(&mut cx, r, 1));
+        cx.run("poke", &writ(), None, 0, |w| { let mut t = w.terms.get(&r).cloned().unwrap(); t.open_debts = 1; w.terms.insert(r, t); }).unwrap();
+        let v0 = cell(&cx, r).vault.0;
+        assert!(uphold(&mut cx, r, 1, 2 * U));
+        assert!(get_logs().iter().any(|l| l.contains("claim_upheld") && l.contains("\"retained\":true")));
+        assert_eq!(cell(&cx, r).vault.0, v0 + 16 * U / 10, "in the root's vault");
+        assert_eq!(claim(&cx, "funder.near"), None, "nothing the company can withdraw");
+        assert!(cx.run("w", &acc("funder.near"), None, 0, |w| { let _ = w.withdraw(None); }).is_none());
+        err(&cx, "NOTHING_TO_WITHDRAW");
+        // Open credit, even with no debt yet
+        let (mut cx, r) = active();
+        let order = opened(open(&mut cx, r, 1));
+        cx.credits.push(order);
+        pay(&mut cx, r, 2, 1);
+        assert!(file(&mut cx, r, 1));
+        let v0 = cell(&cx, r).vault.0;
+        assert!(uphold(&mut cx, r, 1, 2 * U));
+        assert_eq!(cell(&cx, r).vault.0, v0 + 16 * U / 10);
+        assert_eq!(claim(&cx, "funder.near"), None);
+        cx.check(1, "m5");
+        // Nothing owed: claimable, and it goes out in the mandate's asset
+        let (mut cx, r) = active();
+        pay(&mut cx, r, 2, 1);
+        assert!(file(&mut cx, r, 1));
+        assert!(uphold(&mut cx, r, 1, 2 * U));
+        assert_eq!(claim(&cx, "funder.near"), Some(16 * U / 10));
+        let t0 = total(&cx);
+        cx.run("w", &acc("funder.near"), None, 0, |w| { let _ = w.withdraw(None); }).unwrap();
+        assert_eq!(total(&cx), t0 - 16 * U / 10);
+    }
+
+    // 6. M6: cover with no credit terms works, in NEAR and in a token
+    #[test]
+    fn cover_alone_works_in_near_and_in_a_token() {
+        let (mut cx, r) = world(opt());
+        drop_credit(&mut cx, r);
+        offer(&mut cx, r, 8 * U, 2000, 100, 1000);
+        assert!(activate(&mut cx, r));
+        pay(&mut cx, r, 2, 1);
+        assert!(file(&mut cx, r, 1));
+        assert!(uphold(&mut cx, r, 1, 2 * U));
+        assert_eq!(claim(&cx, "funder.near"), Some(16 * U / 10));
+        assert!(clear(&mut cx, r));
+        assert!(cx.peek(|w| w.risk_card(U64(r)).is_none()), "the credit card is untouched");
+        assert_eq!(cx.peek(|w| w.cover_of(U64(r)).unwrap()["state"].clone()), "Active");
+
+        let (mut cx, r, _) = tworld(opt());
+        drop_credit(&mut cx, r);
+        offer(&mut cx, r, 8 * U, 2000, 100, 1000);
+        let (v0, t0) = (cell(&cx, r).vault.0, ttotal(&cx));
+        assert!(activate(&mut cx, r));
+        let fee = 8 * U / 100;
+        assert_eq!(cell(&cx, r).vault.0, v0 - fee);
+        assert_eq!((tstake(&cx).amount.0, tstake(&cx).exposure.0), (10 * U + fee, 8 * U));
+        assert_eq!(ttotal(&cx), t0, "the fee moves inside the token's books");
+        pay(&mut cx, r, 2, 1);
+        assert!(file(&mut cx, r, 1));
+        assert!(uphold(&mut cx, r, 1, 2 * U));
+        assert_eq!(tclaim(&cx, "funder.near"), 16 * U / 10);
+        assert_eq!(near_claim(&cx, "funder.near"), 0, "paid in the mandate's asset, never in NEAR");
+        assert_eq!((tstake(&cx).cover_paid.0, tstake(&cx).exposure.0), (16 * U / 10, 8 * U - 16 * U / 10));
+        assert_eq!(stake(&cx).amount.0, 0, "the NEAR stake is not touched");
+        cx.check(1, "m6");
+    }
+
+    #[test]
+    fn a_stake_in_the_wrong_asset_does_not_back_cover() {
+        let (mut cx, r, _) = tworld(opt());
+        drop_credit(&mut cx, r);
+        offer(&mut cx, r, 50 * U, 2000, 0, 1000);
+        cx.run("stake", &acc("g.near"), None, 100 * U, |w| w.stake()).unwrap();
+        assert!(!activate(&mut cx, r));
+        err(&cx, "GUARANTOR_CAPACITY");
+    }
+
+    // 8. One open claim at a time, one claim per payment, inside the window
+    #[test]
+    fn one_open_claim_one_claim_per_payment_inside_the_window() {
+        let (mut cx, r) = active();
+        pay(&mut cx, r, 1, 1);
+        pay(&mut cx, r, 1, 2);
+        assert!(!file(&mut cx, r, 9));
+        err(&cx, "NO_PAYMENT");
+        let (a, e) = (inv(1), "ef".repeat(32));
+        assert!(cx.run("x", &acc("s1.near"), None, 0, |w| w.file_claim(U64(r), a, e)).is_none());
+        err(&cx, "ONLY_FUNDER");
+        let a = inv(1);
+        assert!(cx.run("x", &acc("funder.near"), None, 0, |w| w.file_claim(U64(r), a, "zz".into())).is_none());
+        err(&cx, "BAD_HEX:evidence_hash");
+        assert!(file(&mut cx, r, 1));
+        assert!(get_logs().iter().any(|l| l.contains("claim_filed") && l.contains(&"ef".repeat(32))));
+        assert!(!file(&mut cx, r, 2));
+        err(&cx, "CLAIM_OPEN");
+        assert!(!file(&mut cx, r, 1));
+        err(&cx, "CLAIM_OPEN");
+        assert!(rule(&mut cx, r, 1, Ruling::Deny));
+        assert!(!file(&mut cx, r, 1));
+        err(&cx, "ALREADY_CLAIMED");
+        // Uppercase hex is the same invoice
+        let up = inv(2).to_uppercase();
+        cx.run("x", &acc("funder.near"), None, 0, |w| w.file_claim(U64(r), up, "ef".repeat(32))).unwrap();
+        assert_eq!(cover(&cx, r).open_claim, Some(inv(2)));
+        assert!(uphold(&mut cx, r, 2, U));
+        assert!(!file(&mut cx, r, 2));
+        err(&cx, "ALREADY_CLAIMED");
+        // Window, to the nanosecond
+        assert!(clear(&mut cx, r));
+        pay(&mut cx, r, 1, 3);
+        cx.now = T0 + 1000 * NS + 1;
+        assert!(!file(&mut cx, r, 3));
+        err(&cx, "WINDOW_CLOSED");
+        cx.now = T0 + 1000 * NS;
+        assert!(file(&mut cx, r, 3));
+        // And nothing happens to a tree with no cover
+        let (mut cx, r) = world(opt());
+        assert!(!file(&mut cx, r, 1));
+        err(&cx, "NO_COVER");
+    }
+
+    // 9. Timeout: no pay, no denial, can file again; neither side can act on the other's side of the deadline
+    #[test]
+    fn a_timed_out_claim_can_be_filed_again() {
+        let (mut cx, r) = active();
+        pay(&mut cx, r, 1, 1);
+        let timeout = |cx: &mut Cx| cx.run("to", &acc("x.near"), None, 0, |w| w.claim_timeout(U64(r))).is_some();
+        assert!(!timeout(&mut cx));
+        err(&cx, "NO_OPEN_CLAIM");
+        assert!(file(&mut cx, r, 1));
+        cx.now = T0 + 200 * NS;
+        assert!(!timeout(&mut cx));
+        err(&cx, "ARBITER_STILL_HAS_TIME");
+        cx.now = T0 + 200 * NS + 1;
+        assert!(!rule(&mut cx, r, 1, Ruling::Deny));
+        err(&cx, "RULING_TOO_LATE");
+        assert!(!uphold(&mut cx, r, 1, U));
+        err(&cx, "RULING_TOO_LATE");
+        let st0 = stake(&cx);
+        assert!(timeout(&mut cx));
+        let c = cover(&cx, r);
+        assert_eq!((c.timed_out, c.denied, c.upheld, c.open_claim.clone(), c.needs_clear), (1, 0, 0, None, false));
+        assert_eq!(rec(&cx, r, 1).unwrap().claim, ClaimState::None);
+        assert_eq!(stake(&cx).amount.0, st0.amount.0, "nothing paid");
+        pay(&mut cx, r, 1, 2);
+        // Filed again, inside the window; timeouts add up
+        assert!(file(&mut cx, r, 1));
+        cx.now += 201 * NS;
+        assert!(timeout(&mut cx));
+        assert_eq!(cover(&cx, r).timed_out, 2);
+        assert!(file(&mut cx, r, 1));
+        assert!(rule(&mut cx, r, 1, Ruling::Deny), "the arbiter can rule on the new filing");
+        assert_eq!(cover(&cx, r).denied, 1);
+    }
+
+    #[test]
+    fn only_the_arbiter_rules_and_only_on_the_open_claim() {
+        let (mut cx, r) = active();
+        pay(&mut cx, r, 1, 1);
+        pay(&mut cx, r, 1, 2);
+        assert!(!rule(&mut cx, r, 1, Ruling::Deny));
+        err(&cx, "NO_OPEN_CLAIM");
+        assert!(file(&mut cx, r, 1));
+        for who in ["funder.near", "g.near", "owner.near"] {
+            let i = inv(1);
+            assert!(cx.run("x", &acc(who), None, 0, |w| w.resolve_claim(U64(r), i, Ruling::Uphold { loss: U128(U) }, "ab".repeat(32))).is_none());
+            err(&cx, "ONLY_ARBITER");
+        }
+        assert!(!rule(&mut cx, r, 2, Ruling::Deny));
+        err(&cx, "NO_OPEN_CLAIM");
+        let i = inv(1);
+        assert!(cx.run("x", &acc("arb.near"), None, 0, |w| w.resolve_claim(U64(r), i, Ruling::Deny, "ab".into())).is_none());
+        err(&cx, "BAD_LEN:ruling_hash");
+        let st0 = stake(&cx);
+        assert!(rule(&mut cx, r, 1, Ruling::Deny));
+        let st = stake(&cx);
+        assert_eq!((st.amount.0, st.exposure.0, st.cover_paid.0), (st0.amount.0, st0.exposure.0, 0), "a denial moves nothing");
+        let c = cover(&cx, r);
+        assert_eq!((c.denied, c.needs_clear, c.open_claim.clone(), c.locked.0), (1, false, None, 8 * U));
+        assert_eq!(rec(&cx, r, 1).unwrap().claim, ClaimState::Denied { ruling_hash: "ab".repeat(32) });
+        pay(&mut cx, r, 1, 3);
+    }
+
+    // 10. Void needs a denied record, and ends everything
+    #[test]
+    fn void_needs_a_denied_claim_and_ends_the_records() {
+        let (mut cx, r) = active();
+        pay(&mut cx, r, 1, 1);
+        pay(&mut cx, r, 1, 2);
+        let void = |cx: &mut Cx, n: u64| { let i = inv(n); cx.run("void", &acc("arb.near"), None, 0, |w| w.void_cover(U64(r), i)).is_some() };
+        assert!(!void(&mut cx, 1));
+        err(&cx, "NOT_DENIED");
+        assert!(!void(&mut cx, 9));
+        err(&cx, "NOT_DENIED");
+        assert!(file(&mut cx, r, 1));
+        assert!(!void(&mut cx, 1));
+        err(&cx, "CLAIM_OPEN");
+        assert!(uphold(&mut cx, r, 1, U));
+        assert!(!void(&mut cx, 1));
+        err(&cx, "NOT_DENIED");
+        assert!(clear(&mut cx, r));
+        assert!(file(&mut cx, r, 2));
+        assert!(rule(&mut cx, r, 2, Ruling::Deny));
+        let i = inv(2);
+        assert!(cx.run("x", &acc("g.near"), None, 0, |w| w.void_cover(U64(r), i)).is_none());
+        err(&cx, "ONLY_ARBITER");
+        let (st0, fee0) = (stake(&cx), cover(&cx, r).premium.0);
+        let paid = cover(&cx, r).paid.0;
+        assert!(void(&mut cx, 2));
+        assert!(get_logs().iter().any(|l| l.contains("cover_voided") && l.contains(&format!("\"released\":\"{}\"", 8 * U - paid))));
+        let c = cover(&cx, r);
+        assert_eq!((c.state.clone(), c.locked.0, c.needs_clear, c.premium.0), (CoverState::Voided, 0, false, fee0));
+        let st = stake(&cx);
+        assert_eq!((st.amount.0, st.exposure.0), (st0.amount.0, 0), "lock released, stake and fee kept");
+        assert!(!void(&mut cx, 2));
+        err(&cx, "COVER_NOT_ACTIVE");
+        // After void: payments keep working but are not recorded and cannot be claimed
+        pay(&mut cx, r, 1, 3);
+        assert!(rec(&cx, r, 3).is_none());
+        assert!(!file(&mut cx, r, 3));
+        err(&cx, "COVER_NOT_ACTIVE");
+        cx.check(1, "void");
+    }
+
+    // 11. The stop costs no strikes, leaves settlement open, and blocks sellers
+    #[test]
+    fn a_stop_costs_no_strike_settle_works_and_a_seller_cannot_accept() {
+        let (mut cx, r) = active();
+        let accepted = opened(open(&mut cx, r, 1));
+        accept(&mut cx, accepted);
+        deliver(&mut cx, accepted);
+        let waiting = opened(open(&mut cx, r, 1));
+        pay(&mut cx, r, 1, 1);
+        cx.run("poke", &writ(), None, 0, |w| { let mut c = w.cells.get(&r).cloned().unwrap(); c.max_strikes = 2; w.cells.insert(r, c); }).unwrap();
+        assert!(file(&mut cx, r, 1));
+        for n in 10..20 { assert_eq!(refused(&mut cx, r, n), "UNDER_CLAIM"); }
+        let c = cell(&cx, r);
+        assert_eq!((c.strikes, c.status.clone(), c.rejects), (0, Status::Active, 10), "ten refusals, no strike, the key stays");
+        let k = key(&cx, r);
+        let (p, i) = (link(&cx, r, 1), inv(21));
+        let due = U64(cx.now + 500 * NS);
+        let v = cx.run("open", &writ(), Some(&k), 0, |w| w.open_credit(p, 1, acc("s1.near"), i, due)).unwrap();
+        assert_eq!(why(&v), "UNDER_CLAIM");
+        assert_eq!(cell(&cx, r).strikes, 0);
+        // A seller cannot take on the guarantor's money now
+        assert!(cx.run("accept", &acc("s1.near"), None, 0, |w| w.accept_credit(U64(waiting))).is_none());
+        err(&cx, "UNDER_CLAIM");
+        let reasons = cx.peek(|w| w.check_order(U64(waiting), None).reasons);
+        assert!(reasons.contains(&"UNDER_CLAIM".to_string()));
+        // Settling is not stopped: that would manufacture a default
+        assert!(settle(&mut cx, r, accepted));
+        assert_eq!(cred(&cx, accepted).status, CreditStatus::Settled);
+        assert!(uphold(&mut cx, r, 1, U));
+        for n in 30..40 { assert_eq!(refused(&mut cx, r, n), "NOT_CLEARED"); }
+        assert_eq!(cell(&cx, r).strikes, 0);
+        assert!(cx.run("accept", &acc("s1.near"), None, 0, |w| w.accept_credit(U64(waiting))).is_none());
+        err(&cx, "UNDER_CLAIM");
+        assert!(clear(&mut cx, r));
+        accept(&mut cx, waiting);
+    }
+
+    #[test]
+    fn clearing_needs_an_upheld_claim_and_the_company() {
+        let (mut cx, r) = active();
+        assert!(!clear(&mut cx, r));
+        err(&cx, "NOTHING_TO_CLEAR");
+        pay(&mut cx, r, 1, 1);
+        pay(&mut cx, r, 1, 2);
+        assert!(file(&mut cx, r, 1));
+        assert!(uphold(&mut cx, r, 1, U));
+        assert!(cx.run("x", &acc("g.near"), None, 0, |w| w.clear_agent(U64(r))).is_none());
+        err(&cx, "ONLY_FUNDER");
+        // A stopped tree can still file another claim on a payment already made, and cannot be cleared under it
+        assert!(file(&mut cx, r, 2));
+        assert!(!clear(&mut cx, r));
+        err(&cx, "CLAIM_OPEN");
+        assert_eq!(refused(&mut cx, r, 3), "UNDER_CLAIM");
+        assert!(rule(&mut cx, r, 2, Ruling::Deny));
+        assert_eq!(refused(&mut cx, r, 3), "NOT_CLEARED", "the upheld claim still has to be cleared");
+        assert!(clear(&mut cx, r));
+        assert!(get_logs().iter().any(|l| l.contains("agent_cleared")));
+        pay(&mut cx, r, 1, 3);
+    }
+
+    // 12. Cover and credit share one stake
+    #[test]
+    fn cover_and_credit_share_the_stake_both_ways() {
+        // Cover takes all of it: a seller's order finds no capacity
+        let mut o = opt(); o.stake = 8 * U;
+        let (mut cx, r) = world(o);
+        offer(&mut cx, r, 8 * U, 2000, 0, 1000);
+        assert!(activate(&mut cx, r));
+        let k = opened(open(&mut cx, r, 1));
+        assert!(cx.run("accept", &acc("s1.near"), None, 0, |w| w.accept_credit(U64(k))).is_none());
+        err(&cx, "GUARANTOR_CAPACITY");
+        // The stake cannot leave either
+        cx.run("req", &acc("g.near"), None, 0, |w| w.request_unstake(None)).unwrap();
+        cx.now += 31 * NS;
+        assert!(cx.run("x", &acc("g.near"), None, 0, |w| { let _ = w.withdraw_stake(U128(1), None); }).is_none());
+        err(&cx, "STAKE_EXPOSED");
+        // An order takes it first: the cover cannot lock
+        let mut o = opt(); o.stake = 2 * U;
+        let (mut cx, r) = world(o);
+        offer(&mut cx, r, 2 * U, 2000, 0, 1000);
+        let k = opened(open(&mut cx, r, 1));
+        accept(&mut cx, k);
+        assert_eq!(stake(&cx).exposure.0, U);
+        assert!(!activate(&mut cx, r));
+        err(&cx, "GUARANTOR_CAPACITY");
+        assert_eq!(cover(&cx, r).state, CoverState::Offered);
+        // The fee it would earn counts toward what it can lock, to the yocto
+        let mut o = opt(); o.stake = 2 * U;
+        let (mut cx, r) = world(o);
+        offer(&mut cx, r, 203 * U / 100, 2000, 100, 1000);
+        assert!(!activate(&mut cx, r));
+        err(&cx, "GUARANTOR_CAPACITY");
+        let mut o = opt(); o.stake = 2 * U;
+        let (mut cx, r) = world(o);
+        // A limit a little above the stake, and the fee on it makes up the gap
+        offer(&mut cx, r, 202 * U / 100, 2000, 100, 1000);
+        assert!(activate(&mut cx, r));
+        assert!(stake(&cx).amount.0 >= stake(&cx).exposure.0);
+    }
+
+    // 13. One invoice, one record
+    #[test]
+    fn a_cancelled_order_then_a_spend_leaves_one_record_and_a_paid_invoice_cannot_be_ordered() {
+        let (mut cx, r) = active();
+        let (p, k, i) = (link(&cx, r, 1), key(&cx, r), inv(1));
+        let due = U64(cx.now + 500 * NS);
+        let v = cx.run("open", &writ(), Some(&k), 0, |w| w.open_credit(p, 1, acc("s1.near"), i, due)).unwrap();
+        let order = opened(v);
+        assert_eq!(refused(&mut cx, r, 1), "DUPLICATE", "an open order holds the invoice");
+        assert!(rec(&cx, r, 1).is_none(), "credit keeps no payment record");
+        cx.run("cancel", &acc("funder.near"), None, 0, |w| w.cancel_open(U64(order))).unwrap();
+        pay(&mut cx, r, 1, 1);
+        let first = rec(&cx, r, 1).unwrap();
+        assert_eq!(first.amount.0, U);
+        assert_eq!(refused(&mut cx, r, 1), "DUPLICATE");
+        let (p, i) = (link(&cx, r, 1), inv(1));
+        let due = U64(cx.now + 500 * NS);
+        let v = cx.run("open", &writ(), Some(&k), 0, |w| w.open_credit(p, 1, acc("s1.near"), i, due)).unwrap();
+        assert_eq!(why(&v), "DUPLICATE");
+        assert_eq!(rec(&cx, r, 1).unwrap().paid_at.0, first.paid_at.0, "still the same record");
+        assert_eq!(cred(&cx, order).status, CreditStatus::Cancelled);
+    }
+
+    // 14. The fee is all or nothing, and never comes out of a seller's bond
+    #[test]
+    fn a_short_vault_changes_nothing_and_a_bond_does_not_pay_the_fee() {
+        // fee 2% of 8 units = 0.16 unit, vault one yocto short
+        let mut o = opt(); o.bond = 10_000;
+        let (mut cx, r) = world(o);
+        offer(&mut cx, r, 8 * U, 2000, 200, 1000);
+        let k = opened(open(&mut cx, r, 1));
+        accept(&mut cx, k);
+        assert_eq!(outstanding(&cx, r).1, U, "the whole order is bonded");
+        let fee = 8 * U * 200 / 10_000;
+        set_vault(&mut cx, r, U + fee - 1);
+        let st0 = stake(&cx);
+        let t0 = total(&cx);
+        assert!(!activate(&mut cx, r));
+        err(&cx, "PREMIUM_SHORT");
+        let c = cover(&cx, r);
+        assert_eq!((c.state.clone(), c.premium.0, c.locked.0), (CoverState::Offered, 0, 0), "still only offered");
+        assert_eq!(cell(&cx, r).vault.0, U + fee - 1);
+        assert_eq!((stake(&cx).amount.0, stake(&cx).exposure.0, total(&cx)), (st0.amount.0, st0.exposure.0, t0));
+        assert_eq!(outstanding(&cx, r).1, U, "the bond is untouched");
+        set_vault(&mut cx, r, U + fee);
+        assert!(activate(&mut cx, r));
+        assert_eq!(cell(&cx, r).vault.0, U, "exactly the bond is left");
+        assert_eq!(outstanding(&cx, r).1, U);
+        // And a guarantor that owes nothing is not paid by a frozen company
+        let (mut cx, r) = world(opt());
+        offer(&mut cx, r, U, 2000, 0, 1000);
+        cx.run("poke", &writ(), None, 0, |w| { let mut t = w.terms.get(&r).cloned().unwrap(); t.open_debts = 1; w.terms.insert(r, t); }).unwrap();
+        assert!(!activate(&mut cx, r));
+        err(&cx, "COMPANY_FROZEN");
+    }
+
+    #[test]
+    fn views_and_books_show_cover_separately() {
+        let (mut cx, r) = active();
+        assert_eq!(cx.peek(|w| w.present(U64(r)).unwrap()["cover"].clone()), true);
+        pay(&mut cx, r, 2, 1);
+        assert!(file(&mut cx, r, 1));
+        assert!(uphold(&mut cx, r, 1, 2 * U));
+        let v = cx.peek(|w| w.cover_of(U64(r)).unwrap());
+        let want = 16 * U / 10;
+        assert_eq!(v["state"], "Active");
+        assert_eq!(v["guarantor"], "g.near");
+        assert_eq!(v["arbiter"], "arb.near");
+        assert_eq!(v["limit"], json_str(8 * U));
+        assert_eq!(v["remaining"], json_str(8 * U - want));
+        assert_eq!(v["paid"], json_str(want));
+        assert_eq!(v["deductible_bps"], 2000);
+        assert_eq!((v["upheld"].clone(), v["denied"].clone(), v["timed_out"].clone(), v["needs_clear"].clone()), (Value::from(1), Value::from(0), Value::from(0), Value::from(true)));
+        assert_eq!(v["guarantor_stake"], json_str(10 * U - want));
+        assert_eq!(v["guarantor_exposure"], json_str(8 * U - want));
+        let b = cx.peek(|w| w.guarantor_book(acc("g.near"), None).unwrap());
+        assert_eq!((b["cover_paid"].clone(), b["claims_paid"].clone()), (json_str(want), json_str(want)));
+        // A view asked about a stranger's cell or a bad hash answers null
+        assert!(cx.peek(|w| w.cover_of(U64(99)).is_none()));
+        assert!(cx.peek(|w| w.payment_of(U64(r), "zz".into()).is_none()));
+    }
+
+    // Register's rules for cover, with a real signature, to the exact boundary
+    fn signed(cx: &mut Cx, f: impl FnOnce(&mut RegisterArgs)) -> Option<u64> {
+        // The attestation is checked by ed25519_verify, so sign with a real key
+        let (pk2, signer) = sign_key(&[42; 32]);
+        let g = acc("g.near");
+        cx.run("poke", &writ(), None, 0, |w| { w.verifiers.insert(g, pk2); }).unwrap();
+        cx.nextpk += 1;
+        let np = cx.nextpk;
+        let mut a = RegisterArgs {
+            amc_said: format!("EAMC{}", np), issuer_aid: "A".into(), issuer_pk: "00".repeat(32), agent_pk: pk(np), w0: "00".repeat(32), n: 100, unit: U128(U),
+            scope: vec![acc("s1.near")], valid_until: U64(cx.now + 1000 * NS), daily_links: 10, max_links: 5, max_strikes: 3, lei_commit: "00".repeat(32), ecr_commit: "00".repeat(32),
+            verifier: acc("g.near"), attested_at: U64(cx.now), signature: String::new(), asset: None, credit: None,
+            cover: Some(CoverArgs { limit: U128(50 * U), deductible_bps: 2000, premium_bps: 100, claim_window: U64(400), arbiter: acc("arb.near"), terms_hash: "cd".repeat(32) }),
+        };
+        f(&mut a);
+        cx.up(&writ(), None, 0);
+        a.signature = hex::encode(signer(attestation_message(&a, &acc("funder.near"), &writ()).as_bytes()));
+        let dep = register_fee(a.n) + a.n as u128 * COVER_STORAGE_PER_LINK + U;
+        cx.run("register", &acc("funder.near"), None, dep, |w| w.register(a).0)
+    }
+    fn sign_key(secret: &[u8; 32]) -> (String, impl Fn(&[u8]) -> Vec<u8>) {
+        use ed25519_dalek::{Signer, SigningKey};
+        let k = SigningKey::from_bytes(secret);
+        (hex::encode(k.verifying_key().to_bytes()), move |m: &[u8]| k.sign(m).to_bytes().to_vec())
+    }
+
+    // 16. register refuses every bad term on its own, and takes the exact boundary
+    #[test]
+    fn register_checks_every_cover_term_at_its_boundary() {
+        let (mut cx, _) = world(opt());
+        let bad = |cx: &mut Cx, f: fn(&mut RegisterArgs), code: &str| {
+            assert!(signed(cx, f).is_none(), "must refuse {}", code);
+            assert!(cx.last_err.contains(code), "{} vs {}", cx.last_err, code);
+        };
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().limit = U128(0), "COVER_LIMIT_ZERO");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().limit = U128(50 * UNIT - 1), "COVER_LIMIT_THIN");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().limit = U128(100 * UNIT + 1), "COVER_LIMIT_HIGH");
+        bad(&mut cx, |a| a.max_links = u32::MAX, "COVER_LIMIT_THIN");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().deductible_bps = 999, "COVER_DEDUCTIBLE");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().deductible_bps = 9001, "COVER_DEDUCTIBLE");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().premium_bps = 2001, "COVER_PREMIUM");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().claim_window = U64(399), "COVER_WINDOW");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().claim_window = U64(MAX_TENOR_SECS + 1), "COVER_WINDOW");
+        bad(&mut cx, |a| a.valid_until = U64(T0 + MAX_TENOR_SECS * NS + 1), "COVER_TENOR");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().arbiter = acc("g.near"), "COVER_ARBITER");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().arbiter = acc("funder.near"), "COVER_ARBITER");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().arbiter = acc("owner.near"), "COVER_ARBITER");
+        bad(&mut cx, |a| a.scope.push(acc("funder.near")), "COVER_SCOPE");
+        bad(&mut cx, |a| a.scope.push(acc("g.near")), "COVER_SCOPE");
+        bad(&mut cx, |a| a.scope.push(acc("arb.near")), "COVER_SCOPE");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().terms_hash = "zz".into(), "BAD_HEX:cover_terms_hash");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().terms_hash = "ab".into(), "BAD_LEN:cover_terms_hash");
+        // Exactly on each boundary it opens, and stays only offered
+        let good: [fn(&mut RegisterArgs); 7] = [
+            |_| {},
+            |a| a.cover.as_mut().unwrap().limit = U128(100 * UNIT),
+            |a| a.cover.as_mut().unwrap().deductible_bps = 1000,
+            |a| a.cover.as_mut().unwrap().deductible_bps = 9000,
+            |a| a.cover.as_mut().unwrap().premium_bps = 2000,
+            |a| a.cover.as_mut().unwrap().claim_window = U64(MAX_TENOR_SECS),
+            |a| a.valid_until = U64(T0 + MAX_TENOR_SECS * NS),
+        ];
+        for f in good {
+            let id = signed(&mut cx, f).unwrap_or_else(|| panic!("refused: {}", cx.last_err));
+            assert_eq!(cover(&cx, id).state, CoverState::Offered);
+            assert_eq!(cover(&cx, id).guarantor, acc("g.near"));
+        }
+        // Its opening fee carries the records: one yocto under the fee is refused
+        let d = |cx: &mut Cx, n: u32, extra: i8| {
+            let dep = (register_fee(n) + n as u128 * COVER_STORAGE_PER_LINK) as i128 + extra as i128;
+            let (pk2, signer) = sign_key(&[42; 32]);
+            let g = acc("g.near");
+            cx.run("poke", &writ(), None, 0, |w| { w.verifiers.insert(g, pk2); }).unwrap();
+            cx.nextpk += 1;
+            let np = cx.nextpk;
+            let mut a = RegisterArgs { amc_said: format!("EFEE{}", np), issuer_aid: "A".into(), issuer_pk: "00".repeat(32), agent_pk: pk(np), w0: "00".repeat(32), n, unit: U128(U), scope: vec![acc("s1.near")], valid_until: U64(cx.now + 1000 * NS), daily_links: 10, max_links: 1, max_strikes: 3, lei_commit: "00".repeat(32), ecr_commit: "00".repeat(32), verifier: acc("g.near"), attested_at: U64(cx.now), signature: String::new(), asset: None, credit: None, cover: Some(CoverArgs { limit: U128(10 * U), deductible_bps: 2000, premium_bps: 100, claim_window: U64(400), arbiter: acc("arb.near"), terms_hash: "cd".repeat(32) }) };
+            cx.up(&writ(), None, 0);
+            a.signature = hex::encode(signer(attestation_message(&a, &acc("funder.near"), &writ()).as_bytes()));
+            cx.run("register", &acc("funder.near"), None, dep as u128, |w| w.register(a).0)
+        };
+        assert!(d(&mut cx, 10, 0).is_none());
+        assert!(cx.last_err.contains("DEPOSIT_BELOW_FEE"));
+        let id = d(&mut cx, 10, 1).expect("one yocto above the fee opens");
+        assert_eq!(cell(&cx, id).vault.0, 1);
+    }
+
+    // 15. Every cover field is signed
+    #[test]
+    fn the_attestation_covers_every_cover_field() {
+        let (cx, _) = world(opt());
+        cx.up(&writ(), None, 0);
+        let args = |c: Option<CoverArgs>| RegisterArgs { amc_said: "E".into(), issuer_aid: "A".into(), issuer_pk: "00".repeat(32), agent_pk: pk(1), w0: "00".repeat(32), n: 1, unit: U128(1), scope: vec![acc("s1.near")], valid_until: U64(1), daily_links: 1, max_links: 1, max_strikes: 1, lei_commit: "00".repeat(32), ecr_commit: "00".repeat(32), verifier: acc("g.near"), attested_at: U64(1), signature: String::new(), asset: None, credit: None, cover: c };
+        let base = CoverArgs { limit: U128(7), deductible_bps: 2000, premium_bps: 100, claim_window: U64(400), arbiter: acc("arb.near"), terms_hash: "cd".repeat(32) };
+        let msg = |c: Option<CoverArgs>| attestation_message(&args(c), &acc("funder.near"), &writ());
+        assert!(msg(None).starts_with("writ:attest:v7\n"));
+        assert!(msg(None).ends_with("\ncredit=none\ncover=none"), "{}", msg(None));
+        assert!(msg(Some(base.clone())).ends_with(&format!("\ncover=7,2000,100,400,arb.near,{}", "cd".repeat(32))));
+        let mut seen = vec![msg(None), msg(Some(base.clone()))];
+        let edits: [fn(&mut CoverArgs); 6] = [
+            |c| c.limit = U128(8),
+            |c| c.deductible_bps = 2001,
+            |c| c.premium_bps = 101,
+            |c| c.claim_window = U64(401),
+            |c| c.arbiter = acc("other.near"),
+            |c| c.terms_hash = "ce".repeat(32),
+        ];
+        for f in edits {
+            let mut c = base.clone();
+            f(&mut c);
+            let m = msg(Some(c));
+            assert!(!seen.contains(&m));
+            seen.push(m);
+        }
+    }
+
+    #[test]
+    fn a_token_mandate_with_cover_alone_opens_a_stake_account_and_refunds_extra_near() {
+        let (mut cx, _) = world(opt());
+        let id = signed(&mut cx, |a| { a.asset = Some(acc("usdc.near")); }).unwrap_or_else(|| panic!("{}", cx.last_err));
+        cx.token = Some(acc("usdc.near"));
+        assert!(cx.peek(|w| w.stakes.contains_key(&(acc("g.near"), Some(acc("usdc.near"))))), "cover alone opens the stake account");
+        assert_eq!(cell(&cx, id).near_reserve.0, 0);
+        assert_eq!(cell(&cx, id).vault.0, 0);
+        assert!(cx.ft("stake", &acc("g.near"), 100 * U, "stake".into()), "{}", cx.last_err);
+        // A cover in a token nobody signed still cannot open a stake
+        cx.token = Some(acc("fake.near"));
+        assert!(!cx.ft("stake", &acc("g.near"), U, "stake".into()));
+        assert!(cx.last_err.contains("STAKE_ASSET_UNKNOWN"));
+    }
     }
 }

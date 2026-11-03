@@ -26,7 +26,7 @@ from keri.app import habbing
 from keri.core import coring, parsing, scheming
 from keri.vdr import credentialing, verifying
 
-from common import AMC, BUNDLE, ECR, HERE, LEV, QVI, REGISTRAR, b58, read_json, write_json
+from common import AMC, BUNDLE, COVER_FIELDS, ECR, HERE, LEV, QVI, REGISTRAR, b58, cover_line, cover_message, read_json, write_json
 
 _STATE = os.path.join(HERE, "..", os.environ.get("WRIT_DEMO_DIR", ".demo"))
 VKEY = os.environ.get("WRIT_VERIFIER_KEY", os.path.join(_STATE, "verifier_key.json"))
@@ -136,21 +136,60 @@ def verify_chain():
         )
 
 
+def read_cover(r, verifier, contract):
+    """Cover terms offered with this mandate, or None. Refuses anything the legal entity did not sign, and anything the contract would refuse.
+    The verifier is the guarantor, so its attestation is its acceptance. The contract also checks the arbiter is not its owner; this script does not know the owner."""
+    path = os.path.join(BUNDLE, "cover.json")
+    if not os.path.exists(path):
+        return None
+    doc = read_json(path)
+    try:
+        c = {k: doc[k] for k in COVER_FIELDS}
+        limit, n, unit = int(c["limit"]), int(r["n"]), int(r["unit"])
+        window = int(c["claim_window"])
+        canonical = str(limit) == c["limit"] and str(window) == c["claim_window"]
+    except (KeyError, TypeError, ValueError) as e:
+        raise ChainError(f"cover terms malformed: {e}")
+    if not canonical or not isinstance(c["deductible_bps"], int) or not isinstance(c["premium_bps"], int):
+        raise ChainError("cover terms malformed: not in canonical form")
+    try:
+        pysodium.crypto_sign_verify_detached(bytes.fromhex(doc.get("le_sig", "")), cover_message(contract, r["amc_said"], c), bytes.fromhex(r["le_pk"]))
+    except Exception:
+        raise ChainError("the legal entity did not sign these cover terms")
+    if hashlib.sha256(doc.get("terms_text", "").encode()).hexdigest() != c["terms_hash"]:
+        raise ChainError("cover terms_hash is not the hash of the terms presented")
+    if not (10 * r["max_links"] * unit <= limit):
+        raise ChainError("cover limit is under ten maximum payments")
+    if limit > n * unit:
+        raise ChainError("cover limit is more than the links can ever pay")
+    if not 1000 <= c["deductible_bps"] <= 9000:
+        raise ChainError("cover deductible is outside 10% to 90%")
+    if not 0 <= c["premium_bps"] <= 2000:
+        raise ChainError("cover fee is above 20% per period")
+    if not 0 < window <= 10 * 365 * 86400:
+        raise ChainError("cover claim window is outside what the contract accepts")
+    if c["arbiter"] in (verifier, r["funder"]):
+        raise ChainError("cover arbiter is the guarantor or the company")
+    if set(r["scope"]) & {verifier, r["funder"], c["arbiter"]}:
+        raise ChainError("mandate scope lets the agent pay the company, the guarantor or the arbiter")
+    return c
+
+
 def credit_line(c):
     if not c:
         return "none"
     return f"{c['limit']},{c['bond_bps']},{c['premium_bps']},{c['min_tenor']},{c['max_tenor']},{c['terms_hash']},{c['terms_sig']},{c['entity_tag']},{c['arbiter']},{c['fee_payer']},{c['seller_cap_bps']},{c.get('asset') or 'near'}"
 
 
-def attestation_message(r, lei_commit, ecr_commit, verifier, contract, attested_at, credit=None):
+def attestation_message(r, lei_commit, ecr_commit, verifier, contract, attested_at, credit=None, cover=None):
     """Must be identical character by character to the contract's attestation_message."""
     return (
-        "writ:attest:v6\n"
+        "writ:attest:v7\n"
         f"contract={contract}\namc={r['amc_said']}\nissuer_aid={r['issuer_aid']}\nissuer_pk={r['issuer_pk']}\nagent_pk={r['agent_near_pk']}\nw0={r['w0']}\n"
         f"n={r['n']}\nunit={r['unit']}\nscope={','.join(r['scope'])}\nvalid_until={r['valid_until_ns']}\n"
         f"daily_links={r['daily']}\nmax_links={r['max_links']}\nmax_strikes={r['max_strikes']}\nlei_commit={lei_commit}\necr_commit={ecr_commit}\n"
         f"funder={r['funder']}\nverifier={verifier}\nattested_at={attested_at}\n"
-        f"asset={r['asset'] or 'near'}\ncredit={credit_line(credit)}"
+        f"asset={r['asset'] or 'near'}\ncredit={credit_line(credit)}\ncover={cover_line(cover)}"
     )
 
 
@@ -179,10 +218,13 @@ def cmd_check(a):
 def cmd_attest(a):
     try:
         r = verify_chain()
+        cover = read_cover(r, a.verifier, a.contract)
     except ChainError as e:
         print(json.dumps(dict(ok=False, error=str(e))), file=sys.stderr); sys.exit(2)
     for c in r["checks"]:
         print("✓ " + c["check"], file=sys.stderr)
+    if cover:
+        print("✓ cover terms signed by the legal entity and within the contract's rules", file=sys.stderr)
     key = read_json(VKEY)
     salt = secrets.token_hex(16)
     lei_commit = hashlib.sha256(f"{r['lei']}|{salt}".encode()).hexdigest()
@@ -205,7 +247,7 @@ def cmd_attest(a):
         credit = dict(r["credit"], terms_sig=terms["terms_sig"], entity_tag=tag)
         if not credit.get("asset"):
             credit.pop("asset", None)
-    msg = attestation_message(r, lei_commit, ecr_commit, a.verifier, a.contract, attested_at, credit).encode()
+    msg = attestation_message(r, lei_commit, ecr_commit, a.verifier, a.contract, attested_at, credit, cover).encode()
     sig = pysodium.crypto_sign_detached(msg, bytes.fromhex(key["sk_hex"]))
     # the LEI and salt stay only at the verifier (used only at unsealing)
     recs = read_json(RECORDS) if os.path.exists(RECORDS) else {}
@@ -219,6 +261,8 @@ def cmd_attest(a):
         args["asset"] = r["asset"]
     if credit:
         args["credit"] = credit
+    if cover:
+        args["cover"] = cover
     opening = dict(le_aid=r["le_aid"], le_pk=r["le_pk"], ecr_said=r["ecr_said"], salt=ecr_salt)
     print(json.dumps(dict(funder=r["funder"], args=args, ecr_opening=opening), indent=1))
 
