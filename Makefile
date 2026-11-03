@@ -36,6 +36,11 @@ credit-demo: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
 	cd app && npx tsx src/setup.ts && npx tsx src/credit-demo.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
 
+# 同一個故事用穩定幣跑：本機 ft-mock（6 位小數），賣方付保證費。只碰本機 sandbox
+credit-usdc-demo: setup
+	scripts/sandbox.sh stop; scripts/sandbox.sh start
+	cd app && npx tsx src/setup.ts && npx tsx src/credit-usdc-demo.ts; status=$$?; cd .. && scripts/sandbox.sh stop; exit $$status
+
 # 選用：真 LLM 當 agent（需要 NEARAI_API_KEY）。只碰本機 sandbox。結果寫進 docs/attack-live.md
 attack-live: setup
 	scripts/sandbox.sh stop; scripts/sandbox.sh start
@@ -70,7 +75,7 @@ verify:
 
 clean:
 	scripts/sandbox.sh stop; rm -rf .demo .sandbox keri/.keystore keri/bundle keri/registrar
-.PHONY: setup test keri-check demo ui clean testnet testnet-usdc attack-live bounty pool live-agent verify credit-demo credit-testnet attack-credit-live
+.PHONY: setup test keri-check demo ui clean testnet testnet-usdc attack-live bounty pool live-agent verify credit-demo credit-usdc-demo credit-testnet attack-credit-live
 
 # 需要本人同意：會在 NEAR testnet 建帳號、部署、簽交易（測試幣，免費）。結果寫進 docs/testnet.md
 testnet: setup

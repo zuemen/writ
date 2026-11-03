@@ -35,6 +35,9 @@ mod fuzz {
         log: Vec<String>,
         sur: u128,
         last_err: String,
+        token: Option<AccountId>, // None = NEAR 世界；Some = 代幣世界，金庫、質押、賣方的錢都是這個代幣
+        tbal: u128,               // 合約在代幣上的餘額（模型）
+        tsur: u128,
     }
 
     impl Cx {
@@ -76,6 +79,11 @@ mod fuzz {
                                 MockAction::Transfer { deposit, .. } => { self.bal -= deposit.as_yoctonear(); }
                                 MockAction::FunctionCallWeight { method_name, args, .. } => {
                                     let m = String::from_utf8(method_name.clone()).unwrap();
+                                    // ft_transfer 附的 1 yocto 是合約自己出的零頭，模型不記
+                                    if m == "ft_transfer" {
+                                        let v: Value = serde_json::from_slice(args).unwrap();
+                                        self.tbal -= v["amount"].as_str().unwrap().parse::<u128>().unwrap();
+                                    }
                                     if m.starts_with("on_") {
                                         self.pending.push_back(Cb { method: m, args: serde_json::from_slice(args).unwrap() });
                                     }
@@ -98,7 +106,12 @@ mod fuzz {
         fn resolve(&mut self, fail: bool) {
             let Some(cb) = self.pending.pop_front() else { return };
             let amt: u128 = cb.args["amount"].as_str().unwrap().parse().unwrap();
-            if fail { self.bal += amt; }
+            // 轉帳失敗，錢沒離開合約：看這筆是哪個資產
+            let in_token = match cb.method.as_str() {
+                "on_withdraw" => !cb.args["asset"].is_null(),
+                _ => { let id: u64 = cb.args["cell"].as_str().unwrap().parse().unwrap(); self.peek(|w| w.cells.get(&id).unwrap().asset.is_some()) }
+            };
+            if fail { if in_token { self.tbal += amt; } else { self.bal += amt; } }
             let r: Result<(), PromiseError> = if fail { Err(PromiseError::Failed) } else { Ok(()) };
             let a = cb.args.clone();
             match cb.method.as_str() {
@@ -108,25 +121,43 @@ mod fuzz {
                     }).expect("on_transfer must not panic");
                 }
                 "on_refund" => { self.run("cb_on_refund", &writ(), None, 0, |w| w.on_refund(U64(a["cell"].as_str().unwrap().parse().unwrap()), U128(amt), r)).expect("on_refund must not panic"); }
-                "on_withdraw" => { self.run("cb_on_withdraw", &writ(), None, 0, |w| w.on_withdraw(a["who"].as_str().unwrap().parse().unwrap(), U128(amt), r)).expect("on_withdraw must not panic"); }
+                "on_withdraw" => { self.run("cb_on_withdraw", &writ(), None, 0, |w| w.on_withdraw(a["who"].as_str().unwrap().parse().unwrap(), U128(amt), a["asset"].as_str().map(|s| s.parse().unwrap()), r)).expect("on_withdraw must not panic"); }
                 m => panic!("unknown cb {}", m),
             }
         }
         fn hit(&mut self, s: &str) { *self.hits.entry(s.to_string()).or_default() += 1; }
+
+        /// 代幣世界的付款：代幣合約呼叫 ft_on_transfer。panic = ft_resolve_transfer 全退，餘額不變。
+        fn ft(&mut self, name: &str, sender: &AccountId, amount: u128, msg: String) -> bool {
+            let token = self.token.clone().unwrap();
+            let s = sender.clone();
+            match self.run(name, &token, None, 0, |w| w.ft_on_transfer(s, U128(amount), msg)) {
+                Some(back) => { self.tbal += amount - back.0; true }
+                None => false,
+            }
+        }
 
         fn check(&mut self, seed: u64, op: &str) {
             let cells: Vec<u64> = self.cells.iter().map(|c| c.id).collect();
             let roots = self.roots.clone();
             let credits = self.credits.clone();
             let bal = self.bal;
+            let asset = self.token.clone();
+            let tbal = self.tbal;
             let errs: Vec<String> = self.peek(|w| {
                 let mut e = vec![];
                 let mut sum = 0u128;
+                let mut near_sum = 0u128;
                 for id in &cells { let c = w.cells.get(id).unwrap(); sum += c.vault.0 + c.unclaimed.0; }
                 let g = acc("g.near");
-                let st = w.stakes.get(&g).cloned().unwrap_or_default();
+                let st = w.stake_get(&g, &asset);
                 sum += st.amount.0;
-                for a in ["s1.near", "s2.near", "funder.near", "g.near", "arb.near"] { sum += w.claimable.get(&acc(a)).copied().unwrap_or(0); }
+                for a in ["s1.near", "s2.near", "funder.near", "g.near", "arb.near"] {
+                    sum += w.claimable.get(&(acc(a), asset.clone())).copied().unwrap_or(0);
+                    if asset.is_some() { near_sum += w.claimable.get(&(acc(a), None)).copied().unwrap_or(0); }
+                }
+                for id in &cells { near_sum += w.cells.get(id).unwrap().near_reserve.0; }
+                if asset.is_none() && near_sum != 0 { e.push(format!("NEAR tree holds a reserve {}", near_sum)); }
                 let mut exp = 0u128;
                 for r in &roots {
                     let Some(t) = w.terms.get(r) else { continue };
@@ -156,6 +187,7 @@ mod fuzz {
                 for k in &credits { let c = w.credits.get(k).unwrap(); if c.status == CreditStatus::Disputed { sum += c.dispute_escrow.0; } }
                 if st.exposure.0 != exp { e.push(format!("exposure {} vs {}", st.exposure.0, exp)); }
                 // 帳簿：已賠 - 已追回 = 所有單還欠保證人的錢；賣方清單有上限
+                for k in &credits { if w.credits.get(k).unwrap().asset != asset { e.push("credit in the wrong asset".into()); } }
                 let owed: u128 = credits.iter().map(|k| w.credits.get(k).unwrap().debt.0).sum();
                 if st.claims_paid.0 < st.recovered.0 || st.claims_paid.0 - st.recovered.0 != owed { e.push(format!("book claims {} recovered {} owed {}", st.claims_paid.0, st.recovered.0, owed)); }
                 if st.sellers.len() > MAX_BOOK_SELLERS { e.push("book sellers over the cap".into()); }
@@ -163,16 +195,25 @@ mod fuzz {
                 for s in ["s1.near", "s2.near"] {
                     let s = acc(s);
                     let want: u128 = credits.iter().map(|k| w.credits.get(k).unwrap()).filter(|c| c.seller == s && matches!(c.status, CreditStatus::Open | CreditStatus::Accepted | CreditStatus::Delivered | CreditStatus::Disputed)).map(|c| c.exposure.0).sum();
-                    let have = w.seller_exposure_of(&g, &s);
+                    let have = w.seller_exposure_of(&g, &asset, &s);
                     if have != want { e.push(format!("seller exposure {} {} vs {}", s, have, want)); }
-                    if want == 0 && w.seller_exposure.contains_key(&(g.clone(), s.clone())) { e.push(format!("empty seller entry {}", s)); }
+                    if want == 0 && w.seller_exposure.contains_key(&(g.clone(), asset.clone(), s.clone())) { e.push(format!("empty seller entry {}", s)); }
                 }
                 if st.amount.0 < st.exposure.0 { e.push("stake<exposure".into()); }
                 for id in &cells {
                     let c = w.cells.get(id).unwrap();
                     if c.root != *id && matches!(c.status, Status::Revoked { .. }) && c.vault.0 > 0 { e.push(format!("closed child holds vault {}", id)); }
                 }
-                if sum != w.vault_total { e.push(format!("vault_total {} vs buckets {}", w.vault_total, sum)); }
+                // 每個資產分開對帳：NEAR 只有準備與可提領，代幣有金庫、質押、押金與可提領
+                if let Some(t) = &asset {
+                    let tt = w.token_total.get(t).copied().unwrap_or(0);
+                    if sum != tt { e.push(format!("token_total {} vs buckets {}", tt, sum)); }
+                    if tbal < tt { e.push(format!("token balance {} < token_total {}", tbal, tt)); }
+                    if near_sum != w.vault_total { e.push(format!("vault_total {} vs NEAR buckets {}", w.vault_total, near_sum)); }
+                    if let Some(x) = cells.iter().map(|id| w.cells.get(id).unwrap()).find(|c| c.asset != asset) { e.push(format!("cell {} in the wrong asset", x.amc_said)); }
+                } else {
+                    if sum != w.vault_total { e.push(format!("vault_total {} vs buckets {}", w.vault_total, sum)); }
+                }
                 if bal < w.vault_total { e.push(format!("balance {} < vault_total {}", bal, w.vault_total)); }
                 std::mem::forget(e.clone());
                 e
@@ -182,6 +223,12 @@ mod fuzz {
             let sur = bal - vt;
             if sur < self.sur { errs.push(format!("surplus fell {} -> {}", self.sur, sur)); }
             self.sur = sur;
+            if let Some(t) = self.token.clone() {
+                let tt = self.peek(|w| w.token_total.get(&t).copied().unwrap_or(0));
+                let tsur = tbal.saturating_sub(tt);
+                if tsur < self.tsur { errs.push(format!("token surplus fell {} -> {}", self.tsur, tsur)); }
+                self.tsur = tsur;
+            }
             if !errs.is_empty() {
                 let tail = self.log[self.log.len().saturating_sub(25)..].join(" | ");
                 panic!("INVARIANT seed={} op={} errs={:?}\ntail: {}", seed, op, errs, tail);
@@ -197,8 +244,11 @@ mod fuzz {
         v
     }
 
-    fn new_world(seed: u64) -> Cx {
-        let mut cx = Cx { snap: HashMap::new(), now: 1_000_000 * NS, bal: 5_000 * 1_000_000_000_000_000_000_000_000u128, rng: seed.wrapping_mul(0x9E3779B97F4A7C15) | 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0, last_err: String::new() };
+    fn new_world(seed: u64) -> Cx { world_in(seed, None) }
+
+    /// 代幣世界：一半的 seed 跑這個。NEAR 準備也是隨機的，準備不足的路徑才走得到。
+    fn world_in(seed: u64, token: Option<AccountId>) -> Cx {
+        let mut cx = Cx { snap: HashMap::new(), now: 1_000_000 * NS, bal: 5_000 * 1_000_000_000_000_000_000_000_000u128, rng: seed.wrapping_mul(0x9E3779B97F4A7C15) | 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0, last_err: String::new(), token: token.clone(), tbal: 0, tsur: 0 };
         cx.up(&writ(), None, 0);
         let w = Contract::new(acc("owner.near"), None, Some(Windows { accept_ttl: U64(100), inspect: U64(50), grace: U64(50), recourse: U64(100), dispute_timeout: U64(200), unstake_delay: U64(30) }));
         env::state_write(&w);
@@ -206,37 +256,46 @@ mod fuzz {
         cx.snap = near_sdk::mock::with_mocked_blockchain(|b| b.take_storage());
         let vaults = [(cx.r(4) as u128 + 1) * UNIT, (cx.r(3) as u128 + 1) * UNIT, 10 * UNIT];
         let stake = (cx.r(25) as u128 + 6) * UNIT;
-        let bps = [0u32, 2000, 5000, 10000][cx.r(4) as usize];
+        let bps = [0u32, 0, 2000, 5000][cx.r(4) as usize];
         let payer = if cx.r(2) == 0 { FeePayer::Buyer } else { FeePayer::Seller };
-        let cap = [0u32, 500, 3000, 8000][cx.r(4) as usize];
+        let cap = [0u32, 0, 3000, 8000][cx.r(4) as usize];
         let now = cx.now;
         let mut roots = vec![];
+        let reserve_near: u128 = if token.is_some() { (cx.r(40) as u128 + 1) * CREDIT_STORAGE + cx.r(3) as u128 * hire_fee(1) } else { 0 };
         for i in 0..3u8 {
             let p = pk(i);
             let ch = { cx.up(&writ(), None, 0); make_chain(40, seed + i as u64) };
             let w0 = ch[0].clone();
             let v = vaults[i as usize];
             let p2 = p.clone();
+            let tk = token.clone();
             let id = cx.run("init", &writ(), None, 0, |w| {
                 let id = w.next_id; w.next_id += 1;
                 w.cells.insert(id, Cell { amc_said: format!("E{}", id), issuer_aid: "A".into(), issuer_pk: "00".repeat(32), agent_pk: p2.clone(), verifier: acc("g.near"), funder: acc("funder.near"),
                     lei_commit: "00".repeat(32), ecr_commit: "00".repeat(32), scope: vec![acc("s1.near"), acc("s2.near")], valid_until: U64(now + 20000 * NS), unit: U128(UNIT), n: 40, idx: 0, w_cur: w0.clone(),
-                    daily_links: 1000, max_links: 5, max_strikes: 8, day: now / NS_PER_DAY, day_used: 0, vault: U128(v), unclaimed: U128(0), spends: 0, rejects: 0, strikes: 0, status: Status::Active, asset: None, root: id, parent: None, depth: 0, children: vec![], tree_size: 1 });
+                    daily_links: 1000, max_links: 5, max_strikes: 8, day: now / NS_PER_DAY, day_used: 0, vault: U128(v), unclaimed: U128(0), spends: 0, rejects: 0, strikes: 0, status: Status::Active, asset: tk.clone(), root: id, parent: None, depth: 0, children: vec![], tree_size: 1, near_reserve: U128(if i < 2 { reserve_near } else { 0 }) });
                 w.key_to_cell.insert(p2.clone(), id);
                 w.used_keys.insert(p2.clone());
-                w.vault_total += v;
+                w.add_total(&tk, v);
+                if i < 2 { w.vault_total += reserve_near; }
+                if tk.is_some() { w.stakes.insert((acc("g.near"), tk.clone()), Stake::default()); }
                 if i < 2 {
-                    w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(20 * UNIT), bond_bps: bps, premium_bps: 150, min_tenor: U64(10), max_tenor: U64(1000), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: format!("t{}", i), arbiter: acc("arb.near"), fee_payer: payer, seller_cap_bps: cap }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
+                    w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(20 * UNIT), bond_bps: bps, premium_bps: 150, min_tenor: U64(10), max_tenor: U64(1000), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: format!("t{}", i), arbiter: acc("arb.near"), fee_payer: payer, seller_cap_bps: cap, asset: tk.clone() }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
                 }
                 id
             }).unwrap();
+            if token.is_some() { cx.tbal += v; }
             cx.cells.push(CellH { id, pk: p, links: ch });
             roots.push(id);
             cx.nextpk += 1;
         }
         cx.roots = roots;
         cx.run("init2", &writ(), None, 0, |w| { w.verifiers.insert(acc("g.near"), "00".repeat(32)); });
-        if stake > 0 { cx.bal += 0; cx.run("stake", &acc("g.near"), None, stake, |w| w.stake()); }
+        if token.is_some() {
+            assert!(cx.ft("stake", &acc("g.near"), stake, "stake".into()));
+        } else {
+            cx.run("stake", &acc("g.near"), None, stake, |w| w.stake());
+        }
         cx
     }
 
@@ -301,6 +360,7 @@ mod fuzz {
                 let said = cx.peek(|w| w.check_order(k, None));
                 let got = cx.run("accept", &s, None, 0, |w| w.accept_credit(k)).is_some();
                 if said.ok != got { panic!("INVARIANT check_order ok={} but accept={} reasons={:?}", said.ok, got, said.reasons); }
+                if let Some(r) = said.reasons.first() { let r = format!("ACCEPT:{}", r); cx.hit(&r); }
                 "accept".into()
             }
             9 | 10 => { let Some(c) = &info else { return "skip".into() }; let s = c.seller.clone(); let k = c.id; let f = match cx.r(5) { 0 => Some(U128((c.amount.0 / 2).max(1))), 1 => Some(U128(c.amount.0 - 1)), 2 => Some(U128(c.amount.0 + 1)), _ => None }; cx.run("deliver", &s, None, 0, |w| w.mark_delivered(k, "ab".repeat(32), f)); "deliver".into() }
@@ -315,36 +375,44 @@ mod fuzz {
             12 => {
                 let Some(c) = &info else { return "skip".into() }; let k = c.id;
                 let d = match cx.r(3) { 0 => 0, 1 => c.amount.0, _ => c.amount.0 + 7 };
-                cx.run("settle_by_funder", &funder, None, d, |w| w.settle_by_funder(k)); "settle_by_funder".into()
+                if cx.token.is_some() && d > 0 {
+                    // 代幣樹用 NEAR 付一定被擋：1 NEAR 不能當成一大筆代幣
+                    if cx.run("near_on_token", &funder, None, d, |w| w.settle_by_funder(k)).is_some() { panic!("INVARIANT NEAR paid a token order"); }
+                    cx.ft("settle_by_funder", &funder, d, format!("settle:{}", k.0));
+                } else {
+                    cx.run("settle_by_funder", &funder, None, d, |w| w.settle_by_funder(k));
+                }
+                "settle_by_funder".into()
             }
-            13 => { let Some(c) = &info else { return "skip".into() }; let k = c.id; let d = if cx.r(2) == 0 { c.amount.0 } else { c.amount.0 + 3 }; cx.run("dispute", &funder, None, d, |w| w.dispute(k, "cd".repeat(32))); "dispute".into() }
+            13 => { let Some(c) = &info else { return "skip".into() }; let k = c.id; let d = if cx.r(2) == 0 { c.amount.0 } else { c.amount.0 + 3 }; if cx.token.is_some() { cx.ft("dispute", &funder, d, format!("dispute:{}:{}", k.0, "cd".repeat(32))); } else { cx.run("dispute", &funder, None, d, |w| w.dispute(k, "cd".repeat(32))); } "dispute".into() }
             14 => { let Some(c) = &info else { return "skip".into() }; let k = c.id; let b = cx.r(2) == 0; cx.run("resolve", &arb, None, 0, |w| w.resolve_dispute(k, b)); "resolve".into() }
             15 => { let Some(c) = &info else { return "skip".into() }; let k = c.id; cx.run("resolve_timeout", &g, None, 0, |w| w.resolve_timeout(k)); "resolve_timeout".into() }
             16 | 17 => { let Some(c) = &info else { return "skip".into() }; let k = c.id; let who = if cx.r(4) == 0 { g.clone() } else { c.seller.clone() }; cx.run("claim_default", &who, None, 0, |w| w.claim_default(k)); "claim_default".into() }
-            18 => { let Some(c) = &info else { return "skip".into() }; let k = c.id; let d = match cx.r(3) { 0 => 0, 1 => c.debt.0, _ => c.debt.0 + 5 }; cx.run("reimburse", &funder, None, d, |w| w.reimburse(k)); "reimburse".into() }
+            18 => { let Some(c) = &info else { return "skip".into() }; let k = c.id; let d = match cx.r(3) { 0 => 0, 1 => c.debt.0, _ => c.debt.0 + 5 }; if cx.token.is_some() && d > 0 { cx.ft("reimburse", &funder, d, format!("reimburse:{}", k.0)); } else { cx.run("reimburse", &funder, None, d, |w| w.reimburse(k)); } "reimburse".into() }
             19 => { let Some(c) = &info else { return "skip".into() }; let k = c.id; cx.run("enforce", &g, None, 0, |w| w.enforce_recourse(k)); "enforce".into() }
             20 => { let Some(c) = &info else { return "skip".into() }; let k = c.id; let who = [funder.clone(), g.clone(), c.seller.clone()][cx.r(3) as usize].clone(); cx.run("cancel", &who, None, 0, |w| w.cancel_open(k)); "cancel".into() }
-            21 => { let who = [acc("s1.near"), acc("s2.near"), funder.clone(), g.clone()][cx.r(4) as usize].clone(); cx.run("withdraw", &who, None, 0, |w| { let _ = w.withdraw(); }); "withdraw".into() }
+            21 => { let who = [acc("s1.near"), acc("s2.near"), funder.clone(), g.clone()][cx.r(4) as usize].clone(); let a = if cx.r(2) == 0 { cx.token.clone() } else { None }; cx.run("withdraw", &who, None, 0, |w| { let _ = w.withdraw(a); }); "withdraw".into() }
             22 => {
                 match cx.r(10) {
                     8 => {
-                        let s = [acc("s1.near"), acc("s2.near")][cx.r(2) as usize].clone();
-                        let p = if cx.r(4) == 0 { None } else { Some(SellerPolicy { max_amount: U128((cx.r(6) as u128 + 1) * UNIT), max_tenor_secs: U64(cx.r(400) + 10), min_bond_bps: [0u32, 2000, 5000][cx.r(3) as usize], max_defaults: cx.r(3) as u32, guarantors: if cx.r(3) == 0 { vec![acc("other.near")] } else { vec![] } }) };
+                        // 規則只設在 s2：s1 一直沒有規則，才走得到後面的路徑
+                        let s = acc("s2.near");
+                        let p = if cx.r(4) == 0 { None } else { Some(SellerPolicy { max_amount: U128((cx.r(6) as u128 + 1) * UNIT), max_tenor_secs: U64(cx.r(400) + 10), min_bond_bps: [0u32, 0, 2000][cx.r(3) as usize], max_defaults: cx.r(3) as u32, guarantors: if cx.r(6) == 0 { vec![acc("other.near")] } else { vec![] } }) };
                         let d = SELLER_POLICY_STORAGE + cx.r(2) as u128 * 5;
                         cx.run("set_policy", &s, None, d, |w| w.set_seller_policy(p));
                         "set_policy".to_string()
                     }
                     0 => { cx.run("revoke", &funder, None, 0, |w| w.revoke(U64(cid), "manual".into())); "revoke".to_string() }
                     1 => { cx.run("claim_refund", &funder, None, 0, |w| w.claim_refund(U64(cid))); "claim_refund".to_string() }
-                    2 => { let d = UNIT; cx.run("top_up", &funder, None, d, |w| w.top_up(U64(cid))); "top_up".to_string() }
+                    2 => { let d = UNIT; if cx.token.is_some() && cx.r(2) == 0 { cx.ft("fund", &funder, d, format!("fund:{}", cid)); } else { cx.run("top_up", &funder, None, d, |w| w.top_up(U64(cid))); } "top_up".to_string() }
                     3 => { let d = DEFAULT_ALLOWANCE.as_yoctonear(); cx.run("reinstate", &funder, None, d, |w| w.reinstate(U64(cid))); "reinstate".to_string() }
-                    4 => { let a = UNIT; cx.run("stake", &g, None, a, |w| w.stake()); "stake".to_string() }
-                    5 | 6 | 7 => { if cx.r(2) == 0 { cx.run("req_unstake", &g, None, 0, |w| w.request_unstake()); } else { let a = UNIT; cx.run("withdraw_stake", &g, None, 0, |w| { let _ = w.withdraw_stake(U128(a)); }); } "unstake".to_string() }
+                    4 => { let a = UNIT; if cx.token.is_some() { cx.ft("stake", &g, a, "stake".into()); } else { cx.run("stake", &g, None, a, |w| w.stake()); } "stake".to_string() }
+                    5 | 6 | 7 => { let t = cx.token.clone(); if cx.r(2) == 0 { cx.run("req_unstake", &g, None, 0, |w| w.request_unstake(t)); } else { let a = UNIT; cx.run("withdraw_stake", &g, None, 0, |w| { let _ = w.withdraw_stake(U128(a), t); }); } "unstake".to_string() }
                     _ => { let fail = cx.r(4) == 0; cx.resolve(fail); "cb".to_string() }
                 }
             }
             23 | 24 => { let fail = cx.r(4) == 0; cx.resolve(fail); "cb".into() }
-            _ => { let dt = cx.r(150) + 1; cx.now += dt * NS; "time".into() }
+            _ => { let dt = if cx.r(4) == 0 { cx.r(150) + 1 } else { cx.r(20) + 1 }; cx.now += dt * NS; "time".into() }
         };
         let _ = rootid;
         // 性質：欠保證人時，這棵樹的金庫只能因為償債／違約賠付而減少
@@ -386,7 +454,11 @@ mod fuzz {
             let c = cx.peek(|w| w.credits.get(&k).cloned().unwrap());
             if c.debt.0 > 0 {
                 let d = c.debt.0;
-                cx.run("reimburse", &acc("funder.near"), None, d, |w| w.reimburse(U64(k))).unwrap_or_else(|| panic!("stuck reimburse seed {}", seed));
+                if cx.token.is_some() {
+                    assert!(cx.ft("reimburse", &acc("funder.near"), d, format!("reimburse:{}", k)), "stuck reimburse seed {}", seed);
+                } else {
+                    cx.run("reimburse", &acc("funder.near"), None, d, |w| w.reimburse(U64(k))).unwrap_or_else(|| panic!("stuck reimburse seed {}", seed));
+                }
             }
             cx.check(seed, "drain2");
         }
@@ -395,15 +467,26 @@ mod fuzz {
         for id in cx.cells.iter().map(|c| c.id).collect::<Vec<_>>() {
             cx.run("claim_refund", &acc("funder.near"), None, 0, |w| w.claim_refund(U64(id)));
         }
-        for a in ["s1.near", "s2.near", "funder.near", "g.near"] { cx.run("withdraw", &acc(a), None, 0, |w| { let _ = w.withdraw(); }); }
-        cx.run("req_unstake", &acc("g.near"), None, 0, |w| w.request_unstake());
+        let t = cx.token.clone();
+        for a in ["s1.near", "s2.near", "funder.near", "g.near"] {
+            cx.run("withdraw", &acc(a), None, 0, |w| { let _ = w.withdraw(None); });
+            if t.is_some() { let t2 = t.clone(); cx.run("withdraw", &acc(a), None, 0, |w| { let _ = w.withdraw(t2); }); }
+        }
+        let t2 = t.clone();
+        cx.run("req_unstake", &acc("g.near"), None, 0, |w| w.request_unstake(t2));
         cx.now += 100 * NS;
-        let amt = cx.peek(|w| w.stakes.get(&acc("g.near")).map(|s| s.amount.0).unwrap_or(0));
-        if amt > 0 { cx.run("withdraw_stake", &acc("g.near"), None, 0, |w| { let _ = w.withdraw_stake(U128(amt)); }).unwrap_or_else(|| panic!("stuck stake seed {}", seed)); }
+        let t2 = t.clone();
+        let amt = cx.peek(|w| w.stakes.get(&(acc("g.near"), t2)).map(|s| s.amount.0).unwrap_or(0));
+        let t2 = t.clone();
+        if amt > 0 { cx.run("withdraw_stake", &acc("g.near"), None, 0, |w| { let _ = w.withdraw_stake(U128(amt), t2); }).unwrap_or_else(|| panic!("stuck stake seed {}", seed)); }
         while !cx.pending.is_empty() { cx.resolve(false); }
         cx.check(seed, "drain4");
         let vt = cx.peek(|w| w.vault_total);
         assert_eq!(vt, 0, "money stuck after drain, seed {}", seed);
+        if let Some(t) = &t {
+            let tt = cx.peek(|w| w.token_total.get(t).copied().unwrap_or(0));
+            assert_eq!(tt, 0, "token stuck after drain, seed {}", seed);
+        }
     }
 
 
@@ -426,7 +509,7 @@ mod fuzz {
                 let mut seed = t + 1;
                 while seed <= seeds {
                     let r = catch_unwind(AssertUnwindSafe(|| {
-                        let mut cx = new_world(seed);
+                        let mut cx = if seed % 2 == 0 { world_in(seed, Some(acc("usdc.near"))) } else { new_world(seed) };
                         for _ in 0..steps {
                             let op = step(&mut cx, seed);
                             cx.check(seed, &op);

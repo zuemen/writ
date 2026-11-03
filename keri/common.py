@@ -99,6 +99,7 @@ AMC = _schema(
         "premiumBps": {"type": "integer"},
         "feePayer": {"type": "string"},
         "sellerCapBps": {"type": "integer"},
+        "creditAsset": {"type": "string"},
         "minTenorSecs": {"type": "integer"},
         "maxTenorSecs": {"type": "integer"},
         "termsHash": {"type": "string"},

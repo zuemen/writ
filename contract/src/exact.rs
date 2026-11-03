@@ -14,7 +14,7 @@ mod exact {
     }
 
     fn world(o: Opt) -> (Cx, u64) {
-        let mut cx = Cx { snap: HashMap::new(), now: T0, bal: 5_000_000 * 1_000_000_000_000_000_000_000_000u128, rng: 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0, last_err: String::new() };
+        let mut cx = Cx { snap: HashMap::new(), now: T0, bal: 5_000_000 * 1_000_000_000_000_000_000_000_000u128, rng: 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0, last_err: String::new(), token: None, tbal: 0, tsur: 0 };
         cx.up(&writ(), None, 0);
         let w = Contract::new(acc("owner.near"), None, Some(Windows { accept_ttl: U64(100), inspect: U64(50), grace: U64(50), recourse: U64(100), dispute_timeout: U64(200), unstake_delay: U64(30) }));
         env::state_write(&w);
@@ -28,11 +28,11 @@ mod exact {
             let id = w.next_id; w.next_id += 1;
             w.cells.insert(id, Cell { amc_said: format!("E{}", id), issuer_aid: "A".into(), issuer_pk: "00".repeat(32), agent_pk: p2.clone(), verifier: acc("g.near"), funder: acc("funder.near"),
                 lei_commit: "00".repeat(32), ecr_commit: "00".repeat(32), scope: o.scope.clone(), valid_until: U64(VALID), unit: U128(U), n: o.n, idx: 0, w_cur: w0.clone(),
-                daily_links: o.daily, max_links: o.maxl, max_strikes: 100, day: T0 / NS_PER_DAY, day_used: 0, vault: U128(o.vault), unclaimed: U128(0), spends: 0, rejects: 0, strikes: 0, status: Status::Active, asset: None, root: id, parent: None, depth: 0, children: vec![], tree_size: 1 });
+                daily_links: o.daily, max_links: o.maxl, max_strikes: 100, day: T0 / NS_PER_DAY, day_used: 0, vault: U128(o.vault), unclaimed: U128(0), spends: 0, rejects: 0, strikes: 0, status: Status::Active, asset: None, root: id, parent: None, depth: 0, children: vec![], tree_size: 1, near_reserve: U128(0) });
             w.key_to_cell.insert(p2.clone(), id);
             w.used_keys.insert(p2.clone());
             w.vault_total += o.vault;
-            w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(o.limit), bond_bps: o.bond, premium_bps: o.premium, min_tenor: U64(10), max_tenor: U64(o.max_tenor), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: "t".into(), arbiter: acc("arb.near"), fee_payer: o.payer, seller_cap_bps: o.cap }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
+            w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(o.limit), bond_bps: o.bond, premium_bps: o.premium, min_tenor: U64(10), max_tenor: U64(o.max_tenor), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: "t".into(), arbiter: acc("arb.near"), fee_payer: o.payer, seller_cap_bps: o.cap, asset: None }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
             id
         }).unwrap();
         cx.cells.push(CellH { id, pk: p, links: ch });
@@ -45,8 +45,8 @@ mod exact {
     fn cell(cx: &Cx, id: u64) -> Cell { cx.peek(|w| w.cells.get(&id).cloned().unwrap()) }
     fn cred(cx: &Cx, k: u64) -> Credit { cx.peek(|w| w.credits.get(&k).cloned().unwrap()) }
     fn outstanding(cx: &Cx, r: u64) -> (u128, u128, u32) { cx.peek(|w| { let t = w.terms.get(&r).unwrap(); (t.outstanding.0, t.bond_locked.0, t.open_debts) }) }
-    fn stake(cx: &Cx) -> Stake { cx.peek(|w| w.stakes.get(&acc("g.near")).cloned().unwrap_or_default()) }
-    fn claim(cx: &Cx, a: &str) -> Option<u128> { let a = acc(a); cx.peek(|w| w.claimable.get(&a).copied()) }
+    fn stake(cx: &Cx) -> Stake { cx.peek(|w| w.stake_get(&acc("g.near"), &None)) }
+    fn claim(cx: &Cx, a: &str) -> Option<u128> { let a = acc(a); cx.peek(|w| w.claimable.get(&(a, None)).copied()) }
     fn total(cx: &Cx) -> u128 { cx.peek(|w| w.vault_total) }
     fn why(v: &Verdict) -> String { if let Verdict::Rejected { reason, .. } = v { reason.clone() } else { String::new() } }
     fn set_vault(cx: &mut Cx, id: u64, v: u128) {
@@ -232,7 +232,7 @@ mod exact {
     #[test]
     fn unstake_time_is_exact() {
         let (mut cx, _) = world(opt());
-        cx.run("req", &acc("g.near"), None, 0, |w| w.request_unstake()).unwrap();
+        cx.run("req", &acc("g.near"), None, 0, |w| w.request_unstake(None)).unwrap();
         assert_eq!(stake(&cx).unstake_at.0, T0 + 30 * NS);
     }
 
@@ -676,7 +676,7 @@ mod exact {
         assert!(!c.ok);
         assert_eq!(c.reasons, vec!["ORDER_TOO_LARGE", "TENOR_TOO_LONG", "BOND_TOO_LOW", "TOO_MANY_DEFAULTS", "GUARANTOR_NOT_APPROVED", "BOND_SHORT"]);
         assert_eq!(c.order["bond"], json_str(3 * U));
-        assert_eq!(c.order["guarantor_exposure"], json_str(0));
+        assert_eq!(c.order["exposure"], json_str(0));
         assert_eq!(c.order["policy_applied"], true);
         // 傳入的規則只是問問：沒有存，accept 不看它
         assert!(cx.peek(|w| w.policies.get(&acc("s1.near")).is_none()));
@@ -713,7 +713,7 @@ mod exact {
 
     fn json_str(v: u128) -> Value { Value::String(v.to_string()) }
 
-    fn to_seller(cx: &Cx, s: &str) -> u128 { let s = acc(s); cx.peek(|w| w.seller_exposure_of(&acc("g.near"), &s)) }
+    fn to_seller(cx: &Cx, s: &str) -> u128 { let s = acc(s); cx.peek(|w| w.seller_exposure_of(&acc("g.near"), &None, &s)) }
     fn open_to(cx: &mut Cx, id: u64, j: u32, seller: &str) -> u64 {
         cx.nextinv += 1;
         let (p, k, inv, due, s) = (link(cx, id, j), key(cx, id), hex::encode(env_hash(cx.nextinv)), cx.now + 500 * NS, acc(seller));
@@ -754,7 +754,7 @@ mod exact {
         let k = open_to(&mut cx, r, 5, "s1.near");
         accept(&mut cx, k);
         assert_eq!(to_seller(&cx, "s1.near"), 0);
-        assert!(cx.peek(|w| !w.seller_exposure.contains_key(&(acc("g.near"), acc("s1.near")))), "no entry for zero");
+        assert!(cx.peek(|w| !w.seller_exposure.contains_key(&(acc("g.near"), None, acc("s1.near")))), "no entry for zero");
     }
 
     #[test]
@@ -771,7 +771,7 @@ mod exact {
         cx.now = cred(&cx, k).due_at.0 + 51 * NS;
         cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(k))).unwrap();
         assert_eq!(to_seller(&cx, "s1.near"), 0);
-        assert!(cx.peek(|w| !w.seller_exposure.contains_key(&(acc("g.near"), acc("s1.near")))));
+        assert!(cx.peek(|w| !w.seller_exposure.contains_key(&(acc("g.near"), None, acc("s1.near")))));
         // 接受了沒交貨，過期取消
         let (mut cx, r) = world(opt());
         let k = opened(open(&mut cx, r, 2));
@@ -789,11 +789,11 @@ mod exact {
         assert_eq!(to_seller(&cx, "s1.near"), 0);
     }
 
-    fn book(cx: &Cx) -> Value { cx.peek(|w| w.guarantor_book(acc("g.near"))).unwrap() }
+    fn book(cx: &Cx) -> Value { cx.peek(|w| w.guarantor_book(acc("g.near"), None)).unwrap() }
 
     #[test]
     fn the_book_adds_up_through_a_default_and_a_repayment() {
-        assert!({ let (cx, _) = world({ let mut o = opt(); o.stake = 0; o }); cx.peek(|w| w.guarantor_book(acc("g.near"))).is_none() }, "no stake, no book");
+        assert!({ let (cx, _) = world({ let mut o = opt(); o.stake = 0; o }); cx.peek(|w| w.guarantor_book(acc("g.near"), None)).is_none() }, "no stake, no book");
         let mut o = opt(); o.vault = U; o.premium = 1000;
         let (mut cx, r) = world(o);
         let b0 = book(&cx);
@@ -842,32 +842,317 @@ mod exact {
         let out = cx.run("book", &writ(), None, 0, move |w| {
             let mut st = Stake::default();
             for (i, s) in n2.iter().enumerate() {
-                w.add_seller_exposure(&g2, s, i as u128 + 2);
-                w.note_seller(&mut st, &g2, s);
+                w.add_seller_exposure(&g2, &None, s, i as u128 + 2);
+                w.note_seller(&mut st, &g2, &None, s);
             }
-            w.note_seller(&mut st, &g2, &n2[0]);
+            w.note_seller(&mut st, &g2, &None, &n2[0]);
             assert_eq!(st.sellers.len(), MAX_BOOK_SELLERS, "no duplicate");
             // 比最小的（2）還小：不換
-            w.add_seller_exposure(&g2, &acc("tiny.near"), 1);
-            w.note_seller(&mut st, &g2, &acc("tiny.near"));
+            w.add_seller_exposure(&g2, &None, &acc("tiny.near"), 1);
+            w.note_seller(&mut st, &g2, &None, &acc("tiny.near"));
             assert!(!st.sellers.contains(&acc("tiny.near")));
             // 一樣大也不換
-            w.add_seller_exposure(&g2, &acc("same.near"), 2);
-            w.note_seller(&mut st, &g2, &acc("same.near"));
+            w.add_seller_exposure(&g2, &None, &acc("same.near"), 2);
+            w.note_seller(&mut st, &g2, &None, &acc("same.near"));
             assert!(!st.sellers.contains(&acc("same.near")));
             // 比最小的大：換掉最小的
-            w.add_seller_exposure(&g2, &acc("big.near"), 100);
-            w.note_seller(&mut st, &g2, &acc("big.near"));
+            w.add_seller_exposure(&g2, &None, &acc("big.near"), 100);
+            w.note_seller(&mut st, &g2, &None, &acc("big.near"));
             assert_eq!(st.sellers.len(), MAX_BOOK_SELLERS);
             assert_eq!(st.sellers[0], acc("big.near"));
             st.amount = U128(1000);
-            w.stakes.insert(g2.clone(), st);
+            w.stakes.insert((g2.clone(), None), st);
         });
         assert!(out.is_some(), "{}", cx.last_err);
         let b = book(&cx);
         assert_eq!(b["top_sellers"].as_array().unwrap().len(), 5, "only the top five");
         assert_eq!(b["top_sellers"][0]["seller"], "big.near");
         assert_eq!(b["top_sellers"][1]["exposure"], json_str(MAX_BOOK_SELLERS as u128 + 1), "largest first");
+    }
+
+    // ---------------- 代幣樹：每條錢路用代幣再核一次 ----------------
+
+    const R: u128 = 100 * CREDIT_STORAGE; // 測試用的 NEAR 準備
+
+    /// 代幣世界：金庫 vault、質押 10U 都是代幣，帶 R 的 NEAR 準備。
+    fn tworld(mut o: Opt) -> (Cx, u64, Option<AccountId>) {
+        o.stake = 0;
+        let v = o.vault;
+        o.vault = 0;
+        let (mut cx, r) = world(o);
+        let t = Some(acc("usdc.near"));
+        cx.token = t.clone();
+        let t2 = t.clone();
+        cx.run("to_token", &writ(), None, 0, |w| {
+            let mut c = w.cells.get(&r).cloned().unwrap();
+            c.asset = t2.clone();
+            c.near_reserve = U128(R);
+            w.cells.insert(r, c);
+            w.vault_total += R;
+            let mut tm = w.terms.get(&r).cloned().unwrap();
+            tm.args.asset = t2.clone();
+            w.terms.insert(r, tm);
+            w.stakes.insert((acc("g.near"), t2.clone()), Stake::default());
+        }).unwrap();
+        assert!(cx.ft("fund", &acc("funder.near"), v, format!("fund:{}", r)));
+        assert!(cx.ft("stake", &acc("g.near"), 10 * U, "stake".into()));
+        (cx, r, t)
+    }
+    fn tok() -> AccountId { acc("usdc.near") }
+    fn ttotal(cx: &Cx) -> u128 { cx.peek(|w| w.token_total(tok()).0) }
+    fn tstake(cx: &Cx) -> Stake { cx.peek(|w| w.stake_get(&acc("g.near"), &Some(tok()))) }
+    fn tclaim(cx: &Cx, a: &str) -> u128 { let a = acc(a); cx.peek(|w| w.claimable_of(a, Some(tok())).0) }
+    fn near_claim(cx: &Cx, a: &str) -> u128 { let a = acc(a); cx.peek(|w| w.claimable_of(a, None).0) }
+    fn ft_err(cx: &mut Cx, from: &str, amount: u128, msg: String, code: &str) {
+        assert!(!cx.ft("ft", &acc(from), amount, msg), "must refuse with {}", code);
+        assert!(cx.last_err.contains(code), "{} vs {}", cx.last_err, code);
+    }
+
+    #[test]
+    fn a_token_order_pays_storage_from_the_near_reserve_and_money_in_the_token() {
+        let mut o = opt(); o.premium = 500; o.bond = 2500;
+        let (mut cx, r, _) = tworld(o);
+        let (v0, t0, near0) = (cell(&cx, r).vault.0, ttotal(&cx), total(&cx));
+        assert_eq!(t0, 100 * U + 10 * U);
+        let k = opened(open(&mut cx, r, 4));
+        let c = cell(&cx, r);
+        assert_eq!((c.vault.0, c.near_reserve.0), (v0, R - S), "storage comes out of the NEAR reserve");
+        assert_eq!((total(&cx), ttotal(&cx)), (near0 - S, t0));
+        assert_eq!(cred(&cx, k).asset, Some(tok()));
+        accept(&mut cx, k);
+        let fee = 4 * U / 20;
+        assert_eq!(cell(&cx, r).vault.0, v0 - fee, "the buyer's fee is in the token");
+        assert_eq!((tstake(&cx).amount.0, tstake(&cx).earned.0, tstake(&cx).exposure.0), (10 * U + fee, fee, 3 * U));
+        assert_eq!(stake(&cx).amount.0, 0, "the NEAR stake is another book");
+        assert_eq!(ttotal(&cx), t0);
+        assert!(settle(&mut cx, r, k));
+        assert_eq!(tclaim(&cx, "s1.near"), 4 * U);
+        assert_eq!(claim(&cx, "s1.near"), None, "nothing in NEAR");
+        assert_eq!(ttotal(&cx), t0);
+        // 提領走 ft_transfer，帳上少了就是錢出去了
+        cx.run("w", &acc("s1.near"), None, 0, |w| { let _ = w.withdraw(Some(tok())); }).unwrap();
+        assert_eq!((tclaim(&cx, "s1.near"), ttotal(&cx)), (0, t0 - 4 * U));
+        cx.resolve(false);
+        assert_eq!((tclaim(&cx, "s1.near"), ttotal(&cx)), (0, t0 - 4 * U));
+    }
+
+    #[test]
+    fn a_failed_token_withdrawal_is_credited_back_once() {
+        let (mut cx, r, _) = tworld(opt());
+        let k = opened(open(&mut cx, r, 2));
+        accept(&mut cx, k);
+        assert!(settle(&mut cx, r, k));
+        let (t, bal) = (ttotal(&cx), cx.tbal);
+        cx.run("w", &acc("s1.near"), None, 0, |w| { let _ = w.withdraw(Some(tok())); }).unwrap();
+        assert_eq!((ttotal(&cx), cx.tbal), (t - 2 * U, bal - 2 * U));
+        cx.run("w2", &acc("s1.near"), None, 0, |w| { let _ = w.withdraw(Some(tok())); });
+        assert!(cx.last_err.contains("NOTHING_TO_WITHDRAW"), "cannot withdraw twice while it is in flight");
+        cx.resolve(true);
+        assert_eq!((tclaim(&cx, "s1.near"), ttotal(&cx), cx.tbal), (2 * U, t, bal));
+        assert_eq!(claim(&cx, "s1.near"), None, "credited in the same asset");
+        // 質押提領失敗也一樣，記進可提領
+        cx.run("r", &acc("g.near"), None, 0, |w| w.request_unstake(Some(tok()))).unwrap();
+        cx.now += 31 * NS;
+        let (t, st) = (ttotal(&cx), tstake(&cx).amount.0);
+        cx.run("ws", &acc("g.near"), None, 0, |w| { let _ = w.withdraw_stake(U128(U), Some(tok())); }).unwrap();
+        assert_eq!((tstake(&cx).amount.0, ttotal(&cx)), (st - U, t - U));
+        cx.resolve(true);
+        assert_eq!((tclaim(&cx, "g.near"), ttotal(&cx)), (U, t));
+    }
+
+    #[test]
+    fn near_cannot_pay_a_token_order_and_a_token_cannot_pay_a_near_order() {
+        let (mut cx, r, _) = tworld(opt());
+        let k = opened(open(&mut cx, r, 2));
+        accept(&mut cx, k);
+        // 2U 的 yoctoNEAR 在數字上等於 2U 的代幣，一定要擋
+        assert!(cx.run("x", &acc("funder.near"), None, 2 * U, |w| w.settle_by_funder(U64(k))).is_none());
+        assert!(cx.last_err.contains("USE_FT_TRANSFER_CALL"), "{}", cx.last_err);
+        assert!(cx.run("x", &acc("funder.near"), None, 2 * U, |w| w.dispute(U64(k), "cd".repeat(32))).is_none());
+        assert!(cx.last_err.contains("USE_FT_TRANSFER_CALL"), "{}", cx.last_err);
+        // 別的代幣假冒
+        cx.token = Some(acc("fake.near"));
+        ft_err(&mut cx, "funder.near", 2 * U, format!("settle:{}", k), "WRONG_ASSET");
+        ft_err(&mut cx, "funder.near", 2 * U, format!("dispute:{}:{}", k, "cd".repeat(32)), "WRONG_ASSET");
+        // 假代幣開不了質押帳：不能白占儲存
+        ft_err(&mut cx, "g.near", U, "stake".into(), "STAKE_ASSET_UNKNOWN");
+        assert!(cx.peek(|w| w.stakes.get(&(acc("g.near"), Some(acc("fake.near")))).is_none()));
+        // 非驗證者
+        cx.token = Some(tok());
+        ft_err(&mut cx, "x.near", U, "stake".into(), "NOT_A_VERIFIER");
+        // 陌生人、錯金額
+        ft_err(&mut cx, "x.near", 2 * U, format!("settle:{}", k), "ONLY_FUNDER");
+        ft_err(&mut cx, "funder.near", U, format!("settle:{}", k), "PARTIAL_DEPOSIT");
+        ft_err(&mut cx, "funder.near", U, format!("dispute:{}:{}", k, "cd".repeat(32)), "ESCROW_FULL_AMOUNT");
+        ft_err(&mut cx, "funder.near", U, "settle:notanumber".into(), "BAD_MSG");
+        ft_err(&mut cx, "funder.near", U, format!("dispute:{}", k), "BAD_MSG");
+        // 看不懂的 msg 全退，不 panic
+        let (t, bal) = (ttotal(&cx), cx.tbal);
+        assert!(cx.ft("ft", &acc("funder.near"), U, "hello".into()));
+        assert_eq!((ttotal(&cx), cx.tbal), (t, bal));
+        // NEAR 樹不收代幣
+        let (mut cx, r) = world(opt());
+        let k = opened(open(&mut cx, r, 2));
+        accept(&mut cx, k);
+        cx.token = Some(tok());
+        ft_err(&mut cx, "funder.near", 2 * U, format!("settle:{}", k), "WRONG_ASSET");
+        ft_err(&mut cx, "funder.near", 2 * U, format!("reimburse:{}", k), "WRONG_ASSET");
+    }
+
+    #[test]
+    fn token_excess_comes_back_as_claimable_in_every_payable_path() {
+        // 結清
+        let (mut cx, r, _) = tworld(opt());
+        let k = opened(open(&mut cx, r, 2));
+        accept(&mut cx, k);
+        let t = ttotal(&cx);
+        assert!(cx.ft("s", &acc("funder.near"), 2 * U + 7, format!("settle:{}", k)));
+        assert_eq!((tclaim(&cx, "funder.near"), tclaim(&cx, "s1.near"), ttotal(&cx)), (7, 2 * U, t + 2 * U + 7));
+        // 爭議押金多的，判決後退
+        let (mut cx, r, _) = tworld(opt());
+        let k = opened(open(&mut cx, r, 2));
+        accept(&mut cx, k);
+        assert!(cx.ft("d", &acc("funder.near"), 2 * U + 3, format!("dispute:{}:{}", k, "cd".repeat(32))));
+        assert_eq!(cred(&cx, k).dispute_escrow.0, 2 * U + 3);
+        cx.run("r", &acc("arb.near"), None, 0, |w| w.resolve_dispute(U64(k), true)).unwrap();
+        assert_eq!((tclaim(&cx, "funder.near"), tclaim(&cx, "s1.near")), (3, 2 * U));
+        // 判公司勝：押金全退給公司
+        let (mut cx, r, _) = tworld(opt());
+        let k = opened(open(&mut cx, r, 2));
+        accept(&mut cx, k);
+        assert!(cx.ft("d", &acc("funder.near"), 2 * U, format!("dispute:{}:{}", k, "cd".repeat(32))));
+        cx.run("r", &acc("arb.near"), None, 0, |w| w.resolve_dispute(U64(k), false)).unwrap();
+        assert_eq!((tclaim(&cx, "funder.near"), tclaim(&cx, "s1.near")), (2 * U, 0));
+    }
+
+    #[test]
+    fn a_token_default_pays_from_the_vault_then_the_token_stake_and_is_repaid_in_the_token() {
+        let mut o = opt(); o.vault = U; o.payer = FeePayer::Seller; o.premium = 500;
+        let (mut cx, r, _) = tworld(o);
+        let k = opened(open(&mut cx, r, 4));
+        accept(&mut cx, k);
+        deliver(&mut cx, k);
+        cx.now = cred(&cx, k).due_at.0 + 51 * NS;
+        let t = ttotal(&cx);
+        cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(k))).unwrap();
+        let (debt, fee) = (3 * U, 4 * U / 20);
+        assert_eq!(cred(&cx, k).debt.0, debt);
+        assert_eq!(tclaim(&cx, "s1.near"), 4 * U - fee);
+        let st = tstake(&cx);
+        assert_eq!((st.amount.0, st.earned.0, st.claims_paid.0, st.exposure.0), (10 * U - debt + fee, fee, debt, 0));
+        assert_eq!(ttotal(&cx), t, "the money moved between books");
+        // 少付不行；多付的記進可提領
+        ft_err(&mut cx, "funder.near", debt - 1, format!("reimburse:{}", k), "PAY_FULL_DEBT");
+        assert!(cx.ft("re", &acc("funder.near"), debt + 5, format!("reimburse:{}", k)));
+        assert_eq!(tclaim(&cx, "funder.near"), 5);
+        let st = tstake(&cx);
+        assert_eq!((st.amount.0, st.recovered.0), (10 * U + fee, debt));
+        assert_eq!(ttotal(&cx), t + debt + 5);
+        assert!(cred(&cx, k).status == CreditStatus::Reimbursed);
+        let b = cx.peek(|w| w.guarantor_book(acc("g.near"), Some(tok()))).unwrap();
+        assert_eq!((b["asset"].clone(), b["net_loss"].clone()), (Value::String("usdc.near".into()), json_str(0)));
+    }
+
+    #[test]
+    fn closing_a_token_tree_retains_per_asset_and_returns_the_reserve() {
+        // 沒有未結單：代幣走 ft_transfer 回法人，準備記進 NEAR 可提領
+        let (mut cx, r, _) = tworld(opt());
+        let (v, t, n) = (cell(&cx, r).vault.0, ttotal(&cx), total(&cx));
+        cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        let c = cell(&cx, r);
+        assert_eq!((c.vault.0, c.near_reserve.0), (0, 0));
+        assert_eq!((ttotal(&cx), total(&cx)), (t - v, n));
+        assert_eq!(near_claim(&cx, "funder.near"), R);
+        assert_eq!(cx.tbal, t - v, "the refund left in the token");
+        // 退款失敗：記在 unclaimed，領一次
+        cx.resolve(true);
+        assert_eq!((cell(&cx, r).unclaimed.0, ttotal(&cx)), (v, t));
+        cx.run("cr", &acc("funder.near"), None, 0, |w| w.claim_refund(U64(r))).unwrap();
+        assert_eq!((cell(&cx, r).unclaimed.0, ttotal(&cx)), (0, t - v));
+        cx.resolve(false);
+        cx.run("w", &acc("funder.near"), None, 0, |w| { let _ = w.withdraw(None); }).unwrap();
+        assert_eq!(total(&cx), n - R);
+
+        // 有未結單：代幣留在根格，準備照樣退（它不賠款），結清後才放
+        let (mut cx, r, _) = tworld(opt());
+        let k = opened(open(&mut cx, r, 2));
+        accept(&mut cx, k);
+        let (v, t) = (cell(&cx, r).vault.0, ttotal(&cx));
+        cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        assert_eq!((cell(&cx, r).vault.0, ttotal(&cx)), (v, t), "the tokens stay for the seller");
+        assert_eq!(near_claim(&cx, "funder.near"), R - S);
+        assert!(cx.pending.is_empty(), "no token refund yet");
+        assert!(cx.ft("s", &acc("funder.near"), 2 * U, format!("settle:{}", k)));
+        let c = cell(&cx, r);
+        assert_eq!((c.vault.0, c.unclaimed.0), (0, v), "released once nothing is owed");
+    }
+
+    #[test]
+    fn hiring_in_a_token_tree_pays_the_fee_from_the_reserve() {
+        let (mut cx, r, _) = tworld(opt());
+        let (v, n, t) = (cell(&cx, r).vault.0, total(&cx), ttotal(&cx));
+        let c = hired(hire(&mut cx, r, 2, |_| {}));
+        let fee = hire_fee(2);
+        let rc = cell(&cx, r);
+        assert_eq!((rc.vault.0, rc.near_reserve.0, total(&cx), ttotal(&cx)), (v - 2 * U, R - fee, n - fee, t));
+        let ch = cell(&cx, c);
+        assert_eq!((ch.vault.0, ch.asset.clone(), ch.near_reserve.0), (2 * U, Some(tok()), 0));
+        // 子格再雇：預算從子格，費用還是根格的準備
+        let g = hired(hire(&mut cx, c, 1, |_| {}));
+        assert_eq!(cell(&cx, r).near_reserve.0, R - fee - hire_fee(1));
+        assert_eq!((cell(&cx, c).vault.0, cell(&cx, g).vault.0), (U, U));
+        // 子格開單：儲存從根格的準備
+        let rr = cell(&cx, r).near_reserve.0;
+        opened(open(&mut cx, c, 1));
+        assert_eq!(cell(&cx, r).near_reserve.0, rr - S);
+        // 準備不夠：FUNDS，錢沒動
+        cx.run("poke", &writ(), None, 0, |w| { let mut x = w.cells.get(&r).cloned().unwrap(); w.vault_total -= x.near_reserve.0 - (S - 1); x.near_reserve = U128(S - 1); w.cells.insert(r, x); }).unwrap();
+        assert_eq!(why(&open(&mut cx, r, 1)), "FUNDS");
+        assert_eq!(why(&hire(&mut cx, r, 1, |_| {})), "FUNDS");
+        // 補準備：NEAR 走 top_up，子格不收
+        cx.run("top", &acc("funder.near"), None, S, |w| w.top_up(U64(r))).unwrap();
+        assert_eq!(cell(&cx, r).near_reserve.0, 2 * S - 1);
+        assert!(cx.run("top", &acc("funder.near"), None, S, |w| w.top_up(U64(c))).is_none());
+        opened(open(&mut cx, r, 1));
+        // 沒有信用條款的代幣格維持 HIRE_TOKEN；有條款的不再是
+        let (mut cx, r, _) = tworld(opt());
+        cx.run("poke", &writ(), None, 0, |w| { w.terms.remove(&r); }).unwrap();
+        assert_eq!(why(&hire(&mut cx, r, 1, |_| {})), "HIRE_TOKEN");
+    }
+
+    #[test]
+    fn a_token_transfer_that_fails_on_spend_goes_back_to_the_token_vault() {
+        let (mut cx, r, _) = tworld(opt());
+        let (p, k, t, bal) = (link(&cx, r, 1), key(&cx, r), ttotal(&cx), cx.tbal);
+        cx.run("spend", &writ(), Some(&k), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), "aa".repeat(32)); }).unwrap();
+        assert_eq!((ttotal(&cx), cx.tbal), (t - U, bal - U));
+        cx.resolve(true);
+        assert_eq!((ttotal(&cx), cx.tbal, cell(&cx, r).vault.0), (t, bal, 100 * U));
+        // 撤銷途中失敗、還有未結單：留在根格
+        let (mut cx, r, _) = tworld(opt());
+        let (p, k2) = (link(&cx, r, 1), key(&cx, r));
+        cx.run("spend", &writ(), Some(&k2), 0, |w| { let _ = w.spend(p, 1, acc("s1.near"), "aa".repeat(32)); }).unwrap();
+        let o = opened(open(&mut cx, r, 1));
+        cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        let (v, t) = (cell(&cx, r).vault.0, ttotal(&cx));
+        cx.resolve(true);
+        assert_eq!((cell(&cx, r).vault.0, ttotal(&cx)), (v + U, t + U), "retained in the token");
+        let _ = o;
+    }
+
+    #[test]
+    fn risk_card_and_credit_report_the_asset_and_the_reserve() {
+        let mut o = opt(); o.payer = FeePayer::Seller; o.cap = 4000;
+        let (mut cx, r, _) = tworld(o);
+        let card = cx.peek(|w| w.risk_card(U64(r))).unwrap();
+        assert_eq!(card["asset"], "usdc.near");
+        assert_eq!(card["near_reserve"], json_str(R));
+        assert_eq!(card["fee_payer"], "Seller");
+        assert_eq!(card["seller_cap_bps"], 4000);
+        let k = opened(open(&mut cx, r, 1));
+        assert_eq!(check(&cx, k, None).order["asset"], "usdc.near");
+        let rc = cx.peek(|w| w.liability_receipt(U64(k))).unwrap();
+        assert_eq!(rc["asset"], "usdc.near");
     }
 
     #[test]
@@ -917,9 +1202,9 @@ mod exact {
     fn a_failed_withdrawal_is_credited_back() {
         let (mut cx, _) = world(opt());
         let t = total(&cx);
-        cx.run("cb", &writ(), None, 0, |w| w.on_withdraw(acc("s1.near"), U128(5), Ok(()))).unwrap();
+        cx.run("cb", &writ(), None, 0, |w| w.on_withdraw(acc("s1.near"), U128(5), None, Ok(()))).unwrap();
         assert_eq!((claim(&cx, "s1.near"), total(&cx)), (None, t));
-        cx.run("cb", &writ(), None, 0, |w| w.on_withdraw(acc("s1.near"), U128(5), Err(PromiseError::Failed))).unwrap();
+        cx.run("cb", &writ(), None, 0, |w| w.on_withdraw(acc("s1.near"), U128(5), None, Err(PromiseError::Failed))).unwrap();
         assert_eq!((claim(&cx, "s1.near"), total(&cx)), (Some(5), t + 5));
     }
 
@@ -1002,7 +1287,7 @@ mod exact {
         let (mut cx, r) = world(o);
         let k = opened(open(&mut cx, r, 1));
         cx.run("x", &acc("funder.near"), None, 0, |w| w.cancel_open(U64(k))).unwrap();
-        assert!(cx.peek(|w| w.stakes.get(&acc("g.near")).is_none()), "a guarantor that never staked has no stake entry");
+        assert!(cx.peek(|w| w.stakes.get(&(acc("g.near"), None)).is_none()), "a guarantor that never staked has no stake entry");
     }
 
     #[test]

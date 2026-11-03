@@ -67,7 +67,8 @@ def credit_attrs(a):
     if not a.credit_limit:
         return {}
     return dict(creditLimitYocto=str(int(decimal.Decimal(a.credit_limit))), bondBps=a.bond_bps, premiumBps=a.premium_bps, feePayer=a.fee_payer, sellerCapBps=a.seller_cap_bps, minTenorSecs=a.min_tenor,
-                maxTenorSecs=a.max_tenor, termsHash=TERMS_HASH, arbiter=a.arbiter)
+                maxTenorSecs=a.max_tenor, termsHash=TERMS_HASH, arbiter=a.arbiter,
+                **({"creditAsset": a.credit_asset or a.asset} if (a.credit_asset or a.asset) else {}))
 
 
 def cmd_init(a):
@@ -275,6 +276,7 @@ if __name__ == "__main__":
     i.add_argument("--premium-bps", type=int, default=0, help="保證費，每 30 天的萬分比，不滿一期算一期")
     i.add_argument("--fee-payer", choices=["Buyer", "Seller"], default="Buyer", help="Buyer：賣方接受時從公司金庫收；Seller：賣方收款時從貨款扣")
     i.add_argument("--seller-cap-bps", type=int, default=0, help="單一賣方的曝險上限（質押的萬分比）；0 = 不限")
+    i.add_argument("--credit-asset", default=None, help="信用的計價資產（NEP-141 合約）；省略 = 跟 --asset 相同。必須等於格的資產")
     i.add_argument("--min-tenor", type=int, default=60)
     i.add_argument("--max-tenor", type=int, default=2592000)
     i.add_argument("--arbiter", default=None)

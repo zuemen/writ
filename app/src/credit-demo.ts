@@ -1,6 +1,7 @@
 /**
  * make credit-demo —— 「誰負責」的完整故事，用真的 KERI 憑證與簽章（本機 sandbox）：
  *   1 賣方看風險卡：公司名封存，保證人具名
+ *   1b 賣方規則拒單，回報原因；賣方調整規則，訂單成立
  *   2 agent 賒帳、賣方交貨、公司按時付款：什麼都不揭露
  *   3 下一筆公司不付：賠付自動走完金庫與保證人的質押，賣方拿到全額
  *   4 公司被凍結，不能再賒，但 agent 還在、身分還封著
@@ -12,7 +13,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { teraToGas, type KeyPairString } from "near-api-js";
 import { DEMO, NEAR, ROOT, as, call, fmt, readJson, view } from "./near.js";
-import { A, balance, register } from "./flow.js";
+import { A, balance, checkOrder, register, setSellerPolicy } from "./flow.js";
 import { keriPrivate, py, releaseLink } from "./keri.js";
 
 const a = A();
@@ -39,13 +40,16 @@ const agent = as(a.writ.id, keriPrivate().agent_near_secret_key as KeyPairString
 let link = 0;
 const txs: [string, string | undefined][] = [["Company registers the mandate; guarantor attested it", (reg as any).hash]];
 
-async function order(j: number, invoice: string, dueInSecs: number) {
+async function open(j: number, invoice: string, dueInSecs: number) {
   link += j;
   const due_at = (nowNs() + BigInt(dueInSecs) * 1_000_000_000n).toString();
   const r = await call(agent, a.writ.id, "open_credit", { preimage: releaseLink(link), j, to: a.merchant.id, invoice_hash: sha(invoice), due_at }, { gas: teraToGas("50") });
   if (!r.value?.CreditOpened) throw new Error(`open_credit: ${JSON.stringify(r.value ?? r.error)}`);
   const id = String(r.value.CreditOpened.credit);
   txs.push([`Agent orders on credit: ${invoice}`, r.hash]);
+  return id;
+}
+async function acceptAndDeliver(id: string, invoice: string) {
   for (const [m, args] of [["accept_credit", { credit: id }], ["mark_delivered", { credit: id, delivery_hash: sha(`delivery ${invoice}`) }]] as const) {
     const x = await call(seller, a.writ.id, m, args, { gas: teraToGas("50") });
     if (x.error) throw new Error(`${m}: ${x.error}`);
@@ -53,11 +57,30 @@ async function order(j: number, invoice: string, dueInSecs: number) {
   }
   return id;
 }
+async function order(j: number, invoice: string, dueInSecs: number) {
+  return acceptAndDeliver(await open(j, invoice, dueInSecs), invoice);
+}
 
 const card0: any = await view(a.writ.id, "risk_card", { cell });
 say(`1  risk card: legal entity=${card0.legal_entity}, guarantor=${card0.guarantor}, stake=${fmt(card0.guarantor_stake)}, limit=${fmt(card0.credit_limit)}, guarantee fee=${card0.premium_bps / 100}%`);
 
-const paid = await order(1, "INV-CREDIT-1", 3600);
+// 賣方規則：要求 25% 保證金、單筆 0.05 NEAR。這家公司的條款沒有保證金，訂單不符合就回傳原因
+const strict = { max_amount: NEAR("0.05").toString(), max_tenor_secs: "7200", min_bond_bps: 2500, max_defaults: 0, guarantors: [] as string[] };
+const set1 = await setSellerPolicy(strict);
+if (set1.error) throw new Error("set_seller_policy: " + set1.error);
+txs.push(["Seller sets its credit rule", set1.hash]);
+const paid = await open(1, "INV-CREDIT-1", 3600);
+const refused: any = await checkOrder(paid);
+const tried = await call(seller, a.writ.id, "accept_credit", { credit: paid }, { gas: teraToGas("50") });
+txs.push(["The order breaks the seller's rule, so accepting it is refused", tried.hash]);
+const set2 = await setSellerPolicy({ ...strict, max_amount: NEAR("1").toString(), min_bond_bps: 0 });
+if (set2.error) throw new Error("set_seller_policy: " + set2.error);
+txs.push(["Seller adjusts the rule", set2.hash]);
+const allowed: any = await checkOrder(paid);
+await acceptAndDeliver(paid, "INV-CREDIT-1");
+const shipped = allowed.ok === true;
+say(`1b seller rule → ${refused.reasons.join(", ")}; accept → ${tried.error}; rule adjusted → ok=${allowed.ok}, order ${paid} accepted`);
+
 const s1 = await call(agent, a.writ.id, "settle", { credit: paid }, { gas: teraToGas("50") });
 txs.push(["Agent settles the first order on time; the company stays sealed", s1.hash]);
 const card1: any = await view(a.writ.id, "risk_card", { cell });
@@ -100,8 +123,9 @@ const card3: any = await view(a.writ.id, "risk_card", { cell });
 say(`5  recourse period over: key deleted (${dead.tag ?? dead.error}); naming another company → ${framed.error}; legal entity=${card3.legal_entity} (LE signature checked)`);
 
 const sol: any = await view(a.writ.id, "solvency");
-const ok = card1.legal_entity === "sealed" && !!s1.value?.CreditSettled && guarantorPaid && card2.frozen === true && card2.legal_entity === "sealed" && frozen.value?.Rejected?.reason === "FROZEN" && !!framed.error && card3.legal_entity === lei && sol.solvent === true;
-console.log(`\nCREDIT_RESULT|${ok ? "PASS" : "FAIL"}|paid_on_time_sealed=${card1.legal_entity === "sealed"}|guarantor_paid=${guarantorPaid}|frozen=${card2.frozen}|revealed=${card3.legal_entity === lei}`);
+const ruleOk = refused.ok === false && refused.reasons.includes("BOND_TOO_LOW") && String(tried.error).startsWith("POLICY:") && shipped;
+const ok = ruleOk && card1.legal_entity === "sealed" && !!s1.value?.CreditSettled && guarantorPaid && card2.frozen === true && card2.legal_entity === "sealed" && frozen.value?.Rejected?.reason === "FROZEN" && !!framed.error && card3.legal_entity === lei && sol.solvent === true;
+console.log(`\nCREDIT_RESULT|${ok ? "PASS" : "FAIL"}|rule_refused_then_shipped=${ruleOk}|paid_on_time_sealed=${card1.legal_entity === "sealed"}|guarantor_paid=${guarantorPaid}|frozen=${card2.frozen}|revealed=${card3.legal_entity === lei}`);
 void NEAR;
 if (process.env.WRIT_CREDIT_REPORT && ok) {
   const rows = txs.filter(([, h]) => h).map(([t, h]) => `| ${t} | [${h}](https://testnet.nearblocks.io/txns/${h}) |`).join("\n");

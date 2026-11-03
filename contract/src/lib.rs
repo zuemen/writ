@@ -100,6 +100,7 @@ enum StorageKey {
     PendingInvoices,
     Policies,
     SellerExposure,
+    TokenTotal,
 }
 
 /// 格的狀態。Revoked / Tripped 之後鑰匙已不在合約帳號上。
@@ -149,6 +150,7 @@ pub struct Cell {
     pub depth: u32,                // 根格 = 0
     pub children: Vec<u64>,        // 它雇用的格
     pub tree_size: u32,            // 整棵樹幾格（只在根格維護）
+    pub near_reserve: U128,        // 代幣樹的根格才有：開格時留下的 NEAR，付單據儲存與雇用費
 }
 
 /// spend 的判決。被擋不是錯誤，是正常結果。
@@ -216,6 +218,7 @@ pub struct CreditArgs {
     pub arbiter: AccountId,     // 爭議仲裁人，不得是保證人
     pub fee_payer: FeePayer,    // 保證費誰付，簽進 attestation
     pub seller_cap_bps: u32,    // 單一賣方的曝險上限（質押的萬分比）；0 = 不限。防串通賣方把質押一次領走
+    pub asset: Option<AccountId>, // 信用的計價資產，簽進 attestation，必須等於這格的資產；None = NEAR
 }
 
 /// 一棵樹的信用狀態（只存在根格）。
@@ -253,6 +256,7 @@ pub struct Credit {
     pub seller: AccountId,
     pub amount: U128,           // 目前金額；用量單交貨時可能縮小
     pub original_amount: U128,  // 開單時的上限
+    pub asset: Option<AccountId>, // 金額的單位；None = NEAR
     pub invoice_hash: String,
     pub opened_at: U64,
     pub due_at: U64,
@@ -377,7 +381,7 @@ pub struct Unseal {
     pub lei: Option<String>,   // 揭露後才有
 }
 
-#[near(contract_state)]
+#[near(contract_state, contract_metadata(version = "0.2.0", link = "https://github.com/zuemen/writ", standard(standard = "nep297", version = "1.0.0")))]
 #[derive(PanicOnDefault)]
 pub struct Contract {
     owner: AccountId,
@@ -385,7 +389,7 @@ pub struct Contract {
     cells: LookupMap<u64, Cell>,
     key_to_cell: LookupMap<PublicKey, u64>,
     next_id: u64,
-    vault_total: u128, // 所有格的金庫總和；合約餘額必須 >= 這個數
+    vault_total: u128, // 所有 NEAR 帳目的總和；合約餘額必須 >= 這個數。代幣另記在 token_total
     stats: Stats,
     supervisors: IterableMap<AccountId, bool>,
     unseals: LookupMap<u64, Unseal>,
@@ -396,13 +400,14 @@ pub struct Contract {
     used_keys: LookupSet<PublicKey>, // 鑰匙一生只用一次：解僱、撤銷、tripwire 之後都不能再被雇用或開格
     credits: LookupMap<u64, Credit>,
     terms: LookupMap<u64, CreditTerms>,
-    stakes: LookupMap<AccountId, Stake>,
-    claimable: LookupMap<AccountId, u128>, // 先記帳後提領：賣方自己來領
+    stakes: LookupMap<(AccountId, Option<AccountId>), Stake>, // (保證人, 資產)：不同資產的質押互不支援
+    claimable: LookupMap<(AccountId, Option<AccountId>), u128>, // (帳號, 資產)；先記帳後提領：賣方自己來領
     entities: LookupMap<String, EntityRecord>,
     next_credit: u64,
     windows: Windows,
     policies: LookupMap<AccountId, SellerPolicy>,
-    seller_exposure: LookupMap<(AccountId, AccountId), u128>, // (保證人, 賣方) → 保證人對這個賣方的曝險；歸零就刪
+    seller_exposure: LookupMap<(AccountId, Option<AccountId>, AccountId), u128>, // (保證人, 資產, 賣方) → 曝險；歸零就刪
+    token_total: LookupMap<AccountId, u128>, // 每種代幣的帳目總和；合約在該代幣的餘額必須 >= 這個數
 }
 
 // ---------------- 小工具 ----------------
@@ -442,7 +447,7 @@ pub fn attestation_message(a: &RegisterArgs, funder: &AccountId, contract: &Acco
         a.verifier,
         a.attested_at.0,
         a.asset.as_ref().map(|t| t.as_str()).unwrap_or("near"),
-        a.credit.as_ref().map(|c| format!("{},{},{},{},{},{},{},{},{},{:?},{}", c.limit.0, c.bond_bps, c.premium_bps, c.min_tenor.0, c.max_tenor.0, c.terms_hash, c.terms_sig, c.entity_tag, c.arbiter, c.fee_payer, c.seller_cap_bps)).unwrap_or_else(|| "none".to_string())
+        a.credit.as_ref().map(|c| format!("{},{},{},{},{},{},{},{},{},{:?},{},{}", c.limit.0, c.bond_bps, c.premium_bps, c.min_tenor.0, c.max_tenor.0, c.terms_hash, c.terms_sig, c.entity_tag, c.arbiter, c.fee_payer, c.seller_cap_bps, c.asset.as_ref().map(|t| t.as_str()).unwrap_or("near"))).unwrap_or_else(|| "none".to_string())
     )
 }
 
@@ -485,6 +490,7 @@ impl Contract {
             }),
             policies: LookupMap::new(StorageKey::Policies),
             seller_exposure: LookupMap::new(StorageKey::SellerExposure),
+            token_total: LookupMap::new(StorageKey::TokenTotal),
         }
     }
 
@@ -534,8 +540,10 @@ impl Contract {
         let msg = attestation_message(&args, &funder, &env::current_account_id());
         require!(env::ed25519_verify(&sig, msg.as_bytes(), &vpk), "BAD_ATTESTATION");
 
-        // NEAR 格：附帶的 NEAR 扣掉開格費進金庫。代幣格：附帶的 NEAR 全當開格費／gas 準備，金庫用 ft_transfer_call 入金。
+        // NEAR 格：附帶的 NEAR 扣掉開格費進金庫。代幣格：金庫用 ft_transfer_call 入金；
+        // 有信用條款的代幣格，多的 NEAR 留作準備（付單據儲存與雇用費），沒有的退回。
         let vault = if args.asset.is_none() { deposit.as_yoctonear() - fee } else { 0 };
+        let reserve = if args.asset.is_some() && args.credit.is_some() { deposit.as_yoctonear() - fee } else { 0 };
         let id = self.next_id;
         self.next_id += 1;
         let cell = Cell {
@@ -570,13 +578,14 @@ impl Contract {
             depth: 0,
             children: vec![],
             tree_size: 1,
+            near_reserve: U128(reserve),
         };
         self.cells.insert(id, cell);
         self.key_to_cell.insert(args.agent_pk.clone(), id);
         self.used_keys.insert(args.agent_pk.clone());
         self.used_amcs.insert(args.amc_said.clone(), id);
         if let Some(cr) = &args.credit {
-            require!(args.asset.is_none(), "CREDIT_NEAR_ONLY");
+            require!(cr.asset == args.asset, "CREDIT_ASSET_MISMATCH");
             require!(cr.arbiter != args.verifier && cr.arbiter != funder, "ARBITER_NOT_INDEPENDENT");
             require!(cr.bond_bps <= 10_000 && cr.premium_bps <= 2_000 && cr.seller_cap_bps <= 10_000 && cr.min_tenor.0 <= cr.max_tenor.0, "BAD_CREDIT_TERMS");
             hex32(&cr.terms_hash, "terms_hash");
@@ -593,16 +602,21 @@ impl Contract {
             if !self.entities.contains_key(&key) {
                 self.entities.insert(key, EntityRecord { first_seen: U64(env::block_timestamp()), ..Default::default() });
             }
+            // 驗證者簽過這種代幣才開質押帳：ft_on_transfer 的呼叫者誰都能假冒代幣，假代幣不能灌儲存
+            let sk = (args.verifier.clone(), args.asset.clone());
+            if args.asset.is_some() && !self.stakes.contains_key(&sk) {
+                self.stakes.insert(sk, Stake::default());
+            }
         }
-        self.vault_total += vault;
+        self.vault_total += vault + reserve;
         self.stats.cells += 1;
         event(
             "registered",
             serde_json::json!({"cell": id.to_string(), "amc_said": args.amc_said, "agent_pk": String::from(&args.agent_pk),
-                               "verifier": args.verifier, "vault": vault.to_string(), "n": args.n, "unit": args.unit.0.to_string()}),
+                               "verifier": args.verifier, "vault": vault.to_string(), "near_reserve": reserve.to_string(), "n": args.n, "unit": args.unit.0.to_string()}),
         );
-        if args.asset.is_some() && deposit.as_yoctonear() > fee {
-            // 代幣格的金庫是代幣，超過開格費的 NEAR 退回
+        if args.asset.is_some() && args.credit.is_none() && deposit.as_yoctonear() > fee {
+            // 沒有信用條款的代幣格用不到 NEAR，超過開格費的退回
             Promise::new(funder.clone()).transfer(NearToken::from_yoctonear(deposit.as_yoctonear() - fee)).detach();
         }
         Promise::new(env::current_account_id())
@@ -622,9 +636,14 @@ impl Contract {
         let mut c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
         require!(env::predecessor_account_id() == c.funder, "ONLY_FUNDER");
         require!(c.status == Status::Active, "NOT_ACTIVE");
-        require!(c.asset.is_none(), "TOKEN_CELL_USE_FT_TRANSFER_CALL");
         let d = env::attached_deposit().as_yoctonear();
-        c.vault = U128(c.vault.0 + d);
+        if c.asset.is_some() {
+            // 代幣樹的根格：附的 NEAR 補進準備；代幣本身走 ft_transfer_call
+            require!(c.parent.is_none() && self.terms.contains_key(&cell.0), "TOKEN_CELL_USE_FT_TRANSFER_CALL");
+            c.near_reserve = U128(c.near_reserve.0 + d);
+        } else {
+            c.vault = U128(c.vault.0 + d);
+        }
         self.vault_total += d;
         self.cells.insert(cell.0, c);
     }
@@ -696,25 +715,15 @@ impl Contract {
         c.vault = U128(c.vault.0 - amount);
         c.spends += 1;
         c.strikes = 0;
-        if c.asset.is_none() {
-            self.vault_total -= amount; // vault_total 只追蹤 NEAR 金庫
-        }
         let idx = c.idx;
         let remaining = c.n - c.idx;
         let asset = c.asset.clone();
         self.cells.insert(id, c);
+        self.sub_total(&asset, amount);
 
         // 跨 receipt 沒有原子回滾：先扣（預留），callback 失敗再退回金庫
         // 代幣格：合約自己發 receipt 附 1 yocto 呼叫 ft_transfer（agent 的 FC key 不能附存款，合約可以）
-        let payout = match &asset {
-            None => Promise::new(to.clone()).transfer(NearToken::from_yoctonear(amount)),
-            Some(token) => Promise::new(token.clone()).function_call(
-                "ft_transfer".to_string(),
-                serde_json::to_vec(&serde_json::json!({"receiver_id": to, "amount": amount.to_string(), "memo": format!("writ cell {}", id)})).unwrap(),
-                NearToken::from_yoctonear(1),
-                GAS_FOR_FT,
-            ),
-        };
+        let payout = Self::send(&asset, to.clone(), amount, format!("writ cell {}", id));
         // 交易的最終結果就是轉帳的真正結果：Paid 只在錢真的到了才出現
         payout
             .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_CALLBACK).on_transfer(U64(id), U128(amount), invoice_hash, to, idx, remaining))
@@ -741,9 +750,16 @@ impl Contract {
         let root_cell = if c.root == id { None } else { self.cells.get(&c.root).cloned() };
         let tree_size = root_cell.as_ref().map(|r| r.tree_size).unwrap_or(c.tree_size);
         let fee = hire_fee(j);
-        let funded = match &root_cell {
-            None => self.free_vault(id, &c) >= amount.saturating_add(fee),
-            Some(r) => c.vault.0 >= amount && self.free_vault(c.root, r) >= fee,
+        let token_tree = c.asset.is_some();
+        let funded = if token_tree {
+            // 代幣樹：預算是代幣，雇用費是 NEAR，從根格的準備扣
+            let reserve = root_cell.as_ref().map(|r| r.near_reserve.0).unwrap_or(c.near_reserve.0);
+            self.free_vault(id, &c) >= amount && reserve >= fee
+        } else {
+            match &root_cell {
+                None => self.free_vault(id, &c) >= amount.saturating_add(fee),
+                Some(r) => c.vault.0 >= amount && self.free_vault(c.root, r) >= fee,
+            }
         };
         let w0_ok = hex::decode(&child.w0).map(|v| v.len() == 32).unwrap_or(false);
         let reason: Option<&str> = if now > c.valid_until.0 {
@@ -752,7 +768,7 @@ impl Contract {
             Some("SUSPENDED")
         } else if self.owes_guarantor(c.root) {
             Some("FROZEN")
-        } else if c.asset.is_some() {
+        } else if token_tree && !self.terms.contains_key(&c.root) {
             Some("HIRE_TOKEN")
         } else if child.scope.is_empty() || child.scope.len() > MAX_SCOPE || !child.scope.iter().all(|s| c.scope.contains(s)) {
             Some("HIRE_SCOPE")
@@ -791,7 +807,10 @@ impl Contract {
         c.idx += j;
         c.day_used += j;
         c.strikes = 0;
-        c.vault = U128(c.vault.0 - amount - if root_cell.is_none() { fee } else { 0 });
+        c.vault = U128(c.vault.0 - amount - if root_cell.is_none() && !token_tree { fee } else { 0 });
+        if root_cell.is_none() && token_tree {
+            c.near_reserve = U128(c.near_reserve.0 - fee);
+        }
         self.vault_total -= fee; // 費用留在合約付儲存與 gas；amount 只是換格，總額不變
         let child_id = self.next_id;
         self.next_id += 1;
@@ -822,12 +841,13 @@ impl Contract {
             rejects: 0,
             strikes: 0,
             status: Status::Active,
-            asset: None,
+            asset: c.asset.clone(),
             root: c.root,
             parent: Some(id),
             depth: c.depth + 1,
             children: vec![],
             tree_size: 0,
+            near_reserve: U128(0),
         };
         self.cells.insert(child_id, cell);
         self.key_to_cell.insert(child.agent_pk.clone(), child_id);
@@ -841,7 +861,11 @@ impl Contract {
             }
             Some(mut r) => {
                 r.tree_size += 1;
-                r.vault = U128(r.vault.0 - fee);
+                if token_tree {
+                    r.near_reserve = U128(r.near_reserve.0 - fee);
+                } else {
+                    r.vault = U128(r.vault.0 - fee);
+                }
                 self.cells.insert(c.root, r);
                 self.cells.insert(id, c);
             }
@@ -941,23 +965,22 @@ impl Contract {
             // 轉帳途中格已被撤銷：關閉的格不能再領錢，直接退給法人
             let (asset, funder, root_id) = (c.asset.clone(), c.funder.clone(), c.root);
             self.cells.insert(cell.0, c);
-            let retain = asset.is_none() && self.terms.get(&root_id).map(|t| t.outstanding.0 > 0 || t.open_debts > 0).unwrap_or(false);
+            let retain = self.terms.get(&root_id).map(|t| t.outstanding.0 > 0 || t.open_debts > 0).unwrap_or(false);
             if retain {
                 // 公司還欠錢：這筆錢和其他金庫一樣留在根格，先付欠款
                 let mut r = self.cells.get(&root_id).cloned().unwrap();
                 r.vault = U128(r.vault.0 + amount.0);
                 self.cells.insert(root_id, r);
-                self.vault_total += amount.0;
+                self.add_total(&asset, amount.0);
                 retained = true;
             } else {
                 self.pay_out(cell.0, &asset, funder, amount.0, format!("writ cell {} closed", cell.0));
             }
         } else {
             c.vault = U128(c.vault.0 + amount.0);
-            if c.asset.is_none() {
-                self.vault_total += amount.0;
-            }
+            let asset = c.asset.clone();
             self.cells.insert(cell.0, c);
+            self.add_total(&asset, amount.0);
         }
         event(if retained { "retained" } else { "refunded" }, serde_json::json!({"cell": cell.0.to_string(), "amount": amount.0.to_string()}));
         Verdict::Rejected { cell, reason: "TRANSFER_FAILED".to_string(), strikes, tripped: false }
@@ -1035,6 +1058,7 @@ impl Contract {
         require!(c.status == Status::Active || matches!(c.status, Status::Tripped), "ALREADY_CLOSED");
         let (asset, funder) = (c.asset.clone(), c.funder.clone());
         let mut refund = 0u128;
+        let mut reserve = 0u128;
         let mut keys: Vec<PublicKey> = vec![];
         // 公司還欠錢時金庫留在根格，事件要照實說沒有退款
         let holds = self.terms.get(&c.root).map(|t| t.outstanding.0 > 0 || t.open_debts > 0).unwrap_or(false);
@@ -1046,6 +1070,9 @@ impl Contract {
             let part = cell.vault.0;
             refund += part;
             cell.vault = U128(0);
+            // NEAR 準備不是賠款的資產，也不會再開新單：關格就還給法人
+            reserve += cell.near_reserve.0;
+            cell.near_reserve = U128(0);
             cell.status = st.clone();
             self.key_to_cell.remove(&cell.agent_pk);
             self.stats.revoked += 1;
@@ -1069,9 +1096,10 @@ impl Contract {
                 self.cells.insert(root_id, r);
             }
             refund = 0;
-        } else if asset.is_none() {
-            self.vault_total -= refund;
+        } else {
+            self.sub_total(&asset, refund);
         }
+        self.credit_seller(&funder, &None, reserve);
         if let Some((first, rest)) = keys.split_first() {
             let mut batch = Promise::new(env::current_account_id()).delete_key(first.clone());
             for k in rest {
@@ -1086,7 +1114,14 @@ impl Contract {
 
     /// 把 NEAR 或 NEP-141 退給法人；失敗就記在 unclaimed，不會憑空消失。
     fn pay_out(&self, cell: u64, asset: &Option<AccountId>, to: AccountId, amount: u128, memo: String) {
-        let p = match asset {
+        Self::send(asset, to, amount, memo)
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_REFUND_CB).on_refund(U64(cell), U128(amount)))
+            .detach();
+    }
+
+    /// 轉出 NEAR 或 NEP-141（合約自己附 1 yocto 呼叫 ft_transfer）。
+    fn send(asset: &Option<AccountId>, to: AccountId, amount: u128, memo: String) -> Promise {
+        match asset {
             None => Promise::new(to).transfer(NearToken::from_yoctonear(amount)),
             Some(token) => Promise::new(token.clone()).function_call(
                 "ft_transfer".to_string(),
@@ -1094,8 +1129,27 @@ impl Contract {
                 NearToken::from_yoctonear(1),
                 GAS_FOR_FT,
             ),
-        };
-        p.then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_REFUND_CB).on_refund(U64(cell), U128(amount))).detach();
+        }
+    }
+
+    fn add_total(&mut self, asset: &Option<AccountId>, amount: u128) {
+        match asset {
+            None => self.vault_total += amount,
+            Some(t) => {
+                let cur = self.token_total.get(t).copied().unwrap_or(0);
+                self.token_total.insert(t.clone(), cur + amount);
+            }
+        }
+    }
+
+    fn sub_total(&mut self, asset: &Option<AccountId>, amount: u128) {
+        match asset {
+            None => self.vault_total -= amount,
+            Some(t) => {
+                let cur = self.token_total.get(t).copied().unwrap_or(0);
+                self.token_total.insert(t.clone(), cur - amount);
+            }
+        }
     }
 
     #[private]
@@ -1105,10 +1159,9 @@ impl Contract {
         }
         if let Some(mut c) = self.cells.get(&cell.0).cloned() {
             c.unclaimed = U128(c.unclaimed.0 + amount.0);
-            if c.asset.is_none() {
-                self.vault_total += amount.0;
-            }
+            let asset = c.asset.clone();
             self.cells.insert(cell.0, c);
+            self.add_total(&asset, amount.0);
             event("refund_failed", serde_json::json!({"cell": cell.0.to_string(), "amount": amount.0.to_string()}));
         }
     }
@@ -1120,11 +1173,9 @@ impl Contract {
         let amount = c.unclaimed.0;
         require!(amount > 0, "NOTHING_TO_CLAIM");
         c.unclaimed = U128(0);
-        if c.asset.is_none() {
-            self.vault_total -= amount;
-        }
         let (asset, funder) = (c.asset.clone(), c.funder.clone());
         self.cells.insert(cell.0, c);
+        self.sub_total(&asset, amount);
         self.pay_out(cell.0, &asset, funder, amount, format!("writ cell {} refund", cell.0));
     }
 
@@ -1187,11 +1238,37 @@ impl Contract {
         event("signers_updated", serde_json::json!({"cell": cell.0.to_string(), "issuer_pk": issuer_pk}));
     }
 
-    /// NEP-141 入金：法人 ft_transfer_call(writ, amount, msg = "<cell id>")。
-    /// 只收「該格綁定的代幣」且「寄件人是該格的法人」；其他一律退回（回傳 amount），不 panic。
+    /// NEP-141 進來的唯一入口，msg 決定用途（都和 NEAR 的 payable 路徑共用邏輯）：
+    ///   "<cell id>" 或 "fund:<cell id>"       入金到這格；不是該格的代幣、不是法人、格已關閉就退回
+    ///   "stake"                               保證人質押
+    ///   "settle:<credit id>"                  公司結清
+    ///   "dispute:<credit id>:<reason_hash>"   公司附全額押金提出爭議
+    ///   "reimburse:<credit id>"               公司償還保證人
+    /// 多付的記進寄件人的可提領。條件不符會 panic：NEP-141 的 ft_resolve_transfer 會把代幣全數退回寄件人，帳也不會動。
+    /// 呼叫者就是「代幣」：任何帳號都能假冒，所以一律比對這棵樹簽過的資產，假代幣只碰得到自己的帳。
     pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> U128 {
         let token = env::predecessor_account_id();
-        let Ok(id) = msg.trim().parse::<u64>() else { return amount };
+        let m = msg.trim();
+        let (cmd, rest) = m.split_once(':').unwrap_or((m, ""));
+        let via = Some(token.clone());
+        let id = |s: &str| U64(s.parse::<u64>().unwrap_or_else(|_| env::panic_str("BAD_MSG")));
+        match cmd {
+            "stake" => self.stake_in(sender_id, via, amount.0),
+            "settle" => self.funder_settles(id(rest), sender_id, amount.0, via),
+            "reimburse" => self.funder_repays(id(rest), sender_id, amount.0, via),
+            "dispute" => {
+                let (k, reason) = rest.split_once(':').unwrap_or_else(|| env::panic_str("BAD_MSG"));
+                self.funder_disputes(id(k), sender_id, amount.0, reason.to_string(), via);
+            }
+            "fund" => return self.fund_cell(token, sender_id, amount, rest),
+            _ => return self.fund_cell(token, sender_id, amount, m),
+        }
+        U128(0)
+    }
+
+    /// 入金只收「該格綁定的代幣」且「寄件人是該格的法人」；其他一律退回（回傳 amount），不 panic。
+    fn fund_cell(&mut self, token: AccountId, sender_id: AccountId, amount: U128, cell: &str) -> U128 {
+        let Ok(id) = cell.parse::<u64>() else { return amount };
         let Some(mut c) = self.cells.get(&id).cloned() else { return amount };
         if c.asset.as_ref() != Some(&token) || c.funder != sender_id || c.status != Status::Active {
             event("deposit_refused", serde_json::json!({"cell": id.to_string(), "token": token, "sender": sender_id}));
@@ -1199,8 +1276,17 @@ impl Contract {
         }
         c.vault = U128(c.vault.0 + amount.0);
         self.cells.insert(id, c);
+        self.add_total(&Some(token.clone()), amount.0);
         event("deposited", serde_json::json!({"cell": id.to_string(), "token": token, "amount": amount.0.to_string()}));
         U128(0)
+    }
+
+    /// 付款資產要對：代幣樹不能用 NEAR 付（1 NEAR 的 yocto 數會被當成一大筆代幣），NEAR 樹也不收代幣。
+    fn check_payment_asset(asset: &Option<AccountId>, via: &Option<AccountId>, attached: u128) {
+        match via {
+            Some(_) => require!(asset == via, "WRONG_ASSET"),
+            None => require!(attached == 0 || asset.is_none(), "USE_FT_TRANSFER_CALL"),
+        }
     }
 
     // ================= 監理調閱（tier-1：只揭露 LEI） =================
@@ -1304,30 +1390,37 @@ impl Contract {
         self.credits.get(&credit.0).cloned()
     }
 
-    pub fn stake_of(&self, account: AccountId) -> Option<Stake> {
-        self.stakes.get(&account).cloned()
+    /// asset 省略 = NEAR 的質押。
+    pub fn stake_of(&self, account: AccountId, asset: Option<AccountId>) -> Option<Stake> {
+        self.stakes.get(&(account, asset)).cloned()
     }
 
     /// 保證人的帳簿：承擔多少、賺多少、賠多少、追回多少。
     /// net_loss = 已賠 - 已追回；loss_ratio_bps = net_loss / 累計費用，還沒賺過費用時是 null。
-    pub fn guarantor_book(&self, account: AccountId) -> Option<Value> {
-        let st = self.stakes.get(&account)?;
+    pub fn guarantor_book(&self, account: AccountId, asset: Option<AccountId>) -> Option<Value> {
+        let st = self.stakes.get(&(account.clone(), asset.clone()))?;
         let net_loss = st.claims_paid.0.saturating_sub(st.recovered.0);
         let utilisation = if st.amount.0 == 0 { 0 } else { st.exposure.0.saturating_mul(10_000) / st.amount.0 };
         let loss_ratio = if st.earned.0 == 0 { None } else { Some(net_loss.saturating_mul(10_000) / st.earned.0) };
-        let mut top: Vec<(u128, &AccountId)> = st.sellers.iter().map(|s| (self.seller_exposure_of(&account, s), s)).filter(|x| x.0 > 0).collect();
+        let mut top: Vec<(u128, &AccountId)> = st.sellers.iter().map(|s| (self.seller_exposure_of(&account, &asset, s), s)).filter(|x| x.0 > 0).collect();
         top.sort_by(|a, b| b.0.cmp(&a.0));
         top.truncate(TOP_SELLERS);
         Some(serde_json::json!({
-            "stake": st.amount, "exposure": st.exposure, "utilisation_bps": utilisation.min(u64::MAX as u128) as u64,
+            "asset": asset, "stake": st.amount, "exposure": st.exposure, "utilisation_bps": utilisation.min(u64::MAX as u128) as u64,
             "earned": st.earned, "claims_paid": st.claims_paid, "recovered": st.recovered, "net_loss": U128(net_loss),
             "loss_ratio_bps": loss_ratio.map(|r| r.min(u64::MAX as u128) as u64),
             "top_sellers": top.iter().map(|(e, s)| serde_json::json!({"seller": s, "exposure": U128(*e)})).collect::<Vec<_>>(),
         }))
     }
 
-    pub fn claimable_of(&self, account: AccountId) -> U128 {
-        U128(self.claimable.get(&account).copied().unwrap_or(0))
+    /// asset 省略 = NEAR。
+    pub fn claimable_of(&self, account: AccountId, asset: Option<AccountId>) -> U128 {
+        U128(self.claimable.get(&(account, asset)).copied().unwrap_or(0))
+    }
+
+    /// 這種代幣在帳上的總額；合約在該代幣的餘額必須 >= 這個數（任何人都能核對）。
+    pub fn token_total(&self, asset: AccountId) -> U128 {
+        U128(self.token_total.get(&asset).copied().unwrap_or(0))
     }
 
     /// 賣方決定要不要賒之前看的卡：公司名封存，保證人具名。
@@ -1335,9 +1428,11 @@ impl Contract {
         let c = self.cells.get(&cell.0)?;
         let t = self.terms.get(&c.root)?;
         let root = self.cells.get(&c.root)?;
-        let stake = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+        let stake = self.stake_get(&t.guarantor, &t.args.asset);
         let rec = self.entities.get(&Self::entity_key(&t.guarantor, &t.args.entity_tag)).cloned().unwrap_or_default();
         Some(serde_json::json!({
+            "asset": t.args.asset,
+            "near_reserve": root.near_reserve,
             "legal_entity": self.unseals.get(&c.root).and_then(|u| u.lei.clone()).unwrap_or_else(|| "sealed".to_string()),
             "lei_commit": c.lei_commit,
             "guarantor": t.guarantor,
@@ -1396,38 +1491,41 @@ impl Contract {
 // ================= 信用：Who pays is named before the agent buys =================
 #[near]
 impl Contract {
-    /// 保證人質押。有曝險不得提領。
+    /// 保證人質押 NEAR。有曝險不得提領。代幣的質押走 ft_on_transfer("stake")。
     #[payable]
     pub fn stake(&mut self) {
-        let who = env::predecessor_account_id();
+        self.stake_in(env::predecessor_account_id(), None, env::attached_deposit().as_yoctonear());
+    }
+
+    fn stake_in(&mut self, who: AccountId, asset: Option<AccountId>, amount: u128) {
         require!(self.verifiers.contains_key(&who), "NOT_A_VERIFIER");
-        let d = env::attached_deposit().as_yoctonear();
-        let mut st = self.stakes.get(&who).cloned().unwrap_or_default();
-        st.amount = U128(st.amount.0 + d);
-        self.stakes.insert(who.clone(), st);
-        self.vault_total += d;
-        event("staked", serde_json::json!({"guarantor": who, "amount": d.to_string()}));
+        // 代幣的質押帳在驗證者簽過第一棵這種代幣的樹時開好（register）：假代幣開不了帳
+        require!(asset.is_none() || self.stakes.contains_key(&(who.clone(), asset.clone())), "STAKE_ASSET_UNKNOWN");
+        let mut st = self.stake_get(&who, &asset);
+        st.amount = U128(st.amount.0 + amount);
+        self.stake_put(&who, &asset, st);
+        self.add_total(&asset, amount);
+        event("staked", serde_json::json!({"guarantor": who, "amount": amount.to_string(), "asset": asset}));
     }
 
-    pub fn request_unstake(&mut self) {
+    pub fn request_unstake(&mut self, asset: Option<AccountId>) {
         let who = env::predecessor_account_id();
-        let mut st = self.stakes.get(&who).cloned().unwrap_or_else(|| env::panic_str("NO_STAKE"));
+        let mut st = self.stakes.get(&(who.clone(), asset.clone())).cloned().unwrap_or_else(|| env::panic_str("NO_STAKE"));
         st.unstake_at = U64(env::block_timestamp() + self.windows.unstake_delay.0 * 1_000_000_000);
-        self.stakes.insert(who, st);
+        self.stake_put(&who, &asset, st);
     }
 
-    pub fn withdraw_stake(&mut self, amount: U128) -> Promise {
+    pub fn withdraw_stake(&mut self, amount: U128, asset: Option<AccountId>) -> Promise {
         let who = env::predecessor_account_id();
-        let mut st = self.stakes.get(&who).cloned().unwrap_or_else(|| env::panic_str("NO_STAKE"));
+        let mut st = self.stakes.get(&(who.clone(), asset.clone())).cloned().unwrap_or_else(|| env::panic_str("NO_STAKE"));
         require!(st.unstake_at.0 > 0 && env::block_timestamp() >= st.unstake_at.0, "UNSTAKE_TOO_EARLY");
         require!(st.amount.0.saturating_sub(st.exposure.0) >= amount.0, "STAKE_EXPOSED");
         st.amount = U128(st.amount.0 - amount.0);
         st.unstake_at = U64(0); // 每次提領都要重新申請並等待
-        self.stakes.insert(who.clone(), st);
-        self.vault_total -= amount.0;
-        Promise::new(who.clone())
-            .transfer(NearToken::from_yoctonear(amount.0))
-            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_REFUND_CB).on_withdraw(who, amount))
+        self.stake_put(&who, &asset, st);
+        self.sub_total(&asset, amount.0);
+        Self::send(&asset, who.clone(), amount.0, "writ stake".to_string())
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_REFUND_CB).on_withdraw(who, amount, asset))
     }
 
     /// agent 下單賒帳：花鏈節（人授權的額度），不動錢。賣方接受前沒有任何人受拘束。
@@ -1447,6 +1545,10 @@ impl Contract {
         let amount = (j as u128).saturating_mul(c.unit.0);
         let invoice_key = Self::invoice_key(c.root, &invoice_hash);
         let root_vault = if c.root == id { c.vault.0 } else { self.cells.get(&c.root).map(|r| r.vault.0).unwrap_or(0) };
+        let root_reserve = if c.root == id { c.near_reserve.0 } else { self.cells.get(&c.root).map(|r| r.near_reserve.0).unwrap_or(0) };
+        // 單據儲存是 NEAR：NEAR 樹從根格可用金庫付，代幣樹從根格的 NEAR 準備付
+        let token_tree = c.asset.is_some();
+        let storage_free = if token_tree { root_reserve } else { root_vault.saturating_sub(terms.as_ref().map(|t| t.bond_locked.0).unwrap_or(0)) };
         let reason: Option<&str> = if terms.is_none() {
             Some("NO_CREDIT")
         } else if now > c.valid_until.0 {
@@ -1475,7 +1577,7 @@ impl Contract {
             || due_at.0 > now.saturating_add(terms.as_ref().unwrap().args.max_tenor.0 * 1_000_000_000)
         {
             Some("TENOR")
-        } else if root_vault.saturating_sub(terms.as_ref().unwrap().bond_locked.0) < CREDIT_STORAGE {
+        } else if storage_free < CREDIT_STORAGE {
             Some("FUNDS")
         } else {
             None
@@ -1494,15 +1596,15 @@ impl Contract {
         c.day_used += j;
         c.strikes = 0;
         let root_id = c.root;
-        if root_id == id {
-            c.vault = U128(c.vault.0 - CREDIT_STORAGE);
-            self.cells.insert(id, c);
+        let asset = c.asset.clone();
+        self.cells.insert(id, c);
+        let mut r = self.cells.get(&root_id).cloned().unwrap();
+        if token_tree {
+            r.near_reserve = U128(r.near_reserve.0 - CREDIT_STORAGE);
         } else {
-            self.cells.insert(id, c);
-            let mut r = self.cells.get(&root_id).cloned().unwrap();
             r.vault = U128(r.vault.0 - CREDIT_STORAGE);
-            self.cells.insert(root_id, r);
         }
+        self.cells.insert(root_id, r);
         self.vault_total -= CREDIT_STORAGE;
         self.terms.insert(root_id, t);
         let credit = self.next_credit;
@@ -1514,6 +1616,7 @@ impl Contract {
             seller: to.clone(),
             amount: U128(amount),
             original_amount: U128(amount),
+            asset,
             invoice_hash,
             opened_at: U64(now),
             due_at,
@@ -1555,15 +1658,16 @@ impl Contract {
         }
         root.vault = U128(root.vault.0 - q.charge);
         self.cells.insert(cr.root.0, root);
-        let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+        let asset = t.args.asset.clone();
+        let mut st = self.stake_get(&t.guarantor, &asset);
         st.amount = U128(st.amount.0 + q.charge);
         st.earned = U128(st.earned.0 + q.charge);
         st.exposure = U128(st.exposure.0 + q.exposure);
-        self.add_seller_exposure(&t.guarantor, &cr.seller, q.exposure);
+        self.add_seller_exposure(&t.guarantor, &asset, &cr.seller, q.exposure);
         if q.exposure > 0 {
-            self.note_seller(&mut st, &t.guarantor, &cr.seller);
+            self.note_seller(&mut st, &t.guarantor, &asset, &cr.seller);
         }
-        self.stakes.insert(t.guarantor.clone(), st);
+        self.stake_put(&t.guarantor, &asset, st);
         t.bond_locked = U128(t.bond_locked.0 + q.bond);
         self.terms.insert(cr.root.0, t);
         cr.bond_locked = U128(q.bond);
@@ -1622,7 +1726,7 @@ impl Contract {
         // 保證金是硬性要求：風險卡寫幾成就鎖幾成，付不出來這張單就不成立，差額不會靜默轉給保證人
         let bond = cr.amount.0 * (t.args.bond_bps as u128) / 10_000;
         let exposure = cr.amount.0 - bond;
-        let st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+        let st = self.stake_get(&t.guarantor, &t.args.asset);
         let mut failures: Vec<String> = vec![];
         if free < charge {
             failures.push("PREMIUM_SHORT".to_string());
@@ -1634,7 +1738,7 @@ impl Contract {
             failures.push("GUARANTOR_CAPACITY".to_string());
         }
         // 串通的賣方最多領走質押的這個比例。分母是收這筆費用之前的質押，比較保守
-        let to_seller = self.seller_exposure_of(&t.guarantor, &cr.seller) + exposure;
+        let to_seller = self.seller_exposure_of(&t.guarantor, &t.args.asset, &cr.seller) + exposure;
         if t.args.seller_cap_bps > 0 && to_seller.saturating_mul(10_000) > st.amount.0.saturating_mul(t.args.seller_cap_bps as u128) {
             failures.push("SELLER_CONCENTRATION".to_string());
         }
@@ -1666,7 +1770,7 @@ impl Contract {
         }
         if attached > owed {
             self.vault_total += attached - owed;
-            self.credit_seller(&who, attached - owed);
+            self.credit_seller(&who, &None, attached - owed);
         }
         event("seller_policy_set", serde_json::json!({"seller": who}));
     }
@@ -1691,19 +1795,19 @@ impl Contract {
         reasons.extend(self.accept_state_failures(cr, t, root, cell, now));
         let q = self.quote(cr, t, root, now);
         reasons.extend(q.failures.iter().cloned());
-        let st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+        let st = self.stake_get(&t.guarantor, &t.args.asset);
         let rec = self.entities.get(&Self::entity_key(&t.guarantor, &t.args.entity_tag)).cloned().unwrap_or_default();
         let seller_fee = if t.args.fee_payer == FeePayer::Seller { q.fee.min(cr.amount.0) } else { 0 };
         OrderCheck {
             ok: reasons.is_empty(),
             reasons,
             order: serde_json::json!({
-                "credit": cr.id, "cell": cr.cell, "seller": cr.seller, "status": cr.status,
+                "credit": cr.id, "cell": cr.cell, "seller": cr.seller, "status": cr.status, "asset": cr.asset,
                 "amount": cr.amount, "original_amount": cr.original_amount,
                 "seller_receives": U128(cr.amount.0 - seller_fee),
                 "due_at": cr.due_at, "tenor_secs": U64(cr.due_at.0.saturating_sub(now) / 1_000_000_000),
                 "fee": U128(q.fee), "fee_periods": q.periods as u32, "fee_payer": t.args.fee_payer,
-                "bond": U128(q.bond), "bond_bps": t.args.bond_bps, "guarantor_exposure": U128(q.exposure),
+                "bond": U128(q.bond), "bond_bps": t.args.bond_bps, "exposure": U128(q.exposure),
                 "guarantor": t.guarantor, "guarantor_listed": self.verifiers.contains_key(&t.guarantor),
                 "guarantor_stake": st.amount, "guarantor_total_exposure": st.exposure,
                 "entity_tag": t.args.entity_tag, "settled": rec.settled, "defaults": rec.defaults,
@@ -1790,20 +1894,21 @@ impl Contract {
         Verdict::CreditSettled { credit, amount }
     }
 
-    /// 公司結清：附上金額，或不附錢時從根格金庫扣。撤銷、過期之後也能用。
+    /// 公司結清：附上金額，或不附錢時從根格金庫扣。撤銷、過期之後也能用。代幣樹帶錢走 ft_on_transfer("settle:<id>")。
     #[payable]
     pub fn settle_by_funder(&mut self, credit: U64) {
+        self.funder_settles(credit, env::predecessor_account_id(), env::attached_deposit().as_yoctonear(), None);
+    }
+
+    fn funder_settles(&mut self, credit: U64, who: AccountId, attached: u128, via: Option<AccountId>) {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
         let root = self.cells.get(&cr.root.0).cloned().unwrap();
-        require!(env::predecessor_account_id() == root.funder, "ONLY_FUNDER");
+        require!(who == root.funder, "ONLY_FUNDER");
+        Self::check_payment_asset(&root.asset, &via, attached);
         require!(matches!(cr.status, CreditStatus::Accepted | CreditStatus::Delivered), "NOT_SETTLEABLE");
-        let attached = env::attached_deposit().as_yoctonear();
         if attached >= cr.amount.0 {
-            self.vault_total += cr.amount.0;
-            if attached > cr.amount.0 {
-                self.vault_total += attached - cr.amount.0;
-                self.credit_seller(&root.funder, attached - cr.amount.0);
-            }
+            self.add_total(&root.asset, attached);
+            self.credit_seller(&root.funder, &root.asset, attached - cr.amount.0);
         } else {
             require!(attached == 0, "PARTIAL_DEPOSIT");
             // 欠保證人時金庫要先還保證人，別筆單要另外帶錢來付
@@ -1821,38 +1926,44 @@ impl Contract {
         self.credits.insert(credit.0, cr);
     }
 
-    /// 賣方提領。先記帳後提領：賣方刪帳號也不會讓公司被判違約。
-    pub fn withdraw(&mut self) -> Promise {
+    /// 賣方提領。先記帳後提領：賣方刪帳號也不會讓公司被判違約。asset 省略 = NEAR。
+    pub fn withdraw(&mut self, asset: Option<AccountId>) -> Promise {
         let who = env::predecessor_account_id();
-        let amount = self.claimable.get(&who).copied().unwrap_or(0);
+        let key = (who.clone(), asset.clone());
+        let amount = self.claimable.get(&key).copied().unwrap_or(0);
         require!(amount > 0, "NOTHING_TO_WITHDRAW");
-        self.claimable.remove(&who);
-        self.vault_total -= amount;
-        Promise::new(who.clone())
-            .transfer(NearToken::from_yoctonear(amount))
-            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_REFUND_CB).on_withdraw(who, U128(amount)))
+        self.claimable.remove(&key);
+        self.sub_total(&asset, amount);
+        Self::send(&asset, who.clone(), amount, "writ withdraw".to_string())
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_REFUND_CB).on_withdraw(who, U128(amount), asset))
     }
 
-    /// 轉帳失敗（帳號不見了）：把錢記回 claimable，帳號回來還能領。
+    /// 轉帳失敗（帳號不見了、沒在代幣註冊）：把錢記回 claimable，帳號回來還能領。
     #[private]
-    pub fn on_withdraw(&mut self, who: AccountId, amount: U128, #[callback_result] r: Result<(), PromiseError>) {
+    pub fn on_withdraw(&mut self, who: AccountId, amount: U128, asset: Option<AccountId>, #[callback_result] r: Result<(), PromiseError>) {
         if r.is_err() {
-            self.vault_total += amount.0;
-            self.credit_seller(&who, amount.0);
+            self.add_total(&asset, amount.0);
+            self.credit_seller(&who, &asset, amount.0);
         }
     }
 
     /// 公司對貨有意見：附全額押金提出爭議，這時不算違約，也不揭露。賴帳者靠這招省不了錢。
+    /// 代幣樹走 ft_on_transfer("dispute:<id>:<reason_hash>")。
     #[payable]
     pub fn dispute(&mut self, credit: U64, reason_hash: String) {
+        self.funder_disputes(credit, env::predecessor_account_id(), env::attached_deposit().as_yoctonear(), reason_hash, None);
+    }
+
+    fn funder_disputes(&mut self, credit: U64, who: AccountId, attached: u128, reason_hash: String, via: Option<AccountId>) {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
         let root = self.cells.get(&cr.root.0).cloned().unwrap();
-        require!(env::predecessor_account_id() == root.funder, "ONLY_FUNDER");
+        require!(who == root.funder, "ONLY_FUNDER");
+        Self::check_payment_asset(&root.asset, &via, attached);
         require!(matches!(cr.status, CreditStatus::Accepted | CreditStatus::Delivered), "NOT_DISPUTABLE");
-        require!(env::attached_deposit().as_yoctonear() >= cr.amount.0, "ESCROW_FULL_AMOUNT");
+        require!(attached >= cr.amount.0, "ESCROW_FULL_AMOUNT");
         hex32(&reason_hash, "reason_hash");
-        cr.dispute_escrow = U128(env::attached_deposit().as_yoctonear());
-        self.vault_total += cr.dispute_escrow.0;
+        cr.dispute_escrow = U128(attached);
+        self.add_total(&root.asset, attached);
         cr.status = CreditStatus::Disputed;
         cr.recourse_until = U64(env::block_timestamp() + self.windows.dispute_timeout.0 * 1_000_000_000);
         self.credits.insert(credit.0, cr);
@@ -1911,13 +2022,14 @@ impl Contract {
         r.vault = U128(r.vault.0 - take);
         left -= take;
         self.cells.insert(cr.root.0, r);
-        let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+        let asset = t.args.asset.clone();
+        let mut st = self.stake_get(&t.guarantor, &asset);
         st.exposure = U128(st.exposure.0 - cr.exposure.0);
         require!(st.amount.0 >= left, "GUARANTOR_SHORT");
         st.amount = U128(st.amount.0 - left);
         st.claims_paid = U128(st.claims_paid.0 + left);
-        self.stakes.insert(t.guarantor.clone(), st);
-        self.sub_seller_exposure(&t.guarantor, &cr.seller, cr.exposure.0);
+        self.stake_put(&t.guarantor, &asset, st);
+        self.sub_seller_exposure(&t.guarantor, &asset, &cr.seller, cr.exposure.0);
         self.pay_seller(&cr);
         t.outstanding = U128(t.outstanding.0 - cr.amount.0);
         t.bond_locked = U128(t.bond_locked.0 - cr.bond_locked.0);
@@ -1938,31 +2050,33 @@ impl Contract {
         self.release_retained(cr.root.0);
     }
 
-    /// 公司償還保證人：解凍，維持封存。
+    /// 公司償還保證人：解凍，維持封存。代幣樹帶錢走 ft_on_transfer("reimburse:<id>")。
     #[payable]
     pub fn reimburse(&mut self, credit: U64) {
+        self.funder_repays(credit, env::predecessor_account_id(), env::attached_deposit().as_yoctonear(), None);
+    }
+
+    fn funder_repays(&mut self, credit: U64, who: AccountId, attached: u128, via: Option<AccountId>) {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
         let root = self.cells.get(&cr.root.0).cloned().unwrap();
-        require!(env::predecessor_account_id() == root.funder, "ONLY_FUNDER");
+        require!(who == root.funder, "ONLY_FUNDER");
+        Self::check_payment_asset(&root.asset, &via, attached);
         require!(matches!(cr.status, CreditStatus::Defaulted | CreditStatus::Enforced) && cr.debt.0 > 0, "NO_DEBT");
-        let d = env::attached_deposit().as_yoctonear();
         let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
         // 金庫裡沒被鎖的錢先抵，不足的才要帶錢來
         let mut r = root.clone();
         let from_vault = r.vault.0.saturating_sub(t.bond_locked.0).min(cr.debt.0);
         let due = cr.debt.0 - from_vault;
-        require!(d >= due, "PAY_FULL_DEBT");
+        require!(attached >= due, "PAY_FULL_DEBT");
         r.vault = U128(r.vault.0 - from_vault);
         self.cells.insert(cr.root.0, r);
-        let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+        let asset = root.asset.clone();
+        let mut st = self.stake_get(&t.guarantor, &asset);
         st.amount = U128(st.amount.0 + cr.debt.0);
         st.recovered = U128(st.recovered.0 + cr.debt.0);
-        self.stakes.insert(t.guarantor.clone(), st);
-        self.vault_total += due;
-        if d > due {
-            self.vault_total += d - due;
-            self.credit_seller(&root.funder, d - due);
-        }
+        self.stake_put(&t.guarantor, &asset, st);
+        self.add_total(&asset, attached);
+        self.credit_seller(&root.funder, &asset, attached - due);
         t.open_debts -= 1;
         self.terms.insert(cr.root.0, t);
         cr.debt = U128(0);
@@ -1993,10 +2107,11 @@ impl Contract {
         if pay > 0 {
             root.vault = U128(root.vault.0 - pay);
             self.cells.insert(cr.root.0, root);
-            let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+            let asset = t.args.asset.clone();
+            let mut st = self.stake_get(&t.guarantor, &asset);
             st.amount = U128(st.amount.0 + pay);
             st.recovered = U128(st.recovered.0 + pay);
-            self.stakes.insert(t.guarantor.clone(), st);
+            self.stake_put(&t.guarantor, &asset, st);
             cr.debt = U128(cr.debt.0 - pay);
         }
         if cr.debt.0 == 0 {
@@ -2045,7 +2160,7 @@ impl Contract {
             cur = self.cells.get(&p)?;
         }
         Some(serde_json::json!({
-            "credit": cr.id, "status": cr.status, "seller": cr.seller, "amount": cr.amount, "due_at": cr.due_at,
+            "credit": cr.id, "status": cr.status, "seller": cr.seller, "amount": cr.amount, "asset": cr.asset, "due_at": cr.due_at,
             "invoice_hash": cr.invoice_hash, "agent_path": path.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
             "amc_said": root.amc_said, "guarantor": t.guarantor, "terms_hash": t.args.terms_hash, "entity_tag": t.args.entity_tag,
             "lei_commit": root.lei_commit, "legal_entity": self.unseals.get(&cr.root.0).and_then(|u| u.lei.clone()).unwrap_or_else(|| "sealed".to_string()),
@@ -2066,10 +2181,11 @@ impl Contract {
         t.bond_locked = U128(t.bond_locked.0 - (cr.bond_locked.0 - bond));
         let cut = cr.exposure.0 - exposure;
         if cut > 0 {
-            let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+            let asset = t.args.asset.clone();
+            let mut st = self.stake_get(&t.guarantor, &asset);
             st.exposure = U128(st.exposure.0 - cut);
-            self.stakes.insert(t.guarantor.clone(), st);
-            self.sub_seller_exposure(&t.guarantor, &cr.seller, cut);
+            self.stake_put(&t.guarantor, &asset, st);
+            self.sub_seller_exposure(&t.guarantor, &asset, &cr.seller, cut);
         }
         if t.args.fee_payer == FeePayer::Seller {
             cr.fee = U128(guarantee_fee(final_amount, t.args.premium_bps, cr.fee_periods as u128));
@@ -2081,7 +2197,7 @@ impl Contract {
     }
 
     /// 帳簿記下這個賣方。滿了就換掉曝險最小的，前提是它比這個賣方小。
-    fn note_seller(&self, st: &mut Stake, guarantor: &AccountId, seller: &AccountId) {
+    fn note_seller(&self, st: &mut Stake, guarantor: &AccountId, asset: &Option<AccountId>, seller: &AccountId) {
         if st.sellers.contains(seller) {
             return;
         }
@@ -2089,8 +2205,8 @@ impl Contract {
             st.sellers.push(seller.clone());
             return;
         }
-        let cur = self.seller_exposure_of(guarantor, seller);
-        let low = st.sellers.iter().enumerate().map(|(i, s)| (self.seller_exposure_of(guarantor, s), i)).min();
+        let cur = self.seller_exposure_of(guarantor, asset, seller);
+        let low = st.sellers.iter().enumerate().map(|(i, s)| (self.seller_exposure_of(guarantor, asset, s), i)).min();
         if let Some((e, i)) = low {
             if e < cur {
                 st.sellers[i] = seller.clone();
@@ -2098,45 +2214,56 @@ impl Contract {
         }
     }
 
-    fn seller_exposure_of(&self, guarantor: &AccountId, seller: &AccountId) -> u128 {
-        self.seller_exposure.get(&(guarantor.clone(), seller.clone())).copied().unwrap_or(0)
+    fn stake_get(&self, who: &AccountId, asset: &Option<AccountId>) -> Stake {
+        self.stakes.get(&(who.clone(), asset.clone())).cloned().unwrap_or_default()
     }
 
-    fn add_seller_exposure(&mut self, guarantor: &AccountId, seller: &AccountId, amount: u128) {
+    fn stake_put(&mut self, who: &AccountId, asset: &Option<AccountId>, st: Stake) {
+        self.stakes.insert((who.clone(), asset.clone()), st);
+    }
+
+    fn seller_exposure_of(&self, guarantor: &AccountId, asset: &Option<AccountId>, seller: &AccountId) -> u128 {
+        self.seller_exposure.get(&(guarantor.clone(), asset.clone(), seller.clone())).copied().unwrap_or(0)
+    }
+
+    fn add_seller_exposure(&mut self, guarantor: &AccountId, asset: &Option<AccountId>, seller: &AccountId, amount: u128) {
         if amount > 0 {
-            let cur = self.seller_exposure_of(guarantor, seller);
-            self.seller_exposure.insert((guarantor.clone(), seller.clone()), cur + amount);
+            let cur = self.seller_exposure_of(guarantor, asset, seller);
+            self.seller_exposure.insert((guarantor.clone(), asset.clone(), seller.clone()), cur + amount);
         }
     }
 
-    fn sub_seller_exposure(&mut self, guarantor: &AccountId, seller: &AccountId, amount: u128) {
-        let left = self.seller_exposure_of(guarantor, seller) - amount;
+    fn sub_seller_exposure(&mut self, guarantor: &AccountId, asset: &Option<AccountId>, seller: &AccountId, amount: u128) {
+        let left = self.seller_exposure_of(guarantor, asset, seller) - amount;
+        let key = (guarantor.clone(), asset.clone(), seller.clone());
         if left == 0 {
-            self.seller_exposure.remove(&(guarantor.clone(), seller.clone()));
+            self.seller_exposure.remove(&key);
         } else {
-            self.seller_exposure.insert((guarantor.clone(), seller.clone()), left);
+            self.seller_exposure.insert(key, left);
         }
     }
 
-    fn credit_seller(&mut self, seller: &AccountId, amount: u128) {
+    fn credit_seller(&mut self, seller: &AccountId, asset: &Option<AccountId>, amount: u128) {
         if amount == 0 {
             return;
         }
-        let cur = self.claimable.get(seller).copied().unwrap_or(0);
-        self.claimable.insert(seller.clone(), cur + amount);
+        let key = (seller.clone(), asset.clone());
+        let cur = self.claimable.get(&key).copied().unwrap_or(0);
+        self.claimable.insert(key, cur + amount);
     }
 
     /// 賣方收款的唯一入口（結清、公司代付、違約、爭議勝）。賣方付費時從貨款扣，記進保證人的質押與累計收入。
     /// 費用可能超過貨款（天期很長）：最多扣到貨款為零。
     fn pay_seller(&mut self, cr: &Credit) {
         let t = self.terms.get(&cr.root.0).cloned().unwrap();
+        let asset = t.args.asset.clone();
         let fee = if t.args.fee_payer == FeePayer::Seller { cr.fee.0.min(cr.amount.0) } else { 0 };
-        self.credit_seller(&cr.seller, cr.amount.0 - fee);
+        self.credit_seller(&cr.seller, &asset, cr.amount.0 - fee);
         if fee > 0 {
-            let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+            let mut st = self.stake_get(&t.guarantor, &asset);
             st.amount = U128(st.amount.0 + fee);
             st.earned = U128(st.earned.0 + fee);
-            self.stakes.insert(t.guarantor, st);
+            self.stake_put(&t.guarantor, &asset, st);
         }
     }
 
@@ -2146,10 +2273,11 @@ impl Contract {
         t.outstanding = U128(t.outstanding.0 - cr.amount.0);
         t.bond_locked = U128(t.bond_locked.0 - cr.bond_locked.0);
         if cr.exposure.0 > 0 {
-            let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+            let asset = t.args.asset.clone();
+            let mut st = self.stake_get(&t.guarantor, &asset);
             st.exposure = U128(st.exposure.0 - cr.exposure.0);
-            self.stakes.insert(t.guarantor.clone(), st);
-            self.sub_seller_exposure(&t.guarantor, &cr.seller, cr.exposure.0);
+            self.stake_put(&t.guarantor, &asset, st);
+            self.sub_seller_exposure(&t.guarantor, &asset, &cr.seller, cr.exposure.0);
         }
         self.terms.insert(cr.root.0, t);
         cr.status = status;
@@ -2187,12 +2315,10 @@ impl Contract {
         cr.dispute_escrow = U128(0);
         if to_seller {
             self.pay_seller(&cr);
-            if escrow > amount {
-                self.credit_seller(&root.funder, escrow - amount);
-            }
+            self.credit_seller(&root.funder, &root.asset, escrow - amount);
             self.finish_settled(&mut cr);
         } else {
-            self.credit_seller(&root.funder, escrow);
+            self.credit_seller(&root.funder, &root.asset, escrow);
             self.release(&mut cr, CreditStatus::Cancelled, 0);
         }
         event("credit_resolved", serde_json::json!({"credit": cr.id.0.to_string(), "to_seller": to_seller}));
@@ -2239,7 +2365,7 @@ mod tests {
         let cell = |status: Status| Cell {
             amc_said: "E".into(), issuer_aid: String::new(), issuer_pk: String::new(), agent_pk: pk.clone(), verifier: writ.clone(), funder: funder.clone(),
             lei_commit: String::new(), ecr_commit: String::new(), scope: vec![], valid_until: U64(0), unit: U128(1), n: 1, idx: 1, unclaimed: U128(0),
-            root: 1, parent: None, depth: 0, children: vec![], tree_size: 1, w_cur: String::new(), daily_links: 1, max_links: 1, max_strikes: 3, day: 0, day_used: 1, vault: U128(0), spends: 1, rejects: 0, strikes: 0, status, asset: None,
+            root: 1, parent: None, depth: 0, children: vec![], tree_size: 1, near_reserve: U128(0), w_cur: String::new(), daily_links: 1, max_links: 1, max_strikes: 3, day: 0, day_used: 1, vault: U128(0), spends: 1, rejects: 0, strikes: 0, status, asset: None,
         };
         w.cells.insert(1, cell(Status::Revoked { by: funder.clone(), evidence: "x".into() }));
         w.cells.insert(2, cell(Status::Active));
@@ -2257,7 +2383,7 @@ mod tests {
         assert_eq!(w.vault_total, 5);
 
         // 公司還欠錢：撤銷中轉帳失敗的錢留在根格，不退給公司
-        let args = CreditArgs { limit: U128(1), bond_bps: 0, premium_bps: 0, min_tenor: U64(0), max_tenor: U64(1), terms_hash: String::new(), terms_sig: String::new(), entity_tag: String::new(), arbiter: writ.clone(), fee_payer: FeePayer::Buyer, seller_cap_bps: 0 };
+        let args = CreditArgs { limit: U128(1), bond_bps: 0, premium_bps: 0, min_tenor: U64(0), max_tenor: U64(1), terms_hash: String::new(), terms_sig: String::new(), entity_tag: String::new(), arbiter: writ.clone(), fee_payer: FeePayer::Buyer, seller_cap_bps: 0, asset: None };
         w.terms.insert(1, CreditTerms { args, guarantor: writ.clone(), terms_ecr_commit: String::new(), outstanding: U128(0), bond_locked: U128(0), open_debts: 1 });
         ctx(vec![PromiseResult::Failed]);
         assert!(matches!(w.on_transfer(U64(1), U128(5), "00".repeat(32), funder.clone(), 1, 0, Err(PromiseError::Failed)), Verdict::Rejected { .. }));

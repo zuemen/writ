@@ -1,24 +1,23 @@
 {
-  "name": "writ-app",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "writ-demo",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Demo, setup and SDK code for Writ, payment guarantees for AI agents on NEAR.",
+  "license": "MIT",
+  "author": "Ting-Yi Chu (zuemen)",
+  "repository": "github:zuemen/writ",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "setup": "tsx src/setup.ts",
     "demo": "tsx src/demo.ts",
     "ui": "tsx src/server.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "@types/node": "^26.6.6",
     "near-api-js": "^7.4.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   },
-  "type": "module",
   "devDependencies": {
     "binaryen": "^123.0.0"
   }

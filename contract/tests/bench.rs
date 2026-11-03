@@ -120,9 +120,9 @@ fn attest_msg(a: &Value, funder: &AccountId, contract: &AccountId) -> String {
         a["valid_until"].as_str().unwrap(), a["daily_links"], a["max_links"], a["max_strikes"], a["lei_commit"].as_str().unwrap(), a["ecr_commit"].as_str().unwrap(), funder,
         a["verifier"].as_str().unwrap(), a["attested_at"].as_str().unwrap(),
         a.get("asset").and_then(|v| v.as_str()).unwrap_or("near"),
-        a.get("credit").filter(|c| !c.is_null()).map(|c| format!("{},{},{},{},{},{},{},{},{},{},{}",
+        a.get("credit").filter(|c| !c.is_null()).map(|c| format!("{},{},{},{},{},{},{},{},{},{},{},{}",
             c["limit"].as_str().unwrap(), c["bond_bps"], c["premium_bps"], c["min_tenor"].as_str().unwrap(), c["max_tenor"].as_str().unwrap(),
-            c["terms_hash"].as_str().unwrap(), c["terms_sig"].as_str().unwrap(), c["entity_tag"].as_str().unwrap(), c["arbiter"].as_str().unwrap(), c["fee_payer"].as_str().unwrap(), c["seller_cap_bps"])).unwrap_or_else(|| "none".to_string())
+            c["terms_hash"].as_str().unwrap(), c["terms_sig"].as_str().unwrap(), c["entity_tag"].as_str().unwrap(), c["arbiter"].as_str().unwrap(), c["fee_payer"].as_str().unwrap(), c["seller_cap_bps"], c.get("asset").and_then(|v| v.as_str()).unwrap_or("near"))).unwrap_or_else(|| "none".to_string())
     )
 }
 
@@ -1353,6 +1353,8 @@ struct CreditWorld {
     le_aid: String,
     ecr_said: String,
     extra: Vec<Account>,
+    token: Option<Contract>,
+    unit: u128,
 }
 
 /// 短時間窗的合約，一棵可賒帳的格。保證人質押 stake NEAR。金庫 30 節。
@@ -1375,15 +1377,15 @@ async fn credit_world_fee(bond_bps: u32, premium_bps: u32, stake: u128, grace: u
 }
 
 /// 信用世界的所有選項。預設：沒保證金、沒費用、質押 5 NEAR、金庫 30 節。
-struct CwOpts { bond: u32, premium: u32, stake: u128, grace: u64, recourse: u64, vault: u128, lei: String, inspect: u64, max_tenor: u64, fee_payer: &'static str, accept_ttl: u64, cap: u32, extra_sellers: u32 }
+struct CwOpts { bond: u32, premium: u32, stake: u128, grace: u64, recourse: u64, vault: u128, lei: String, inspect: u64, max_tenor: u64, fee_payer: &'static str, accept_ttl: u64, cap: u32, extra_sellers: u32, token: bool }
 impl Default for CwOpts {
     fn default() -> Self {
-        Self { bond: 0, premium: 0, stake: 5, grace: 0, recourse: 1, vault: 30 * UNIT, lei: LEI.to_string(), inspect: 0, max_tenor: 3600, fee_payer: "Buyer", accept_ttl: 2, cap: 0, extra_sellers: 0 }
+        Self { bond: 0, premium: 0, stake: 5, grace: 0, recourse: 1, vault: 30 * UNIT, lei: LEI.to_string(), inspect: 0, max_tenor: 3600, fee_payer: "Buyer", accept_ttl: 2, cap: 0, extra_sellers: 0, token: false }
     }
 }
 
 async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
-    let CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei, inspect, max_tenor, fee_payer, accept_ttl, cap, extra_sellers } = x;
+    let CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei, inspect, max_tenor, fee_payer, accept_ttl, cap, extra_sellers, token } = x;
     let worker = near_workspaces::sandbox().await?;
     let writ = worker.dev_deploy(&wasm_bytes()?).await?;
     writ.call("new").args_json(json!({"owner": writ.id(), "unseal_delay_secs": 5,
@@ -1396,11 +1398,21 @@ async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
     let arbiter = worker.dev_create_account().await?;
     let verifier_sk = SigningKey::generate(&mut rand::thread_rng());
     writ.call("set_verifier").args_json(json!({"account": verifier.id(), "pk_hex": hex::encode(verifier_sk.verifying_key().to_bytes())})).transact().await?.into_result()?;
-    if stake > 0 {
+    if stake > 0 && !token {
         verifier.call(writ.id(), "stake").deposit(NearToken::from_near(stake)).transact().await?.into_result()?;
     }
     let attacker_start = balance(&attacker).await;
     let w = World { worker, writ, verifier, verifier_sk, funder, merchant, attacker, attacker_start };
+    // 代幣世界：6 位小數的穩定幣，每節 1 顆
+    let ft = if token {
+        let t = w.worker.dev_deploy(&std::fs::read(FT_WASM)?).await?;
+        t.call("new").args_json(json!({"owner_id": w.funder.id(), "total_supply": (1_000_000 * T).to_string()})).transact().await?.into_result()?;
+        for who in [w.writ.id(), w.merchant.id(), w.verifier.id(), w.attacker.id(), arbiter.id()] {
+            w.funder.call(t.id(), "storage_deposit").args_json(json!({"account_id": who})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
+        }
+        Some(t)
+    } else { None };
+    let unit = if token { T } else { UNIT };
 
     let le = SigningKey::generate(&mut rand::thread_rng());
     let le_pk = hex::encode(le.verifying_key().to_bytes());
@@ -1416,6 +1428,7 @@ async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
     }
     o.ecr_commit = hex::encode(Sha256::digest(format!("{}|{}|{}|{}", le_aid, le_pk, ecr_said, ECR_COMMIT_SALT)));
     o.max_links = 10;
+    o.unit = unit;
     let agent_sk = SecretKey::from_random(KeyType::ED25519);
     let pw = Payword::new(o.n);
     let until = now_ns(&w).await? + 3_600 * SEC;
@@ -1427,10 +1440,27 @@ async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
         "attested_at": ATTESTED_NOW.to_string(), "agent_pk": agent_sk.public_key(), "w0": pw.w0(), "n": o.n, "unit": o.unit.to_string(),
         "scope": o.scope, "valid_until": until.to_string(), "daily_links": o.daily,
         "lei_commit": hex::encode(Sha256::digest(format!("{}|{}", committed_lei, LEI_SALT))), "ecr_commit": o.ecr_commit, "verifier": w.verifier.id(),
-        "credit": {"limit": (10 * UNIT).to_string(), "bond_bps": bond_bps, "premium_bps": premium_bps, "min_tenor": "0", "max_tenor": max_tenor.to_string(), "terms_hash": terms_hash,
+        "credit": {"limit": (10 * unit).to_string(), "bond_bps": bond_bps, "premium_bps": premium_bps, "min_tenor": "0", "max_tenor": max_tenor.to_string(), "terms_hash": terms_hash,
                    "terms_sig": terms_sig, "entity_tag": "ENTITY-7", "arbiter": arbiter.id(), "fee_payer": fee_payer, "seller_cap_bps": cap},
     });
+    if let Some(t) = &ft {
+        // 驗證者簽的信用資產和格的資產不同：不能開
+        args["asset"] = json!(t.id());
+        let sig = w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes());
+        let mut bad = args.clone();
+        bad["signature"] = json!(hex::encode(sig.to_bytes()));
+        let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": bad})).deposit(NearToken::from_near(1)).max_gas().transact().await?;
+        assert!(format!("{:?}", r.into_result()).contains("CREDIT_ASSET_MISMATCH"));
+        args["credit"]["asset"] = json!(t.id());
+    }
     args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
+    if ft.is_some() {
+        // 信用資產簽進去了：事後改掉也開不了
+        let mut bad = args.clone();
+        bad["credit"]["asset"] = Value::Null;
+        let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": bad})).deposit(NearToken::from_near(1)).max_gas().transact().await?;
+        assert!(format!("{:?}", r.into_result()).contains("BAD_ATTESTATION"));
+    }
     // 保證人簽的是 Seller，公司想改成 Buyer（反過來也一樣）：簽章不過
     if fee_payer == "Seller" || cap > 0 {
         let mut tampered = args.clone();
@@ -1439,9 +1469,18 @@ async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
         let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": tampered})).deposit(NearToken::from_yoctonear(fee(20) + vault)).max_gas().transact().await?;
         assert!(format!("{:?}", r.into_result()).contains("BAD_ATTESTATION"));
     }
-    let id: String = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_yoctonear(fee(20) + vault)).max_gas().transact().await?.into_result()?.json()?;
+    // 代幣樹：NEAR 留作準備（1 NEAR），金庫與質押都走 ft_transfer_call
+    let near = if ft.is_some() { fee(20) + NEAR_RESERVE } else { fee(20) + vault };
+    let id: String = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_yoctonear(near)).max_gas().transact().await?.into_result()?.json()?;
     let agent = Account::from_secret_key(w.writ.id().clone(), agent_sk, &w.worker);
-    Ok(CreditWorld { w, cell: id.parse()?, agent, pw, arbiter, le, le_aid, ecr_said, extra })
+    if let Some(t) = &ft {
+        w.funder.call(t.id(), "ft_transfer_call").args_json(json!({"receiver_id": w.writ.id(), "amount": vault.to_string(), "msg": id.clone()})).deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+        if stake > 0 {
+            w.funder.call(t.id(), "ft_transfer").args_json(json!({"receiver_id": w.verifier.id(), "amount": (stake * T).to_string()})).deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+            w.verifier.call(t.id(), "ft_transfer_call").args_json(json!({"receiver_id": w.writ.id(), "amount": (stake * T).to_string(), "msg": "stake"})).deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+        }
+    }
+    Ok(CreditWorld { w, cell: id.parse()?, agent, pw, arbiter, le, le_aid, ecr_said, extra, token: ft, unit })
 }
 
 impl CreditWorld {
@@ -2383,6 +2422,335 @@ async fn a86_throwaway_sellers_cannot_grow_the_book_without_limit() -> anyhow::R
     let b: Value = w.writ.view("guarantor_book").args_json(json!({"account": w.verifier.id()})).await?.json()?;
     assert_eq!(b["top_sellers"].as_array().unwrap().len(), 5);
     bench("A86", "throwaway sellers grow the guarantor's record until every accept runs out of gas", "list stays at 8", "list stays at 8", gain(w).await);
+    Ok(())
+}
+
+// ---------------------------------------------------------------- 第十三輪：信用改用穩定幣（6 位小數，contract/ft-mock）
+
+const NEAR_RESERVE: u128 = 1_000_000_000_000_000_000_000_000;
+
+impl CreditWorld {
+    /// 代幣世界預設：金庫 30 顆、質押 50 顆。
+    fn tk(&self) -> &Contract { self.token.as_ref().unwrap() }
+    /// who 從代幣合約 ft_transfer_call 進來，回傳實際用掉多少（被退回或 panic 就是 0）。
+    async fn ftcall(&self, who: &Account, amount: u128, msg: String) -> u128 {
+        let v: String = who.call(self.tk().id(), "ft_transfer_call").args_json(json!({"receiver_id": self.w.writ.id(), "amount": amount.to_string(), "msg": msg}))
+            .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await.unwrap().into_result().unwrap().json().unwrap();
+        v.parse().unwrap()
+    }
+    async fn fbal(&self, who: &AccountId) -> u128 { ft_balance(&self.w, self.tk(), who).await }
+    async fn ttotal(&self) -> u128 {
+        let v: String = self.w.writ.view("token_total").args_json(json!({"asset": self.tk().id()})).await.unwrap().json().unwrap();
+        v.parse().unwrap()
+    }
+    async fn tstake(&self) -> Value {
+        self.w.writ.view("stake_of").args_json(json!({"account": self.w.verifier.id(), "asset": self.tk().id()})).await.unwrap().json().unwrap()
+    }
+    async fn tclaim(&self, who: &AccountId) -> u128 {
+        let v: String = self.w.writ.view("claimable_of").args_json(json!({"account": who, "asset": self.tk().id()})).await.unwrap().json().unwrap();
+        v.parse().unwrap()
+    }
+    /// 帳上的總額等於合約在代幣上的餘額：一顆都沒有憑空多出來或消失。
+    async fn token_books_match(&self) {
+        assert_eq!(self.ttotal().await, self.fbal(self.w.writ.id()).await, "token books vs token balance");
+    }
+}
+
+fn tworld() -> CwOpts { CwOpts { token: true, stake: 50, vault: 30 * T, accept_ttl: 3600, ..Default::default() } }
+
+#[tokio::test]
+async fn b35_credit_in_a_stablecoin_with_the_seller_paying_the_fee() -> anyhow::Result<()> {
+    let cw = credit_world_x(CwOpts { premium: 200, fee_payer: "Seller", bond: 2500, ..tworld() }).await?;
+    let w = &cw.w;
+    bench("A87", "the credit asset differs from the cell's, or is swapped after the guarantor signed", "CREDIT_ASSET_MISMATCH, BAD_ATTESTATION", "CREDIT_ASSET_MISMATCH, BAD_ATTESTATION", gain(w).await);
+    let card = cw.card().await;
+    assert_eq!(card["asset"], cw.tk().id().as_str());
+    assert_eq!(card["near_reserve"], NEAR_RESERVE.to_string());
+    assert_eq!(card["guarantor_stake"], (50 * T).to_string());
+    cw.token_books_match().await;
+    let n0: Value = w.writ.view("solvency").await?.json()?;
+    assert_eq!(n0["solvent"], true);
+
+    // 用量單：上限 5 顆，實際 4 顆
+    let id = cw.opened(5, 5, 3600, "INV-USDC").await;
+    let c = cw.credit(&id).await;
+    assert_eq!(c["asset"], cw.tk().id().as_str());
+    let card = cw.card().await;
+    assert!(card["near_reserve"].as_str().unwrap().parse::<u128>()? < NEAR_RESERVE, "the order's storage came out of the NEAR reserve");
+    let chk: Value = w.writ.view("check_order").args_json(json!({"credit": id})).await?.json()?;
+    assert_eq!(chk["ok"], true, "{}", chk);
+    assert_eq!(chk["order"]["seller_receives"], (5 * T - 5 * T / 50).to_string());
+    cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
+    assert_eq!(cw.credit(&id).await["bond_locked"], (5 * T / 4).to_string());
+    assert_eq!(cw.tstake().await["earned"], "0", "nothing charged at accept");
+    cw.seller("mark_delivered", json!({"credit": id, "delivery_hash": hex::encode([1u8; 32]), "final_amount": (4 * T).to_string()})).await.unwrap();
+    assert_eq!(cw.credit(&id).await["bond_locked"], T.to_string());
+    let v: Value = cw.agent.call(w.writ.id(), "settle").args_json(json!({"credit": id})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
+    assert_eq!(v["CreditSettled"]["amount"], (4 * T).to_string());
+    let fee = 4 * T / 50;
+    assert_eq!(cw.tclaim(w.merchant.id()).await, 4 * T - fee);
+    let st = cw.tstake().await;
+    assert_eq!((st["amount"].as_str().unwrap().parse::<u128>()?, st["earned"].as_str().unwrap().parse::<u128>()?), (50 * T + fee, fee));
+    cw.token_books_match().await;
+    // 賣方提領真的拿到代幣
+    let before = cw.fbal(w.merchant.id()).await;
+    cw.seller("withdraw", json!({"asset": cw.tk().id()})).await.unwrap();
+    assert_eq!(cw.fbal(w.merchant.id()).await - before, 4 * T - fee);
+    cw.token_books_match().await;
+    bench("B35", "credit in a 6-decimal stablecoin: seller pays the fee, usage order, NEAR reserve pays storage", "seller received 3.92 of 4", "seller received 3.92 of 4", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b36_a_stablecoin_default_is_paid_by_the_token_stake_and_recovered_in_the_token() -> anyhow::Result<()> {
+    let cw = credit_world_x(CwOpts { vault: 2 * T, ..tworld() }).await?;
+    let w = &cw.w;
+    let id = cw.delivered(5, 5, 1, "INV-TD").await;
+    let other = cw.opened(6, 1, 3600, "INV-OPEN").await;
+    cw.seller("accept_credit", json!({"credit": other})).await.unwrap();
+    wait_secs(2).await;
+    cw.seller("claim_default", json!({"credit": id})).await.unwrap();
+    let debt: u128 = cw.credit(&id).await["debt"].as_str().unwrap().parse()?;
+    assert_eq!(debt, 3 * T);
+    assert_eq!(cw.tclaim(w.merchant.id()).await, 5 * T, "the seller is whole");
+    let st = cw.tstake().await;
+    assert_eq!(st["amount"], (47 * T).to_string());
+    assert_eq!(st["claims_paid"], (3 * T).to_string());
+    assert_eq!(cw.card().await["frozen"], true);
+    cw.token_books_match().await;
+    // 公司撤銷想走人：金庫的錢沒了也欠著，準備退回 NEAR 可提領，債還在
+    let f0 = cw.fbal(w.funder.id()).await;
+    cw.funder("revoke", json!({"cell": cw.cell.to_string(), "evidence": "skip town"}), 0).await.unwrap();
+    assert_eq!(cw.fbal(w.funder.id()).await, f0, "no token comes back while it owes");
+    let c: Value = w.writ.view("claimable_of").args_json(json!({"account": w.funder.id()})).await?.json()?;
+    assert!(c.as_str().unwrap().parse::<u128>()? > 0, "the unused NEAR reserve is the company's");
+    let n0 = balance(&w.funder).await;
+    cw.funder("withdraw", json!({}), 0).await.unwrap();
+    assert!(balance(&w.funder).await > n0);
+    // 還債：少一顆不行，多的記進可提領
+    let f0 = cw.fbal(w.funder.id()).await;
+    assert_eq!(cw.ftcall(&w.funder, debt - 1, format!("reimburse:{}", id)).await, 0, "refunded in full");
+    assert_eq!(cw.fbal(w.funder.id()).await, f0);
+    assert_eq!(cw.ftcall(&w.funder, debt + 5, format!("reimburse:{}", id)).await, debt + 5);
+    assert_eq!(cw.credit(&id).await["status"], "Reimbursed");
+    assert_eq!(cw.tclaim(w.funder.id()).await, 5);
+    assert_eq!(cw.tstake().await["recovered"], debt.to_string());
+    assert_eq!(cw.card().await["frozen"], false);
+    // 還有一筆未結：結清後收工
+    assert_eq!(cw.ftcall(&w.funder, T, format!("settle:{}", other)).await, T);
+    assert_eq!(cw.card().await["outstanding"], "0");
+    cw.token_books_match().await;
+    let b: Value = w.writ.view("guarantor_book").args_json(json!({"account": w.verifier.id(), "asset": cw.tk().id()})).await?.json()?;
+    assert_eq!(b["net_loss"], "0");
+    assert_eq!(cw.solvent().await["solvent"], true);
+    bench("B36", "stablecoin default: the token stake pays the seller, the company repays in the token, revoking does not escape", "seller whole, debt repaid", "seller whole, debt repaid", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b37_a_token_tree_hires_disputes_and_closes_per_asset() -> anyhow::Result<()> {
+    let cw = credit_world_x(tworld()).await?;
+    let w = &cw.w;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    let until = c["valid_until"].as_str().unwrap().to_string();
+    let reserve0 = cw.card().await["near_reserve"].as_str().unwrap().parse::<u128>()?;
+    let sk = SecretKey::from_random(KeyType::ED25519);
+    let cpw = Payword::new(3);
+    let v = hire(&cw.agent, w.writ.id(), &cw.pw.link(3), 3, hire_args(&sk.public_key(), &cpw, &[w.merchant.id()], &until, 3, 3)).await;
+    let child: u64 = v["Hired"]["child"].as_str().unwrap_or_else(|| panic!("{}", v)).parse()?;
+    let cagent = Account::from_secret_key(w.writ.id().clone(), sk, &w.worker);
+    let ch: Value = w.writ.view("get_cell").args_json(json!({"cell": child.to_string()})).await?.json()?;
+    assert_eq!(ch["vault"], (3 * T).to_string());
+    assert_eq!(ch["asset"], cw.tk().id().as_str());
+    let reserve1 = cw.card().await["near_reserve"].as_str().unwrap().parse::<u128>()?;
+    assert_eq!(reserve0 - reserve1, 100_000_000_000_000_000_000_000 + 20_000_000_000_000_000_000_000 + 3_000_000_000_000_000_000_000, "the hire fee is NEAR from the reserve");
+    let m0 = cw.fbal(w.merchant.id()).await;
+    let v = spend(&cagent, w.writ.id(), &cpw.link(1), 1, w.merchant.id()).await.unwrap();
+    assert!(v.get("Paid").is_some(), "{}", v);
+    assert_eq!(cw.fbal(w.merchant.id()).await - m0, T, "the sub-agent pays in the token");
+    cw.token_books_match().await;
+
+    // 爭議：押金是代幣；判公司勝全退，判賣方勝付賣方
+    let lose = cw.delivered(4, 1, 3600, "INV-D1").await;
+    assert_eq!(cw.ftcall(&w.funder, T, format!("dispute:{}:{}", lose, hex::encode([2u8; 32]))).await, T);
+    assert_eq!(cw.credit(&lose).await["dispute_escrow"], T.to_string());
+    cw.arbiter.call(w.writ.id(), "resolve_dispute").args_json(json!({"credit": lose, "to_seller": false})).gas(near_workspaces::types::Gas::from_tgas(100)).transact().await?.into_result()?;
+    assert_eq!(cw.tclaim(w.funder.id()).await, T);
+    let win = cw.delivered(5, 1, 3600, "INV-D2").await;
+    assert_eq!(cw.ftcall(&w.funder, T + 3, format!("dispute:{}:{}", win, hex::encode([2u8; 32]))).await, T + 3);
+    cw.arbiter.call(w.writ.id(), "resolve_dispute").args_json(json!({"credit": win, "to_seller": true})).gas(near_workspaces::types::Gas::from_tgas(100)).transact().await?.into_result()?;
+    assert_eq!(cw.tclaim(w.merchant.id()).await, T);
+    assert_eq!(cw.tclaim(w.funder.id()).await, T + 3);
+    cw.token_books_match().await;
+
+    // 整棵樹關掉：代幣退給法人，準備退進 NEAR 可提領，兩邊帳都清
+    let open_one = cw.delivered(6, 1, 3600, "INV-KEEP").await;
+    let f0 = cw.fbal(w.funder.id()).await;
+    let vault = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json::<Value>()?["vault"].as_str().unwrap().parse::<u128>()?;
+    cw.funder("revoke", json!({"cell": cw.cell.to_string(), "evidence": "fired"}), 0).await.unwrap();
+    assert_eq!(cw.fbal(w.funder.id()).await, f0, "held back while an order is open");
+    let r: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    assert_eq!(r["vault"], (vault + 2 * T).to_string(), "the sub-agent's tokens came home to the root");
+    let ckid: Value = w.writ.view("get_cell").args_json(json!({"cell": child.to_string()})).await?.json()?;
+    assert_eq!(ckid["vault"], "0");
+    cw.seller("claim_default", json!({"credit": open_one})).await.unwrap_err();
+    assert_eq!(cw.ftcall(&w.funder, T, format!("settle:{}", open_one)).await, T);
+    let r: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    assert_eq!((r["vault"].as_str().unwrap(), r["unclaimed"].as_str().unwrap().parse::<u128>()?), ("0", vault + 2 * T), "released");
+    cw.funder("claim_refund", json!({"cell": cw.cell.to_string()}), 0).await.unwrap();
+    assert_eq!(cw.fbal(w.funder.id()).await, f0 - T + vault + 2 * T);
+    cw.token_books_match().await;
+    bench("B37", "token tree: hire, sub-agent pays, disputes in escrow, retention and release per asset", "books match the token balance", "books match the token balance", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a88_near_cannot_stand_in_for_the_token() -> anyhow::Result<()> {
+    let cw = credit_world_x(tworld()).await?;
+    let w = &cw.w;
+    let id = cw.delivered(5, 5, 3600, "INV-CONFUSE").await;
+    // 5 顆穩定幣的最小單位是 5,000,000：5,000,000 yoctoNEAR 幾乎不值錢。合約不能把它當成 5 顆
+    let e = cw.funder("settle_by_funder", json!({"credit": id}), 5 * T).await.unwrap_err();
+    assert!(e.contains("USE_FT_TRANSFER_CALL"), "{}", e);
+    let e = cw.funder("dispute", json!({"credit": id, "reason_hash": hex::encode([2u8; 32])}), 5 * T).await.unwrap_err();
+    assert!(e.contains("USE_FT_TRANSFER_CALL"), "{}", e);
+    assert_eq!(cw.credit(&id).await["status"], "Delivered");
+    bench("A88", "company settles a 5-token order with 5,000,000 yoctoNEAR", "USE_FT_TRANSFER_CALL", "USE_FT_TRANSFER_CALL", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a89_a_fake_token_cannot_credit_itself() -> anyhow::Result<()> {
+    let cw = credit_world_x(tworld()).await?;
+    let w = &cw.w;
+    let id = cw.delivered(5, 5, 3600, "INV-FAKE").await;
+    // 攻擊者自己當「代幣合約」，直接呼叫 ft_on_transfer 宣稱公司付了款
+    let call = |sender: &AccountId, msg: String| {
+        let (a, wr, s) = (w.attacker.clone(), w.writ.id().clone(), sender.clone());
+        async move { a.call(&wr, "ft_on_transfer").args_json(json!({"sender_id": s, "amount": (5 * T).to_string(), "msg": msg})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await.unwrap().into_result() }
+    };
+    let e = call(w.funder.id(), format!("settle:{}", id)).await;
+    assert!(format!("{:?}", e).contains("WRONG_ASSET"), "{:?}", e);
+    let e = call(w.verifier.id(), "stake".to_string()).await;
+    assert!(format!("{:?}", e).contains("STAKE_ASSET_UNKNOWN"), "{:?}", e);
+    let st: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id(), "asset": w.attacker.id()})).await?.json()?;
+    assert_eq!(st, Value::Null, "a fake token opens no stake record");
+    assert_eq!(cw.credit(&id).await["status"], "Delivered");
+    // 另一種真的代幣也一樣：panic 後全數退回
+    let other = w.worker.dev_deploy(&std::fs::read(FT_WASM)?).await?;
+    other.call("new").args_json(json!({"owner_id": w.funder.id(), "total_supply": (100 * T).to_string()})).transact().await?.into_result()?;
+    w.funder.call(other.id(), "storage_deposit").args_json(json!({"account_id": w.writ.id()})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
+    let v: String = w.funder.call(other.id(), "ft_transfer_call").args_json(json!({"receiver_id": w.writ.id(), "amount": (5 * T).to_string(), "msg": format!("settle:{}", id)}))
+        .deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?.json()?;
+    assert_eq!(v, "0");
+    assert_eq!(ft_balance(w, &other, w.funder.id()).await, 100 * T, "refunded");
+    assert_eq!(cw.credit(&id).await["status"], "Delivered");
+    // 陌生人想替公司走爭議：拿不走也停不了賣方
+    w.funder.call(cw.tk().id(), "ft_transfer").args_json(json!({"receiver_id": w.attacker.id(), "amount": (5 * T).to_string()})).deposit(NearToken::from_yoctonear(1)).transact().await?.into_result()?;
+    assert_eq!(cw.ftcall(&w.attacker, 5 * T, format!("dispute:{}:{}", id, hex::encode([2u8; 32]))).await, 0);
+    assert_eq!(cw.fbal(w.attacker.id()).await, 5 * T);
+    assert_eq!(cw.credit(&id).await["status"], "Delivered");
+    bench("A89", "attacker poses as the token, or pays with another token, to settle or stake", "WRONG_ASSET, STAKE_ASSET_UNKNOWN", "WRONG_ASSET, STAKE_ASSET_UNKNOWN", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a90_a_failed_token_withdrawal_neither_loses_nor_duplicates() -> anyhow::Result<()> {
+    let cw = credit_world_x(tworld()).await?;
+    let w = &cw.w;
+    let id = cw.delivered(5, 5, 3600, "INV-FAIL").await;
+    cw.funder("settle_by_funder", json!({"credit": id}), 0).await.unwrap();
+    assert_eq!(cw.tclaim(w.merchant.id()).await, 5 * T);
+    // 賣方退出代幣：ft_transfer 一定失敗
+    w.merchant.call(cw.tk().id(), "storage_unregister").args_json(json!({})).deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+    let t0 = cw.ttotal().await;
+    let _ = cw.seller("withdraw", json!({"asset": cw.tk().id()})).await;
+    assert_eq!(cw.tclaim(w.merchant.id()).await, 5 * T, "credited back");
+    assert_eq!(cw.ttotal().await, t0);
+    cw.token_books_match().await;
+    // 回來註冊後領到，只領得到一次
+    w.funder.call(cw.tk().id(), "storage_deposit").args_json(json!({"account_id": w.merchant.id()})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
+    cw.seller("withdraw", json!({"asset": cw.tk().id()})).await.unwrap();
+    assert_eq!(cw.fbal(w.merchant.id()).await, 5 * T);
+    let e = cw.seller("withdraw", json!({"asset": cw.tk().id()})).await.unwrap_err();
+    assert!(e.contains("NOTHING_TO_WITHDRAW"), "{}", e);
+    cw.token_books_match().await;
+    bench("A90", "a token transfer that fails is used to lose or double the seller's money", "credited back once", "credited back once", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a91_a_stake_in_near_does_not_back_a_token_order() -> anyhow::Result<()> {
+    let cw = credit_world_x(CwOpts { stake: 0, ..tworld() }).await?;
+    let w = &cw.w;
+    w.verifier.call(w.writ.id(), "stake").deposit(NearToken::from_near(5)).transact().await?.into_result()?;
+    let id = cw.opened(1, 1, 3600, "INV-MISMATCH").await;
+    let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
+    assert!(e.contains("GUARANTOR_CAPACITY"), "{}", e);
+    bench("A91", "guarantor backs a stablecoin order with a stake in NEAR", "GUARANTOR_CAPACITY", "GUARANTOR_CAPACITY", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a92_a_token_cell_without_credit_stays_as_it_was() -> anyhow::Result<()> {
+    let w = world().await?;
+    let token = w.worker.dev_deploy(&std::fs::read(FT_WASM)?).await?;
+    token.call("new").args_json(json!({"owner_id": w.funder.id(), "total_supply": (1_000 * T).to_string()})).transact().await?.into_result()?;
+    w.funder.call(token.id(), "storage_deposit").args_json(json!({"account_id": w.writ.id()})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
+    let mut o = default_opts(&w);
+    o.asset = Some(token.id().clone());
+    o.unit = T / 10;
+    let (cell, agent, pw) = open_cell(&w, o).await?;
+    w.funder.call(token.id(), "ft_transfer_call").args_json(json!({"receiver_id": w.writ.id(), "amount": (5 * T).to_string(), "msg": cell.to_string()})).deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+    let c: Value = w.writ.view("get_cell").args_json(json!({"cell": cell.to_string()})).await?.json()?;
+    assert_eq!(c["near_reserve"], "0", "no credit terms, no reserve");
+    let v = hire(&agent, w.writ.id(), &pw.link(1), 1, hire_args(&SecretKey::from_random(KeyType::ED25519).public_key(), &Payword::new(1), &[w.merchant.id()], c["valid_until"].as_str().unwrap(), 1, 1)).await;
+    assert_eq!(v["Rejected"]["reason"], "HIRE_TOKEN");
+    let r = w.funder.call(w.writ.id(), "top_up").args_json(json!({"cell": cell.to_string()})).deposit(NearToken::from_near(1)).transact().await?.into_result();
+    assert!(format!("{:?}", r).contains("TOKEN_CELL_USE_FT_TRANSFER_CALL"));
+    let t: String = w.writ.view("token_total").args_json(json!({"asset": token.id()})).await?.json()?;
+    assert_eq!(t, (5 * T).to_string());
+    bench("A92", "a plain token cell with no credit terms hires, or takes NEAR it could never return", "HIRE_TOKEN, TOKEN_CELL_USE_FT_TRANSFER_CALL", "HIRE_TOKEN, TOKEN_CELL_USE_FT_TRANSFER_CALL", gain(&w).await);
+    Ok(())
+}
+
+/// 單據儲存費夠不夠付真實用量：包含第一次出現的賣方曝險紀錄。
+#[tokio::test]
+async fn b38_the_order_fee_covers_the_storage_it_uses() -> anyhow::Result<()> {
+    let cw = credit_world_x(CwOpts { accept_ttl: 3600, ..Default::default() }).await?;
+    let w = &cw.w;
+    let a = w.writ.view_account().await?.storage_usage as u128;
+    let id = cw.delivered(1, 1, 3600, "INV-STORAGE").await;
+    let b = w.writ.view_account().await?.storage_usage as u128;
+    let cost = (b - a) * 10_000_000_000_000_000_000u128;
+    println!("WRIT_GAS|order_storage_bytes={}", b - a);
+    // 每節預付的發票紀錄 + 單據儲存費
+    let paid = 7_000_000_000_000_000_000_000u128 + 1_000_000_000_000_000_000_000u128;
+    assert!(cost <= paid, "{} bytes cost {} > paid {}", b - a, cost, paid);
+    assert_eq!(cw.credit(&id).await["status"], "Delivered");
+    bench("B38", "an order's storage, including the per-seller record, is paid by the order", "cost <= fee", &format!("{} bytes", b - a), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b39_the_contract_says_where_its_source_is_and_check_order_gives_a_seller_ui_its_fields() -> anyhow::Result<()> {
+    let cw = credit_world_x(CwOpts { bond: 2500, premium: 200, fee_payer: "Seller", accept_ttl: 3600, ..Default::default() }).await?;
+    let w = &cw.w;
+    let m: Value = w.writ.view("contract_source_metadata").await?.json()?;
+    assert_eq!(m["version"], "0.2.0");
+    assert_eq!(m["link"], "https://github.com/zuemen/writ");
+    assert!(m["standards"].as_array().unwrap().iter().any(|s| s["standard"] == "nep330"), "{}", m);
+    let id = cw.opened(4, 4, 3600, "INV-UI").await;
+    let c: Value = w.writ.view("check_order").args_json(json!({"credit": id})).await?.json()?;
+    let o = &c["order"];
+    assert_eq!(o["amount"], (4 * UNIT).to_string());
+    assert_eq!(o["asset"], Value::Null, "null means NEAR");
+    assert!(o["tenor_secs"].as_str().unwrap().parse::<u64>()? <= 3600);
+    assert_eq!(o["bond"], UNIT.to_string());
+    assert_eq!(o["exposure"], (3 * UNIT).to_string());
+    assert_eq!(o["fee"], (4 * UNIT / 50).to_string());
+    assert_eq!(o["fee_payer"], "Seller");
+    bench("B39", "NEP-330 source metadata; check_order gives amount, asset, tenor, bond, exposure, fee, payer", "all present", "all present", 0);
     Ok(())
 }
 

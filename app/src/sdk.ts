@@ -21,6 +21,45 @@ export type PayResult =
 
 export type PayRequest = { invoice: string; to: string; links: number; preimage: string };
 
+/** 賣方的自動授信規則。guarantors 空陣列 = 任何保證人都接受。 */
+export type SellerPolicy = { max_amount: string; max_tenor_secs: string; min_bond_bps: number; max_defaults: number; guarantors: string[] };
+/** check_order 的回傳。ok = 現在 accept_credit 會成功；reasons 列出所有不符合的（ORDER_TOO_LARGE、BOND_SHORT、...）。 */
+export type OrderCheck = { ok: boolean; reasons: string[]; order: Record<string, unknown> };
+/** 代幣樹帶錢進來的 ft_transfer_call msg，與合約 ft_on_transfer 的格式一致。 */
+export const ftMsg = {
+  fund: (cell: string) => `fund:${cell}`,
+  stake: () => "stake",
+  settle: (credit: string) => `settle:${credit}`,
+  dispute: (credit: string, reasonHash: string) => `dispute:${credit}:${reasonHash}`,
+  reimburse: (credit: string) => `reimburse:${credit}`,
+};
+
+/** 賣方這邊的三個動作：問規則、設規則、接受或交貨（finalAmount = 用量單的實際金額）。 */
+export class WritSeller {
+  private account: Account;
+  private provider: JsonRpcProvider;
+  constructor(private cfg: { contract: string; rpc: string; account: string; key: KeyPairString }) {
+    this.provider = new JsonRpcProvider({ url: cfg.rpc });
+    this.account = new Account(cfg.account, this.provider, KeyPairSigner.fromSecretKey(cfg.key));
+  }
+  private send(method: string, args: object, deposit = 0n) {
+    return this.account.signAndSendTransaction({ receiverId: this.cfg.contract, actions: [actions.functionCall(method, args, teraToGas("100"), deposit)], waitUntil: "FINAL" });
+  }
+  check(credit: string, policy?: SellerPolicy): Promise<OrderCheck> {
+    return this.provider.callFunction({ contractId: this.cfg.contract, method: "check_order", args: policy ? { credit, policy } : { credit } }) as Promise<OrderCheck>;
+  }
+  /** 第一次設定要附 0.01 NEAR 儲存押金（deposit），之後改規則不用。 */
+  setPolicy(policy: SellerPolicy | null, deposit = 0n) {
+    return this.send("set_seller_policy", { policy }, deposit);
+  }
+  accept(credit: string) {
+    return this.send("accept_credit", { credit });
+  }
+  deliver(credit: string, deliveryHash: string, finalAmount?: string) {
+    return this.send("mark_delivered", finalAmount ? { credit, delivery_hash: deliveryHash, final_amount: finalAmount } : { credit, delivery_hash: deliveryHash });
+  }
+}
+
 export class WritAgent {
   private account: Account;
   constructor(private cfg: { contract: string; rpc: string; agentKey: KeyPairString }) {
