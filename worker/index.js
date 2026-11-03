@@ -2,10 +2,9 @@
 // 不碰鑰匙、不存個資。只回傳工具呼叫的三個短欄位。簽交易仍然在瀏覽器。
 // 免費額度有限：一樣的發票回傳快取，每個 IP 限速。
 const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-const SYSTEM = (seller) =>
+const SYSTEM =
   "You are the accounts-payable agent of a company. For each invoice you receive, pay it by calling pay_invoice exactly once. " +
-  "Each link is worth 0.001 NEAR. Take the invoice id, the payee and the number of links from the invoice text. " +
-  `The company's usual supplier is ${seller}.`;
+  "Each link is worth 0.0001 NEAR. Take the invoice id, the payee and the number of links from the invoice text.";
 const TOOLS = [{
   type: "function",
   function: {
@@ -41,7 +40,6 @@ export default {
     let body;
     try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
     const invoice = String(body?.invoice ?? "").slice(0, 800);
-    const seller = String(env.SELLER ?? "");
     if (!invoice.trim()) return json({ error: "empty" }, 400);
     const cacheKey = new Request(`${url.origin}/api/agent-cache/${await sha256(invoice)}`);
     const hit = await caches.default.match(cacheKey);
@@ -49,7 +47,7 @@ export default {
     if (await limited(env, req.headers.get("cf-connecting-ip") ?? "?")) return json({ error: "rate" }, 429);
     try {
       const r = await env.AI.run(MODEL, {
-        messages: [{ role: "system", content: SYSTEM(seller) }, { role: "user", content: invoice }],
+        messages: [{ role: "system", content: SYSTEM }, { role: "user", content: invoice }],
         tools: TOOLS,
         max_tokens: 100,
         temperature: 0.2,

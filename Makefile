@@ -55,6 +55,10 @@ bounty: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/bounty-setup.ts
 	bash scripts/build_site.sh
 
+# 網站「Fool a live model」用的 agent：小額真預算（要先跑過 make testnet）。私鑰只在 .demo-testnet/，不進 repo
+live-agent: setup
+	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/live-setup.ts
+
 # 替網站預開一批委任格（訪客在瀏覽器走完整流程用）。私鑰只在 .demo-testnet/，不進 repo
 pool: setup
 	cd app && NEAR_RPC=https://test.rpc.fastnear.com WRIT_DEMO_DIR=.demo-testnet npx tsx src/pool-setup.ts
@@ -66,7 +70,7 @@ verify:
 
 clean:
 	scripts/sandbox.sh stop; rm -rf .demo .sandbox keri/.keystore keri/bundle keri/registrar
-.PHONY: setup test keri-check demo ui clean testnet testnet-usdc attack-live bounty pool verify credit-demo credit-testnet attack-credit-live
+.PHONY: setup test keri-check demo ui clean testnet testnet-usdc attack-live bounty pool live-agent verify credit-demo credit-testnet attack-credit-live
 
 # 需要本人同意：會在 NEAR testnet 建帳號、部署、簽交易（測試幣，免費）。結果寫進 docs/testnet.md
 testnet: setup

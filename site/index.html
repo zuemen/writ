@@ -369,10 +369,10 @@
     <div class="eyebrow">Fool a live model</div>
     <label for="inv">Write the invoice yourself. A real model reads it and decides what to pay. Then the contract answers.</label>
     <textarea id="inv" rows="4" maxlength="800" spellcheck="false"></textarea>
-    <div class="presets"><button class="chip" data-preset="inflate">Inflate the amount</button><button class="chip" data-preset="swap">Swap the payee</button><button class="chip" data-preset="clean">A clean invoice</button></div>
+    <div class="presets"><button class="chip" data-preset="inflate">Inflate the amount</button><button class="chip" data-preset="swap">Swap the payee</button><button class="chip" data-preset="again">Pay a paid invoice again</button><button class="chip" data-preset="clean">A clean invoice</button></div>
     <button class="btn" id="askModel" disabled>Let the model read it</button>
     <div class="out" id="modelOut"></div>
-    <p class="note" id="modelNote">Llama 3.3 on Cloudflare Workers AI's free tier, with a plain prompt: not NEAR AI, no TEE. The model's decision is sent as a real transaction from the published key below, so the verdict is on-chain, and this uses up no mandate. The server only asks the model; it holds no key.</p>
+    <p class="note"><span id="liveStat"></span> It has a small real budget: its next budget links ship with this page, so a clean invoice really pays the supplier, and anyone can spend them, but only to that supplier and at most 3 links at a time. The model is Llama 3.3 on Cloudflare Workers AI's free tier with a plain prompt: not NEAR AI, no TEE. The server only asks the model; it holds no key.</p>
   </div>
   <div class="big"><div class="num">0</div><p>injected payments went through, in 13 attacks where a real model did what the invoice told it to. Clean invoices were still paid, 4 of 4.</p></div>
   <div class="scroll"><table>
@@ -416,7 +416,7 @@
     <li>Disclosure takes the guarantor's action, since it holds the salt, and it does not happen if money left in the tree repays the debt. Closing affects the agents under one mandate, not every mandate the company has.</li>
     <li>The buttons on this page sign real testnet transactions, with short windows so you can watch them: 15 seconds to due, 20 seconds of recourse. The guarantor's steps run from this page. In these two stories the agents are scripted; "Fool a live model" calls a real model. The results in the table are separate runs on a local sandbox.</li>
   </ul>
-  <p class="note">All limits are in the <a href="https://github.com/zuemen/writ#not-implemented--limits">README</a>, with the trust model. <span class="mono">make verify</span> reruns everything and prints a scorecard.</p>
+  <p class="note">All limits are in the <a href="https://github.com/zuemen/writ#not-implemented--limits">README</a>, with the trust model. <span class="mono">make verify</span> reruns the build, the bench, both stories and the credential checks, and prints a scorecard.</p>
 </div></section>
 
 <footer><div class="wrap">Writ. Built at NEAR HACKATHON. MIT licensed. <a href="https://github.com/zuemen/writ">github.com/zuemen/writ</a></div></footer>

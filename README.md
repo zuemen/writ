@@ -169,7 +169,7 @@ sequenceDiagram
 
 **A tripped agent can come back; a revoked one cannot.** Three consecutive rejections delete the key (the count is `maxStrikes` in the AMC, 0 turns it off). Since three malicious invoices could otherwise end a mandate, the funder can pay to `reinstate` it, in public (bench `B08`).
 
-**No key can move the money.** Deployment, initialization and deleting the full-access key happen in one batch, so the contract account has no full-access key at all; a separate owner account only manages the verifier and supervisor lists (bench `B10`). The cost: the contract cannot be upgraded.
+**No full-access key exists.** An agent key can only spend what its mandate and its next budget link allow. Deployment, initialization and deleting the full-access key happen in one batch, so the contract account has no full-access key at all; a separate owner account only manages the verifier and supervisor lists (bench `B10`). The cost: the contract cannot be upgraded.
 
 **Revocation needs no trusted party, but someone must submit it.** `revoke_by_kel` takes the raw `ixn` event and the signature attached to it in the signer's KEL, verifies it with `env::ed25519_verify`, and checks for a seal `{i: <credential SAID>, s: "1"}` (a simple TEL has `iss` at sn 0 and `rev` at sn 1). Whoever holds the event can submit it, and this repo ships no relayer: the key stays live, and `present` keeps reporting `not_revoked`, until the event reaches the contract. The contract also checks that the event's `i` is the expected identifier (bench `A34`). There are two paths:
 
@@ -330,7 +330,7 @@ Code reviews after the first bench, done with AI review agents, found problems t
 ## Not implemented / limits
 
 - **The public demo holds the secrets a guarantor would keep.** The site's `config.json` has the fictional company's LEI and salt, so the guarantor's step can run in your browser. A real guarantor keeps them private.
-- **On the site, only "Fool a live model" uses a model.** That section sends your invoice to Llama 3.3 on Cloudflare Workers AI's free tier and signs whatever it decides, so a free quota can run out and the site then says so. The selling and firing stories run prepared transactions. The numbers in the table come from separate runs on a local sandbox, with Gemini: small samples, not NEAR AI, no TEE. `docs/attack-live.md` was generated with the plain prompt only; the current `make attack-live` also runs a hardened prompt, so a rerun prints a longer table.
+- **On the site, only "Fool a live model" uses a model.** That section sends your invoice to Llama 3.3 on Cloudflare Workers AI's free tier and signs what it decides from an agent with a small real budget (`make live-agent`), whose next budget links are public on the page: anyone can spend them, but only to the permitted supplier, 3 links at a time. The free quota can run out, and the site then says so. Identical invoices reuse a cached answer for a day, and the page says when. The selling and firing stories run prepared transactions. The numbers in the table come from separate runs on a local sandbox, with Gemini: small samples, not NEAR AI, no TEE. `docs/attack-live.md` was generated with the plain prompt only; the current `make attack-live` also runs a hardened prompt, so a rerun prints a longer table.
 - **No real guarantor exists yet.** The demo guarantor is a test account and the 2% fee is a placeholder. Who would underwrite agents, and at what price, is untested. The fee is not refunded if an accepted order is later cancelled.
 - **Disclosure takes the guarantor.** Only it holds the salt, so a guarantor that stays quiet reveals nothing, and a debt repaid from money left in the tree reveals nothing. Closing covers one mandate's tree, not every mandate the company has.
 - **The terms are a placeholder.** `terms_hash` commits to demo text no lawyer has reviewed. Whether an on-chain default and disclosure have legal effect depends on a real agreement and a jurisdiction.
@@ -359,7 +359,7 @@ Code reviews after the first bench, done with AI review agents, found problems t
 ## Repository layout
 
 ```
-worker/          the one server function: asks a model about an invoice, no keys, no storage
+worker/          the one server function: asks a model about an invoice; no keys, caches answers for a day
 contract/        Rust contract (near-sdk 5.30), src/fuzz.rs (invariants), src/exact.rs (exact values), tests/bench.rs (attack bench), ft-mock/ (test NEP-141 token)
 keri/            issuer.py (mock vLEI ecosystem), verify.py (verifier), test_forgeries.py, common.py (schemas)
 app/             TypeScript: setup, demo, local UI server, live LLM agent, agent SDK (src/), page (web/)
