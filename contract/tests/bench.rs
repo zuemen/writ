@@ -114,15 +114,15 @@ const ATTESTED_NOW: u64 = u64::MAX / 2;
 fn attest_msg(a: &Value, funder: &AccountId, contract: &AccountId) -> String {
     let scope: Vec<String> = a["scope"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect();
     format!(
-        "writ:attest:v5\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}\ncredit={}",
+        "writ:attest:v6\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}\ncredit={}",
         contract, a["amc_said"].as_str().unwrap(), a.get("issuer_aid").and_then(|v| v.as_str()).unwrap(), a["issuer_pk"].as_str().unwrap(), a["agent_pk"].as_str().unwrap(),
         a["w0"].as_str().unwrap(), a["n"], a["unit"].as_str().unwrap(), scope.join(","),
         a["valid_until"].as_str().unwrap(), a["daily_links"], a["max_links"], a["max_strikes"], a["lei_commit"].as_str().unwrap(), a["ecr_commit"].as_str().unwrap(), funder,
         a["verifier"].as_str().unwrap(), a["attested_at"].as_str().unwrap(),
         a.get("asset").and_then(|v| v.as_str()).unwrap_or("near"),
-        a.get("credit").filter(|c| !c.is_null()).map(|c| format!("{},{},{},{},{},{},{},{},{}",
+        a.get("credit").filter(|c| !c.is_null()).map(|c| format!("{},{},{},{},{},{},{},{},{},{}",
             c["limit"].as_str().unwrap(), c["bond_bps"], c["premium_bps"], c["min_tenor"].as_str().unwrap(), c["max_tenor"].as_str().unwrap(),
-            c["terms_hash"].as_str().unwrap(), c["terms_sig"].as_str().unwrap(), c["entity_tag"].as_str().unwrap(), c["arbiter"].as_str().unwrap())).unwrap_or_else(|| "none".to_string())
+            c["terms_hash"].as_str().unwrap(), c["terms_sig"].as_str().unwrap(), c["entity_tag"].as_str().unwrap(), c["arbiter"].as_str().unwrap(), c["fee_payer"].as_str().unwrap())).unwrap_or_else(|| "none".to_string())
     )
 }
 
@@ -1374,15 +1374,15 @@ async fn credit_world_fee(bond_bps: u32, premium_bps: u32, stake: u128, grace: u
 }
 
 /// 信用世界的所有選項。預設：沒保證金、沒費用、質押 5 NEAR、金庫 30 節。
-struct CwOpts { bond: u32, premium: u32, stake: u128, grace: u64, recourse: u64, vault: u128, lei: String, inspect: u64, max_tenor: u64 }
+struct CwOpts { bond: u32, premium: u32, stake: u128, grace: u64, recourse: u64, vault: u128, lei: String, inspect: u64, max_tenor: u64, fee_payer: &'static str }
 impl Default for CwOpts {
     fn default() -> Self {
-        Self { bond: 0, premium: 0, stake: 5, grace: 0, recourse: 1, vault: 30 * UNIT, lei: LEI.to_string(), inspect: 0, max_tenor: 3600 }
+        Self { bond: 0, premium: 0, stake: 5, grace: 0, recourse: 1, vault: 30 * UNIT, lei: LEI.to_string(), inspect: 0, max_tenor: 3600, fee_payer: "Buyer" }
     }
 }
 
 async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
-    let CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei, inspect, max_tenor } = x;
+    let CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei, inspect, max_tenor, fee_payer } = x;
     let worker = near_workspaces::sandbox().await?;
     let writ = worker.dev_deploy(&wasm_bytes()?).await?;
     writ.call("new").args_json(json!({"owner": writ.id(), "unseal_delay_secs": 5,
@@ -1421,9 +1421,16 @@ async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
         "scope": o.scope, "valid_until": until.to_string(), "daily_links": o.daily,
         "lei_commit": hex::encode(Sha256::digest(format!("{}|{}", committed_lei, LEI_SALT))), "ecr_commit": o.ecr_commit, "verifier": w.verifier.id(),
         "credit": {"limit": (10 * UNIT).to_string(), "bond_bps": bond_bps, "premium_bps": premium_bps, "min_tenor": "0", "max_tenor": max_tenor.to_string(), "terms_hash": terms_hash,
-                   "terms_sig": terms_sig, "entity_tag": "ENTITY-7", "arbiter": arbiter.id()},
+                   "terms_sig": terms_sig, "entity_tag": "ENTITY-7", "arbiter": arbiter.id(), "fee_payer": fee_payer},
     });
     args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
+    // 保證人簽的是 Seller，公司想改成 Buyer（反過來也一樣）：簽章不過
+    if fee_payer == "Seller" {
+        let mut tampered = args.clone();
+        tampered["credit"]["fee_payer"] = json!("Buyer");
+        let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": tampered})).deposit(NearToken::from_yoctonear(fee(20) + vault)).max_gas().transact().await?;
+        assert!(format!("{:?}", r.into_result()).contains("BAD_ATTESTATION"));
+    }
     let id: String = w.funder.call(w.writ.id(), "register").args_json(json!({"args": args})).deposit(NearToken::from_yoctonear(fee(20) + vault)).max_gas().transact().await?.into_result()?.json()?;
     let agent = Account::from_secret_key(w.writ.id().clone(), agent_sk, &w.worker);
     Ok(CreditWorld { w, cell: id.parse()?, agent, pw, arbiter, le, le_aid, ecr_said })
@@ -2193,6 +2200,33 @@ async fn a80_a_long_order_cannot_pay_the_one_period_fee() -> anyhow::Result<()> 
     let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
     assert!(e.contains("PREMIUM_SHORT"), "{}", e);
     bench("A80", "a long order pays the fee of a short one", "PREMIUM_SHORT", "PREMIUM_SHORT", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b31_the_seller_pays_the_fee_when_it_is_paid() -> anyhow::Result<()> {
+    let cw = credit_world_x(CwOpts { premium: 1000, fee_payer: "Seller", ..Default::default() }).await?;
+    let w = &cw.w;
+    bench("A81", "company swaps who pays the fee after the guarantor signed", "BAD_ATTESTATION", "BAD_ATTESTATION", gain(w).await);
+    assert_eq!(cw.card().await["fee_payer"], "Seller");
+    let c0: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    let v0: u128 = c0["vault"].as_str().unwrap().parse()?;
+    let id = cw.delivered(5, 5, 3600, "INV-SFEE").await;
+    let fee = 5 * UNIT / 10;
+    assert_eq!(cw.credit(&id).await["fee"], fee.to_string());
+    let st: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
+    assert_eq!(st["earned"], "0", "nothing is charged at accept");
+    let c1: Value = w.writ.view("get_cell").args_json(json!({"cell": cw.cell.to_string()})).await?.json()?;
+    let storage = v0 - c1["vault"].as_str().unwrap().parse::<u128>()?;
+    assert!(storage < UNIT, "only the order's storage left the vault: {}", storage);
+    let v: Value = cw.agent.call(w.writ.id(), "settle").args_json(json!({"credit": id})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
+    assert!(v.get("CreditSettled").is_some(), "{}", v);
+    let got: Value = w.writ.view("claimable_of").args_json(json!({"account": w.merchant.id()})).await?.json()?;
+    assert_eq!(got.as_str().unwrap().parse::<u128>()?, 5 * UNIT - fee);
+    let st: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
+    assert_eq!(st["earned"], fee.to_string());
+    assert_eq!(cw.solvent().await["solvent"], true);
+    bench("B31", "the seller pays the fee: nothing at accept, deducted from the invoice when paid", "seller -fee, guarantor +fee", "seller -fee, guarantor +fee", 0);
     Ok(())
 }
 

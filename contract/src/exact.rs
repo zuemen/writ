@@ -8,9 +8,9 @@ mod exact {
     const T0: u64 = 1_000_000 * NS;
     const VALID: u64 = T0 + 1_000_000 * NS;
 
-    struct Opt { vault: u128, stake: u128, bond: u32, premium: u32, limit: u128, n: u32, daily: u32, maxl: u32, scope: Vec<AccountId>, max_tenor: u64 }
+    struct Opt { vault: u128, stake: u128, bond: u32, premium: u32, limit: u128, n: u32, daily: u32, maxl: u32, scope: Vec<AccountId>, max_tenor: u64, payer: FeePayer }
     fn opt() -> Opt {
-        Opt { vault: 100 * U, stake: 10 * U, bond: 0, premium: 0, limit: 1000 * U, n: 40, daily: 1000, maxl: 5, scope: vec![acc("s1.near"), acc("s2.near")], max_tenor: 1000 }
+        Opt { vault: 100 * U, stake: 10 * U, bond: 0, premium: 0, limit: 1000 * U, n: 40, daily: 1000, maxl: 5, scope: vec![acc("s1.near"), acc("s2.near")], max_tenor: 1000, payer: FeePayer::Buyer }
     }
 
     fn world(o: Opt) -> (Cx, u64) {
@@ -32,7 +32,7 @@ mod exact {
             w.key_to_cell.insert(p2.clone(), id);
             w.used_keys.insert(p2.clone());
             w.vault_total += o.vault;
-            w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(o.limit), bond_bps: o.bond, premium_bps: o.premium, min_tenor: U64(10), max_tenor: U64(o.max_tenor), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: "t".into(), arbiter: acc("arb.near") }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
+            w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(o.limit), bond_bps: o.bond, premium_bps: o.premium, min_tenor: U64(10), max_tenor: U64(o.max_tenor), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: "t".into(), arbiter: acc("arb.near"), fee_payer: o.payer }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
             id
         }).unwrap();
         cx.cells.push(CellH { id, pk: p, links: ch });
@@ -388,6 +388,113 @@ mod exact {
         let v = cell(&cx, r).vault.0;
         accept(&mut cx, k);
         assert_eq!(cell(&cx, r).vault.0, v - 3 * U / 100);
+    }
+
+    /// 賣方付費：接受時什麼都不收，費用定在單上。
+    fn seller_pays(premium: u32, vault: u128) -> (Cx, u64, u64, u128) {
+        let mut o = opt(); o.premium = premium; o.payer = FeePayer::Seller; o.vault = vault;
+        let (mut cx, r) = world(o);
+        let k = opened(open(&mut cx, r, 4));
+        let (v, st) = (cell(&cx, r).vault.0, stake(&cx));
+        accept(&mut cx, k);
+        assert_eq!(cell(&cx, r).vault.0, v, "nothing is charged at accept");
+        assert_eq!((stake(&cx).amount.0, stake(&cx).earned.0), (st.amount.0, 0));
+        (cx, r, k, 4 * U * premium as u128 / 10_000)
+    }
+
+    fn fee_went_to_the_guarantor(cx: &Cx, fee: u128) {
+        assert_eq!(claim(cx, "s1.near"), Some(4 * U - fee));
+        assert_eq!((stake(cx).amount.0, stake(cx).earned.0), (10 * U + fee, fee));
+    }
+
+    #[test]
+    fn a_seller_paid_fee_comes_out_of_every_way_the_seller_is_paid() {
+        // agent 結清
+        let (mut cx, r, k, fee) = seller_pays(500, 100 * U);
+        assert_eq!(cred(&cx, k).fee.0, fee);
+        let (v, t) = (cell(&cx, r).vault.0, total(&cx));
+        assert!(settle(&mut cx, r, k));
+        assert_eq!(cell(&cx, r).vault.0, v - 4 * U, "the buyer pays the invoice, no more");
+        assert_eq!(total(&cx), t, "the fee moved between buckets");
+        fee_went_to_the_guarantor(&cx, fee);
+        // 公司從金庫結清
+        let (mut cx, _, k, fee) = seller_pays(500, 100 * U);
+        cx.run("sf", &acc("funder.near"), None, 0, |w| w.settle_by_funder(U64(k))).unwrap();
+        fee_went_to_the_guarantor(&cx, fee);
+        // 公司帶錢結清
+        let (mut cx, _, k, fee) = seller_pays(500, 100 * U);
+        cx.run("sf", &acc("funder.near"), None, 4 * U, |w| w.settle_by_funder(U64(k))).unwrap();
+        fee_went_to_the_guarantor(&cx, fee);
+        // 違約，金庫賠
+        let (mut cx, _, k, fee) = seller_pays(500, 100 * U);
+        deliver(&mut cx, k);
+        cx.now = cred(&cx, k).due_at.0 + 51 * NS;
+        cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(k))).unwrap();
+        fee_went_to_the_guarantor(&cx, fee);
+        // 爭議判賣方勝
+        let (mut cx, _, k, fee) = seller_pays(500, 100 * U);
+        cx.run("d", &acc("funder.near"), None, 4 * U, |w| w.dispute(U64(k), "cd".repeat(32))).unwrap();
+        cx.run("r", &acc("arb.near"), None, 0, |w| w.resolve_dispute(U64(k), true)).unwrap();
+        fee_went_to_the_guarantor(&cx, fee);
+    }
+
+    #[test]
+    fn a_seller_paid_fee_on_a_guarantor_paid_default_nets_in_the_stake() {
+        let (mut cx, r, k, fee) = seller_pays(500, 2 * U);
+        deliver(&mut cx, k);
+        cx.now = cred(&cx, k).due_at.0 + 51 * NS;
+        let v = cell(&cx, r).vault.0;
+        cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(k))).unwrap();
+        let debt = 4 * U - v;
+        assert_eq!(cred(&cx, k).debt.0, debt, "the company owes the whole amount it could not cover");
+        assert_eq!(claim(&cx, "s1.near"), Some(4 * U - fee));
+        assert_eq!(stake(&cx).amount.0, 10 * U - debt + fee);
+        assert_eq!(stake(&cx).earned.0, fee);
+    }
+
+    #[test]
+    fn a_cancelled_order_charges_a_seller_paying_nothing() {
+        // 爭議判公司勝
+        let (mut cx, _, k, _) = seller_pays(500, 100 * U);
+        cx.run("d", &acc("funder.near"), None, 4 * U, |w| w.dispute(U64(k), "cd".repeat(32))).unwrap();
+        cx.run("r", &acc("arb.near"), None, 0, |w| w.resolve_dispute(U64(k), false)).unwrap();
+        assert_eq!(claim(&cx, "s1.near"), None);
+        assert_eq!((stake(&cx).amount.0, stake(&cx).earned.0), (10 * U, 0));
+        // 接受了沒交貨，過期取消
+        let (mut cx, _, k, _) = seller_pays(500, 100 * U);
+        cx.now = cred(&cx, k).due_at.0 + 51 * NS;
+        cx.run("x", &acc("x.near"), None, 0, |w| w.cancel_open(U64(k))).unwrap();
+        assert_eq!(cred(&cx, k).status, CreditStatus::Cancelled);
+        assert_eq!(claim(&cx, "s1.near"), None);
+        assert_eq!((stake(&cx).amount.0, stake(&cx).earned.0), (10 * U, 0));
+    }
+
+    /// 費用超過貨款（天期很長）：最多扣到零，不會倒扣賣方。
+    #[test]
+    fn a_seller_paid_fee_stops_at_the_amount() {
+        const P: u64 = 30 * 86_400 * NS;
+        let mut o = opt(); o.premium = 2000; o.payer = FeePayer::Seller; o.max_tenor = 400 * 86_400;
+        let (mut cx, r) = world(o);
+        let due = cx.now + 6 * P;
+        let k = opened(open_at(&mut cx, r, 4, due));
+        accept(&mut cx, k);
+        assert_eq!(cred(&cx, k).fee.0, 4 * U * 12 / 10);
+        assert!(settle(&mut cx, r, k));
+        assert_eq!(claim(&cx, "s1.near"), None, "no entry for zero");
+        assert_eq!((stake(&cx).amount.0, stake(&cx).earned.0), (14 * U, 4 * U));
+    }
+
+    #[test]
+    fn a_buyer_paid_fee_is_recorded_and_never_taken_from_the_seller() {
+        let mut o = opt(); o.premium = 500;
+        let (mut cx, r) = world(o);
+        let k = opened(open(&mut cx, r, 4));
+        accept(&mut cx, k);
+        let fee = 4 * U / 20;
+        assert_eq!(cred(&cx, k).fee.0, fee);
+        assert!(settle(&mut cx, r, k));
+        assert_eq!(claim(&cx, "s1.near"), Some(4 * U));
+        assert_eq!((stake(&cx).amount.0, stake(&cx).earned.0), (10 * U + fee, fee));
     }
 
     #[test]

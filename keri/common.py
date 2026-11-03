@@ -97,6 +97,7 @@ AMC = _schema(
         "creditLimitYocto": {"type": "string"},
         "bondBps": {"type": "integer"},
         "premiumBps": {"type": "integer"},
+        "feePayer": {"type": "string"},
         "minTenorSecs": {"type": "integer"},
         "maxTenorSecs": {"type": "integer"},
         "termsHash": {"type": "string"},

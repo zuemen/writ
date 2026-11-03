@@ -184,6 +184,7 @@ mod fuzz {
         let vaults = [(cx.r(4) as u128 + 1) * UNIT, (cx.r(3) as u128 + 1) * UNIT, 10 * UNIT];
         let stake = (cx.r(25) as u128 + 6) * UNIT;
         let bps = [0u32, 2000, 5000, 10000][cx.r(4) as usize];
+        let payer = if cx.r(2) == 0 { FeePayer::Buyer } else { FeePayer::Seller };
         let now = cx.now;
         let mut roots = vec![];
         for i in 0..3u8 {
@@ -201,7 +202,7 @@ mod fuzz {
                 w.used_keys.insert(p2.clone());
                 w.vault_total += v;
                 if i < 2 {
-                    w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(20 * UNIT), bond_bps: bps, premium_bps: 150, min_tenor: U64(10), max_tenor: U64(1000), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: format!("t{}", i), arbiter: acc("arb.near") }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
+                    w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(20 * UNIT), bond_bps: bps, premium_bps: 150, min_tenor: U64(10), max_tenor: U64(1000), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: format!("t{}", i), arbiter: acc("arb.near"), fee_payer: payer }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
                 }
                 id
             }).unwrap();

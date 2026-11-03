@@ -185,6 +185,14 @@ pub struct RegisterArgs {
     pub credit: Option<CreditArgs>,
 }
 
+/// 保證費誰付。Buyer：賣方接受時從根格金庫收；Seller：賣方收款時從貨款扣，取消的單不收。
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FeePayer {
+    Buyer,
+    Seller,
+}
+
 /// 信用條款：驗證者（同時是具名保證人）簽進 attestation，開格後不能改。
 #[near(serializers = [borsh, json])]
 #[derive(Clone)]
@@ -198,6 +206,7 @@ pub struct CreditArgs {
     pub terms_sig: String,      // LE 對 (合約, AMC, terms_hash, LEI) 的簽章 hex；揭露時才驗，防栽贓
     pub entity_tag: String,     // 保證人給這家公司的固定假名，跨格累積紀錄
     pub arbiter: AccountId,     // 爭議仲裁人，不得是保證人
+    pub fee_payer: FeePayer,    // 保證費誰付，簽進 attestation
 }
 
 /// 一棵樹的信用狀態（只存在根格）。
@@ -240,6 +249,7 @@ pub struct Credit {
     pub status: CreditStatus,
     pub bond_locked: U128,
     pub exposure: U128,         // 保證人為這筆承擔的金額
+    pub fee: U128,              // 賣方接受時定下的保證費：買方付的已收，賣方付的等收款時才扣
     pub delivery_hash: Option<String>,
     pub delivered_at: U64,
     pub dispute_escrow: U128,
@@ -367,7 +377,7 @@ fn event(name: &str, data: Value) {
 pub fn attestation_message(a: &RegisterArgs, funder: &AccountId, contract: &AccountId) -> String {
     let scope: Vec<&str> = a.scope.iter().map(|s| s.as_str()).collect();
     format!(
-        "writ:attest:v5\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}\ncredit={}",
+        "writ:attest:v6\ncontract={}\namc={}\nissuer_aid={}\nissuer_pk={}\nagent_pk={}\nw0={}\nn={}\nunit={}\nscope={}\nvalid_until={}\ndaily_links={}\nmax_links={}\nmax_strikes={}\nlei_commit={}\necr_commit={}\nfunder={}\nverifier={}\nattested_at={}\nasset={}\ncredit={}",
         contract,
         a.amc_said,
         a.issuer_aid,
@@ -387,7 +397,7 @@ pub fn attestation_message(a: &RegisterArgs, funder: &AccountId, contract: &Acco
         a.verifier,
         a.attested_at.0,
         a.asset.as_ref().map(|t| t.as_str()).unwrap_or("near"),
-        a.credit.as_ref().map(|c| format!("{},{},{},{},{},{},{},{},{}", c.limit.0, c.bond_bps, c.premium_bps, c.min_tenor.0, c.max_tenor.0, c.terms_hash, c.terms_sig, c.entity_tag, c.arbiter)).unwrap_or_else(|| "none".to_string())
+        a.credit.as_ref().map(|c| format!("{},{},{},{},{},{},{},{},{},{:?}", c.limit.0, c.bond_bps, c.premium_bps, c.min_tenor.0, c.max_tenor.0, c.terms_hash, c.terms_sig, c.entity_tag, c.arbiter, c.fee_payer)).unwrap_or_else(|| "none".to_string())
     )
 }
 
@@ -1274,6 +1284,7 @@ impl Contract {
             "outstanding": t.outstanding,
             "bond_bps": t.args.bond_bps,
             "premium_bps": t.args.premium_bps,
+            "fee_payer": t.args.fee_payer,
             "guarantor_earned": stake.earned,
             "bond_available": U128(root.vault.0.saturating_sub(t.bond_locked.0)),
             "min_tenor": t.args.min_tenor,
@@ -1442,6 +1453,7 @@ impl Contract {
             status: CreditStatus::Open,
             bond_locked: U128(0),
             exposure: U128(0),
+            fee: U128(0),
             delivery_hash: None,
             delivered_at: U64(0),
             dispute_escrow: U128(0),
@@ -1468,8 +1480,9 @@ impl Contract {
         require!(cr.seller != t.args.arbiter, "ARBITER_NOT_INDEPENDENT");
         // 保證人或公司自己當賣方，等於自己製造違約：前者可走到揭露，後者把質押領給自己
         require!(cr.seller != t.guarantor && cr.seller != root.funder, "SELLER_NOT_INDEPENDENT");
-        // 保證費：這是保證人肯做的理由。接受當下收，之後怎麼結束都不退（曝險已經承擔）
-        let premium = guarantee_fee(cr.amount.0, t.args.premium_bps, fee_periods(cr.due_at.0, env::block_timestamp()));
+        // 保證費：這是保證人肯做的理由。買方付的接受當下收，之後怎麼結束都不退（曝險已經承擔）；賣方付的等收款時扣
+        let fee = guarantee_fee(cr.amount.0, t.args.premium_bps, fee_periods(cr.due_at.0, env::block_timestamp()));
+        let premium = if t.args.fee_payer == FeePayer::Buyer { fee } else { 0 };
         let free = root.vault.0.saturating_sub(t.bond_locked.0);
         require!(free >= premium, "PREMIUM_SHORT");
         root.vault = U128(root.vault.0 - premium);
@@ -1489,9 +1502,10 @@ impl Contract {
         self.terms.insert(cr.root.0, t);
         cr.bond_locked = U128(bond);
         cr.exposure = U128(exposure);
+        cr.fee = U128(fee);
         cr.status = CreditStatus::Accepted;
         self.credits.insert(credit.0, cr);
-        event("credit_accepted", serde_json::json!({"credit": credit.0.to_string(), "bond": bond.to_string(), "premium": premium.to_string(), "guarantor_exposure": exposure.to_string()}));
+        event("credit_accepted", serde_json::json!({"credit": credit.0.to_string(), "bond": bond.to_string(), "premium": premium.to_string(), "fee": fee.to_string(), "guarantor_exposure": exposure.to_string()}));
     }
 
     /// 取消：沒人接受的報價逾時後任何人可取消，公司或保證人隨時可取消；
@@ -1557,7 +1571,7 @@ impl Contract {
         c.vault = U128(c.vault.0 - cr.amount.0);
         self.cells.insert(id, c);
         let amount = cr.amount;
-        self.credit_seller(&cr.seller.clone(), amount.0);
+        self.pay_seller(&cr);
         self.finish_settled(&mut cr);
         self.credits.insert(credit.0, cr);
         Verdict::CreditSettled { credit, amount }
@@ -1589,8 +1603,7 @@ impl Contract {
             r.vault = U128(r.vault.0 - cr.amount.0);
             self.cells.insert(cr.root.0, r);
         }
-        let amount = cr.amount.0;
-        self.credit_seller(&cr.seller.clone(), amount);
+        self.pay_seller(&cr);
         self.finish_settled(&mut cr);
         self.credits.insert(credit.0, cr);
     }
@@ -1690,7 +1703,7 @@ impl Contract {
         require!(st.amount.0 >= left, "GUARANTOR_SHORT");
         st.amount = U128(st.amount.0 - left);
         self.stakes.insert(t.guarantor.clone(), st);
-        self.credit_seller(&cr.seller.clone(), cr.amount.0);
+        self.pay_seller(&cr);
         t.outstanding = U128(t.outstanding.0 - cr.amount.0);
         t.bond_locked = U128(t.bond_locked.0 - cr.bond_locked.0);
         cr.debt = U128(left);
@@ -1828,8 +1841,25 @@ impl Contract {
     }
 
     fn credit_seller(&mut self, seller: &AccountId, amount: u128) {
+        if amount == 0 {
+            return;
+        }
         let cur = self.claimable.get(seller).copied().unwrap_or(0);
         self.claimable.insert(seller.clone(), cur + amount);
+    }
+
+    /// 賣方收款的唯一入口（結清、公司代付、違約、爭議勝）。賣方付費時從貨款扣，記進保證人的質押與累計收入。
+    /// 費用可能超過貨款（天期很長）：最多扣到貨款為零。
+    fn pay_seller(&mut self, cr: &Credit) {
+        let t = self.terms.get(&cr.root.0).cloned().unwrap();
+        let fee = if t.args.fee_payer == FeePayer::Seller { cr.fee.0.min(cr.amount.0) } else { 0 };
+        self.credit_seller(&cr.seller, cr.amount.0 - fee);
+        if fee > 0 {
+            let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+            st.amount = U128(st.amount.0 + fee);
+            st.earned = U128(st.earned.0 + fee);
+            self.stakes.insert(t.guarantor, st);
+        }
     }
 
     /// 解除這筆的鎖定與額度。keep_bps 不用於現況，保留簡單的呼叫形狀。
@@ -1877,7 +1907,7 @@ impl Contract {
         let amount = cr.amount.0;
         cr.dispute_escrow = U128(0);
         if to_seller {
-            self.credit_seller(&cr.seller.clone(), amount);
+            self.pay_seller(&cr);
             if escrow > amount {
                 self.credit_seller(&root.funder, escrow - amount);
             }
@@ -1948,7 +1978,7 @@ mod tests {
         assert_eq!(w.vault_total, 5);
 
         // 公司還欠錢：撤銷中轉帳失敗的錢留在根格，不退給公司
-        let args = CreditArgs { limit: U128(1), bond_bps: 0, premium_bps: 0, min_tenor: U64(0), max_tenor: U64(1), terms_hash: String::new(), terms_sig: String::new(), entity_tag: String::new(), arbiter: writ.clone() };
+        let args = CreditArgs { limit: U128(1), bond_bps: 0, premium_bps: 0, min_tenor: U64(0), max_tenor: U64(1), terms_hash: String::new(), terms_sig: String::new(), entity_tag: String::new(), arbiter: writ.clone(), fee_payer: FeePayer::Buyer };
         w.terms.insert(1, CreditTerms { args, guarantor: writ.clone(), terms_ecr_commit: String::new(), outstanding: U128(0), bond_locked: U128(0), open_debts: 1 });
         ctx(vec![PromiseResult::Failed]);
         assert!(matches!(w.on_transfer(U64(1), U128(5), "00".repeat(32), funder.clone(), 1, 0, Err(PromiseError::Failed)), Verdict::Rejected { .. }));
