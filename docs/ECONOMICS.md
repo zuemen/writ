@@ -14,7 +14,7 @@ F = (c + p × (1 − s)) / (1 − e)      lowest yearly fee that does not lose m
 
 | Symbol | Meaning | Value | Basis |
 |---|---|---|---|
-| c | cost of locked money | 4.6% to 14.2% a year | USDC lending rate we read on 2026-10-05 (the source no longer keeps that snapshot, and the rate moves a lot); Atradius 2025 ROE ([report](https://atradius.nl/kennisbank/news/atradius-2025-strong-performance-in-a-complex-environment)) |
+| c | cost of locked money | 4.6% to 14.2% a year | USDC lending rate we read on 2026-10-05 (the source no longer keeps that snapshot, and the rate moves a lot); 14.2% is our assumption for what a credit insurer earns on equity; we couldn't re-find a source for it |
 | p | loss rate, share of the limit lost to fooled payments a year | scenario | assumption; **no data exists** |
 | s | the company's share of each loss | 20% | the demo's terms; the contract allows 10% to 90% |
 | e | running cost, share of the fee | 25% | assumption; credit insurers run 32.8% ([Coface FY2025](https://www.coface.com/news-economy-and-insights/2025-results-coface-closes-another-strong-year-with-net-income-at-222.0m)) |
@@ -94,7 +94,7 @@ c* = F × 365 / (D × (1 − b))     buyer's cost of cash above which a buyer-pa
 |---|---|---|---|
 | b | bond, share of the order | 20% | assumption; `bond_bps` in the mandate |
 | D | terms plus inspection | 37 days | assumption; net-30 plus 7 |
-| c | cost of locked money | 4.6% to 14.2% a year | USDC lending rate we read on 2026-10-05 (the source no longer keeps that snapshot, and the rate moves a lot); Atradius 2025 ROE ([report](https://atradius.nl/kennisbank/news/atradius-2025-strong-performance-in-a-complex-environment)) |
+| c | cost of locked money | 4.6% to 14.2% a year | USDC lending rate we read on 2026-10-05 (the source no longer keeps that snapshot, and the rate moves a lot); 14.2% is our assumption for what a credit insurer earns on equity; we couldn't re-find a source for it |
 | e | running cost, share of the fee | 25% | assumption; credit insurers run 32.8% ([Coface FY2025](https://www.coface.com/news-economy-and-insights/2025-results-coface-closes-another-strong-year-with-net-income-at-222.0m)) |
 | p | loss rate | scenario | assumption |
 | u | share of stake in use | 60% | assumption |
@@ -135,7 +135,7 @@ A flat 2% fee absorbs a loss rate of up to 1.10% at c=4.6%, and none at c=14.2%.
 | p=1%, 100% in use | $12.33M | $277.4k | $98.6k | $69.4k | $109.4k | 10.9% |
 | p=6%, 60% in use | $7.40M | $166.5k | $355.1k | $41.6k | −$230.3k | −23.0% |
 
-The 2.25% fee covers the cost of locked money only near the bottom of the range: at c=14.2% it loses money against that hurdle. Compare 4.6% for lending with no buyer risk, and 14.2% for Atradius's ROE. A purely financial guarantor earns less than an insurer here. So the first guarantor is more likely a party that already knows the buyer and gains from the sale, such as a platform hosting the buyer's agents. That is a hypothesis; nobody has been asked.
+The 2.25% fee covers the cost of locked money only near the bottom of the range: at c=14.2% it loses money against that hurdle. Compare 4.6% for lending with no buyer risk, and our 14.2% assumption for a credit insurer. A purely financial guarantor earns less than an insurer here. So the first guarantor is more likely a party that already knows the buyer and gains from the sale, such as a platform hosting the buyer's agents. That is a hypothesis; nobody has been asked.
 
 ### Why a buyer would use it
 

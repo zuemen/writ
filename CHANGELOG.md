@@ -9,11 +9,11 @@ Attestation format `writ:attest:v7`. The direction changes: from net-30 for sell
 
 - **Fooled-agent cover** (`3e346d2`). `CoverArgs` signed with the mandate; `activate_cover`, `file_claim`, `resolve_claim`, `void_cover`, `claim_timeout`, `clear_agent`, `release_cover`; views `cover_of`, `payment_of`. `spend` takes an optional `context_hash`, kept with the payment under active cover. New rejections `UNDER_CLAIM` and `NOT_CLEARED`, with no strike.
 - **Site and setup.** The site's main demo runs on one covered mandate: the visitor fools a real model, files, and rules as the arbiter. `make live-agent` sets up that mandate in USDC with restricted company and arbiter keys. The calculator now prices cover. The worker gives the model `pay_invoice` and `reject_invoice` and a ledger, and caches only answers that pay.
-- CI run 41645916450: 126 attacks, 104 integration and 108 unit tests, 36 credential forgeries, `COVER_RESULT|PASS`. A contract audit followed that run, and `838562d` fixes its findings F1 to F6, so these numbers predate that commit.
+- CI run [41704113063](https://github.com/zuemen/writ/actions/runs/41704113063), commit `8d9085d`: 126 attacks, 104 integration and 111 unit tests, 36 credential forgeries, `COVER_RESULT|PASS`. Mutation testing: 853 of 863 ([details](docs/TESTING.md#mutation-testing)). Contract commit `1703fd6`, tag `deployed-writ-cover`.
 
-## writ-cover.testnet
+## writ-net30.testnet
 
-Commits `1bf20c8` to `95875b3`; CI for the stablecoin story in `41991ac`. Attestation format `writ:attest:v6`. Source metadata version `0.2.0`.
+Tag `deployed-writ-net30`. Commits `1bf20c8` to `95875b3`; CI for the stablecoin story in `41991ac`. Attestation format `writ:attest:v6`. Source metadata version `0.2.0`.
 
 - **Hard bond.** Accepting panics `BOND_SHORT` when the free vault after the fee is below what the terms promise. It used to shrink the bond silently and move the gap to the guarantor (`1bf20c8`, `1f4ec8d`).
 - **Tenor pricing.** `premium_bps` is per 30 days, charged on every started period from acceptance (`a893e4e`).

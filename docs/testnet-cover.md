@@ -2,6 +2,8 @@
 
 Contract: [writ-cover.testnet](https://testnet.nearblocks.io/address/writ-cover.testnet). Mandate 1, in testnet USDC. Run through the live site's own buttons on 2026-11-03, with restricted keys signing in the browser. Windows are shortened for the demo, and the arbiter is a demo account the visitor acts as.
 
+Explorer links need a browser. To check a transaction from a script, ask an RPC node: `curl -s https://archival-rpc.testnet.fastnear.com -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":"1","method":"tx","params":{"tx_hash":"<hash from the link>","sender_account_id":"writ-cover.testnet","wait_until":"FINAL"}}'`. Use the signer's account if it isn't the contract.
+
 | Step | Result | Transaction |
 |---|---|---|
 | Paying INV-1 again | Rejected: DUPLICATE | [view](https://testnet.nearblocks.io/txns/8zfAHbKcFWCW7Z7DWGBarRV9Zf6sLWnHZcoMWP2BcFBh) |

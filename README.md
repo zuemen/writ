@@ -10,7 +10,7 @@ Trust isn't proving an AI won't fail. It's knowing who pays when it does.
 
 A live model paid a re-billed invoice with a fake controller note 10 of 10 times, and the same invoice without the note 0 of 10 (small sample, [how to re-run it](docs/TESTING.md)). Every on-chain check passed on the paid ones. That's the payment a limit can't stop.
 
-| The hackathon's FAQ names | Where to check it |
+| Previous NEAR hackathons judged | Where to check it |
 |---|---|
 | Technical implementation | `make verify` reruns everything. [126 attacks](docs/bench.md), exact-value tests, a fuzz of the books, [8 real transactions through the live site](docs/testnet-cover.md) |
 | Design | [The demo](https://writ-near.112306007.workers.dev): the visitor is the arbiter, and the checks, the stake and the claim are on screen |
@@ -81,7 +81,7 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 
 ## Economics
 
-- The cost floor is the locked money: 4.6–14.2% of the limit a year, before any claim or running cost. Fully locked money is why this is expensive.
+- The cost floor is the locked money: 4.6–14.2% of the limit a year (both ends are assumptions, see [`docs/ECONOMICS.md`](docs/ECONOMICS.md)), before any claim or running cost. Fully locked money is why this is expensive.
 - **Nobody has data on how often agents get fooled**, so we can't give a price. We can say what you'd have to believe: with a $60,000 limit, and every input here an assumption, a guarantor needs $9,013–16,693 a year if one $5,000 payment is fooled each year. A company paying that itself gets back $0.24–0.44 per $1, so our first guess at who pays is the vendor of the agent. [Worked example](docs/ECONOMICS.md#what-you-would-have-to-believe).
 - The demo's 2% per 30 days is about 24% of the limit a year. It is a placeholder, not a price. [`docs/ECONOMICS.md`](docs/ECONOMICS.md)
 

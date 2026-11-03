@@ -5,6 +5,6 @@ Token: Circle's testnet USDC, `3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32
 | step | result | transaction |
 |---|---|---|
 | open a token cell | cell #18 | [HUJgg1YmsK…](https://testnet.nearblocks.io/txns/HUJgg1YmsKhw42WVJY4nC2wxySxFE5aZemttob7yjB1o) |
-| fund it with 5 USDC via `ft_transfer_call` | vault funded | [FKLpS8CbjE…](https://testnet.nearblocks.io/txns/FKLpS8CbjEuxzwfzhUybJ7FxSf4pSvCabAkLDDS9TkRj) |
-| agent pays 0.1 USDC to the in-scope merchant | merchant received 10000 of the smallest unit | [AseGnBySXc…](https://testnet.nearblocks.io/txns/AseGnBySXcmNYhgLbkRCYKyjzfLDgFk2VQxhmdxzsHpf) |
+| fund it with 0.4 USDC via `ft_transfer_call` | vault funded | [FKLpS8CbjE…](https://testnet.nearblocks.io/txns/FKLpS8CbjEuxzwfzhUybJ7FxSf4pSvCabAkLDDS9TkRj) |
+| agent pays 0.01 USDC to the in-scope merchant | merchant received 10000 of the smallest unit | [AseGnBySXc…](https://testnet.nearblocks.io/txns/AseGnBySXcmNYhgLbkRCYKyjzfLDgFk2VQxhmdxzsHpf) |
 | injected payment to an attacker | {"Rejected":{"cell":"18","reason":"SCOPE","strikes":1,"tripped":false}}; attacker gained 0 | [6c8XseUixA…](https://testnet.nearblocks.io/txns/6c8XseUixA7eTX7B2EYLetm7YnQ3JGqaMp9u9DhY3CYh) |
