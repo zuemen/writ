@@ -1684,8 +1684,9 @@ mod exact {
 
     /// Puts a cover on the root, as register would. Default world: dispute_timeout 200 s.
     fn offer(cx: &mut Cx, r: u64, limit: u128, ded: u32, fee: u32, window: u64) {
+        let at = cx.now;
         cx.run("offer", &writ(), None, 0, |w| {
-            w.covers.insert(r, Cover { args: CoverArgs { limit: U128(limit), deductible_bps: ded, premium_bps: fee, claim_window: U64(window), arbiter: acc("arb.near"), terms_hash: "00".repeat(32) }, guarantor: acc("g.near"), state: CoverState::Offered, premium: U128(0), paid: U128(0), locked: U128(0), open_claim: None, needs_clear: false, upheld: 0, denied: 0, timed_out: 0 });
+            w.covers.insert(r, Cover { args: CoverArgs { limit: U128(limit), deductible_bps: ded, premium_bps: fee, claim_window: U64(window), arbiter: acc("arb.near"), terms_hash: "00".repeat(32) }, guarantor: acc("g.near"), state: CoverState::Offered, premium: U128(0), paid: U128(0), locked: U128(0), open_claim: None, needs_clear: false, upheld: 0, denied: 0, timed_out: 0, offered_at: U64(at) });
         }).unwrap();
     }
     fn activate(cx: &mut Cx, r: u64) -> bool { cx.run("activate", &acc("g.near"), None, 0, |w| w.activate_cover(U64(r))).is_some() }
@@ -1760,8 +1761,17 @@ mod exact {
         cx.now = VALID + 1;
         assert!(!activate(&mut cx, r));
         err(&cx, "MANDATE_EXPIRED");
+        // Too late well before expiry: the first half of the term, to the nanosecond
+        let half = T0 + (VALID - T0) / 2;
         cx.now = VALID;
-        assert!(activate(&mut cx, r), "still valid at valid_until");
+        assert!(!activate(&mut cx, r));
+        err(&cx, "ACTIVATION_TOO_LATE");
+        cx.now = half + 1;
+        assert!(!activate(&mut cx, r));
+        err(&cx, "ACTIVATION_TOO_LATE");
+        assert_eq!(cover(&cx, r).state, CoverState::Offered);
+        cx.now = half;
+        assert!(activate(&mut cx, r), "the last moment");
         let (mut cx, r) = world(opt());
         offer(&mut cx, r, U, 2000, 0, 1000);
         cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
@@ -2285,18 +2295,24 @@ mod exact {
         assert!(!activate(&mut cx, r));
         err(&cx, "GUARANTOR_CAPACITY");
         assert_eq!(cover(&cx, r).state, CoverState::Offered);
-        // The fee it would earn counts toward what it can lock, to the yocto
+        // The fee does not count toward what it can lock: its own stake must back the limit, to the yocto
         let mut o = opt(); o.stake = 2 * U;
         let (mut cx, r) = world(o);
-        offer(&mut cx, r, 203 * U / 100, 2000, 100, 1000);
+        offer(&mut cx, r, 2 * U + 1, 2000, 100, 1000);
         assert!(!activate(&mut cx, r));
         err(&cx, "GUARANTOR_CAPACITY");
         let mut o = opt(); o.stake = 2 * U;
         let (mut cx, r) = world(o);
-        // A limit a little above the stake, and the fee on it makes up the gap
-        offer(&mut cx, r, 202 * U / 100, 2000, 100, 1000);
+        offer(&mut cx, r, 2 * U, 2000, 100, 1000);
         assert!(activate(&mut cx, r));
         assert!(stake(&cx).amount.0 >= stake(&cx).exposure.0);
+        // No stake at all: a fee as large as the limit cannot stand in for it
+        let mut o = opt(); o.stake = 0;
+        let (mut cx, r) = world(o);
+        cx.run("poke", &writ(), None, 0, |w| { let mut c = w.cells.get(&r).cloned().unwrap(); c.valid_until = U64(T0 + 151 * DAY * NS); w.cells.insert(r, c); }).unwrap();
+        offer(&mut cx, r, 2 * U, 2000, 2000, 1000);
+        assert!(!activate(&mut cx, r));
+        err(&cx, "GUARANTOR_CAPACITY");
     }
 
     // 13. One invoice, one record
@@ -2356,6 +2372,76 @@ mod exact {
     }
 
     #[test]
+    fn present_says_cover_only_while_money_backs_it() {
+        let say = |cx: &Cx, r: u64| cx.peek(|w| w.present(U64(r)).unwrap()["cover"].clone());
+        let (mut cx, r) = world(opt());
+        assert_eq!(say(&cx, r), false, "no cover");
+        offer(&mut cx, r, 8 * U, 2000, 0, 1000);
+        assert_eq!(say(&cx, r), false, "offered: nothing is locked");
+        assert!(activate(&mut cx, r));
+        assert_eq!(say(&cx, r), true);
+        pay(&mut cx, r, 1, 1);
+        let child = hired(hire(&mut cx, r, 2, |_| {}));
+        assert_eq!(say(&cx, child), true, "the whole tree");
+        assert!(file(&mut cx, r, 1));
+        assert!(rule(&mut cx, r, 1, Ruling::Deny));
+        let i = inv(1);
+        cx.run("void", &acc("arb.near"), None, 0, |w| w.void_cover(U64(r), i)).unwrap();
+        assert_eq!(say(&cx, r), false, "voided");
+        let (mut cx, r) = active();
+        cx.now = VALID + 1000 * NS + 1;
+        cx.run("release", &acc("g.near"), None, 0, |w| w.release_cover(U64(r))).unwrap();
+        assert_eq!(say(&cx, r), false, "released");
+    }
+
+    #[test]
+    fn windows_and_the_price_before_activation_can_be_read() {
+        let (mut cx, r) = world(opt());
+        offer(&mut cx, r, 8 * U, 2000, 200, 1000);
+        let w0 = cx.peek(|w| w.windows());
+        assert_eq!((w0.dispute_timeout.0, w0.accept_ttl.0, w0.inspect.0, w0.grace.0, w0.recourse.0, w0.unstake_delay.0), (200, 100, 50, 50, 100, 30));
+        let fee = 8 * U * 200 / 10_000;
+        let v = cx.peek(|w| w.cover_of(U64(r)).unwrap());
+        assert_eq!(v["premium_if_activated_now"], json_str(fee), "the price shows before it is charged");
+        assert_eq!(v["premium"], json_str(0));
+        assert_eq!(v["dispute_timeout"], Value::from("200"));
+        assert_eq!(v["root_valid_until"], Value::from(VALID.to_string()));
+        assert_eq!(v["activate_by"], Value::from((T0 + (VALID - T0) / 2).to_string()));
+        assert!(activate(&mut cx, r));
+        let v = cx.peek(|w| w.cover_of(U64(r)).unwrap());
+        assert_eq!((v["premium"].clone(), v["premium_if_activated_now"].clone()), (json_str(fee), Value::Null));
+    }
+
+    // F5: a ruling that pays nothing must not use up the claim
+    #[test]
+    fn an_upheld_loss_that_pays_nothing_is_refused_and_the_claim_stays_open() {
+        let (mut cx, r) = active();
+        pay(&mut cx, r, 1, 1);
+        assert!(file(&mut cx, r, 1));
+        assert!(!uphold(&mut cx, r, 1, 1));
+        err(&cx, "BAD_LOSS");
+        assert!(matches!(rec(&cx, r, 1).unwrap().claim, ClaimState::Open { .. }));
+        let c = cover(&cx, r);
+        assert_eq!((c.upheld, c.needs_clear, c.open_claim.clone()), (0, false, Some(inv(1))));
+        // The smallest loss that pays: one unit of payout, to the yocto
+        assert!(!uphold(&mut cx, r, 1, 1));
+        assert!(uphold(&mut cx, r, 1, 2), "2 x 80% rounds down to 1");
+        assert_eq!(cover(&cx, r).paid.0, 1);
+    }
+
+    // F6: the fee cannot overflow, and agrees with the plain formula where that fits
+    #[test]
+    fn the_guarantee_fee_cannot_overflow() {
+        assert_eq!(guarantee_fee(u128::MAX, 2000, 4), u128::MAX / 10_000 * 8000 + (u128::MAX % 10_000) * 8000 / 10_000);
+        assert_eq!(guarantee_fee(u128::MAX, 2000, 5), u128::MAX, "100% is the cap");
+        assert_eq!(guarantee_fee(u128::MAX, u32::MAX, u128::MAX), u128::MAX);
+        assert_eq!(guarantee_fee(1_390_000_000_000_000_000_000_000_000_000_000, 2000, 122), 1_390_000_000_000_000_000_000_000_000_000_000);
+        for (a, b, p) in [(10_000u128, 200u32, 1u128), (9_999, 200, 3), (1, 9_999, 1), (12_345_678, 1_234, 7), (7, 0, 9)] {
+            assert_eq!(guarantee_fee(a, b, p), (a * b as u128 * p / 10_000).min(a));
+        }
+    }
+
+    #[test]
     fn views_and_books_show_cover_separately() {
         let (mut cx, r) = active();
         assert_eq!(cx.peek(|w| w.present(U64(r)).unwrap()["cover"].clone()), true);
@@ -2385,8 +2471,6 @@ mod exact {
     fn signed(cx: &mut Cx, f: impl FnOnce(&mut RegisterArgs)) -> Option<u64> {
         // The attestation is checked by ed25519_verify, so sign with a real key
         let (pk2, signer) = sign_key(&[42; 32]);
-        let g = acc("g.near");
-        cx.run("poke", &writ(), None, 0, |w| { w.verifiers.insert(g, pk2); }).unwrap();
         cx.nextpk += 1;
         let np = cx.nextpk;
         let mut a = RegisterArgs {
@@ -2396,6 +2480,8 @@ mod exact {
             cover: Some(CoverArgs { limit: U128(50 * U), deductible_bps: 2000, premium_bps: 100, claim_window: U64(400), arbiter: acc("arb.near"), terms_hash: "cd".repeat(32) }),
         };
         f(&mut a);
+        let g = a.verifier.clone();
+        cx.run("poke", &writ(), None, 0, |w| { w.verifiers.insert(g, pk2); }).unwrap();
         cx.up(&writ(), None, 0);
         a.signature = hex::encode(signer(attestation_message(&a, &acc("funder.near"), &writ()).as_bytes()));
         let dep = register_fee(a.n) + a.n as u128 * COVER_STORAGE_PER_LINK + U;
@@ -2424,24 +2510,36 @@ mod exact {
         bad(&mut cx, |a| a.cover.as_mut().unwrap().premium_bps = 2001, "COVER_PREMIUM");
         bad(&mut cx, |a| a.cover.as_mut().unwrap().claim_window = U64(399), "COVER_WINDOW");
         bad(&mut cx, |a| a.cover.as_mut().unwrap().claim_window = U64(MAX_TENOR_SECS + 1), "COVER_WINDOW");
-        bad(&mut cx, |a| a.valid_until = U64(T0 + MAX_TENOR_SECS * NS + 1), "COVER_TENOR");
+        bad(&mut cx, |a| { a.valid_until = U64(T0 + MAX_TENOR_SECS * NS + 1); a.cover.as_mut().unwrap().premium_bps = 0; }, "COVER_TENOR");
         bad(&mut cx, |a| a.cover.as_mut().unwrap().arbiter = acc("g.near"), "COVER_ARBITER");
         bad(&mut cx, |a| a.cover.as_mut().unwrap().arbiter = acc("funder.near"), "COVER_ARBITER");
         bad(&mut cx, |a| a.cover.as_mut().unwrap().arbiter = acc("owner.near"), "COVER_ARBITER");
         bad(&mut cx, |a| a.scope.push(acc("funder.near")), "COVER_SCOPE");
         bad(&mut cx, |a| a.scope.push(acc("g.near")), "COVER_SCOPE");
         bad(&mut cx, |a| a.scope.push(acc("arb.near")), "COVER_SCOPE");
+        bad(&mut cx, |a| a.cover.as_mut().unwrap().arbiter = acc("writ.near"), "COVER_ARBITER");
+        bad(&mut cx, |a| a.scope.push(acc("writ.near")), "COVER_SCOPE");
+        // The company is the guarantor: named as both, attested for this funder
+        bad(&mut cx, |a| a.verifier = acc("funder.near"), "COVER_GUARANTOR");
+        // The fee must leave one maximum payment under what the cover can pay.
+        // Limit 50, 5 per payment: the cap is 45 units. 20% for 5 periods is the whole limit
+        bad(&mut cx, |a| { a.cover.as_mut().unwrap().premium_bps = 2000; a.valid_until = U64(T0 + 121 * DAY * NS); }, "COVER_PREMIUM");
+        // 90% share of 100 links: it can pay 10 at most, so the cap is 5 units, whatever the limit
+        bad(&mut cx, |a| { let c = a.cover.as_mut().unwrap(); c.deductible_bps = 9000; c.premium_bps = 1001; }, "COVER_PREMIUM");
         bad(&mut cx, |a| a.cover.as_mut().unwrap().terms_hash = "zz".into(), "BAD_HEX:cover_terms_hash");
         bad(&mut cx, |a| a.cover.as_mut().unwrap().terms_hash = "ab".into(), "BAD_LEN:cover_terms_hash");
         // Exactly on each boundary it opens, and stays only offered
-        let good: [fn(&mut RegisterArgs); 7] = [
+        let good: [fn(&mut RegisterArgs); 9] = [
+            // Exactly at the fee cap: 45 of a 50 limit, and 5 of the 10 a 90% share can pay
+            |a| { a.cover.as_mut().unwrap().premium_bps = 1800; a.valid_until = U64(T0 + 150 * DAY * NS); },
+            |a| { let c = a.cover.as_mut().unwrap(); c.deductible_bps = 9000; c.premium_bps = 1000; },
             |_| {},
             |a| a.cover.as_mut().unwrap().limit = U128(100 * UNIT),
             |a| a.cover.as_mut().unwrap().deductible_bps = 1000,
             |a| a.cover.as_mut().unwrap().deductible_bps = 9000,
             |a| a.cover.as_mut().unwrap().premium_bps = 2000,
             |a| a.cover.as_mut().unwrap().claim_window = U64(MAX_TENOR_SECS),
-            |a| a.valid_until = U64(T0 + MAX_TENOR_SECS * NS),
+            |a| { a.valid_until = U64(T0 + MAX_TENOR_SECS * NS); a.cover.as_mut().unwrap().premium_bps = 0; },
         ];
         for f in good {
             let id = signed(&mut cx, f).unwrap_or_else(|| panic!("refused: {}", cx.last_err));

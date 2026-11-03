@@ -138,7 +138,7 @@ def verify_chain():
 
 def read_cover(r, verifier, contract):
     """Cover terms offered with this mandate, or None. Refuses anything the legal entity did not sign, and anything the contract would refuse.
-    The verifier is the guarantor, so its attestation is its acceptance. The contract also checks the arbiter is not its owner; this script does not know the owner."""
+    This signature only lets the company register: the guarantor accepts when it calls activate_cover. The contract also checks the arbiter is not its owner; this script does not know the owner."""
     path = os.path.join(BUNDLE, "cover.json")
     if not os.path.exists(path):
         return None
@@ -166,12 +166,20 @@ def read_cover(r, verifier, contract):
         raise ChainError("cover deductible is outside 10% to 90%")
     if not 0 <= c["premium_bps"] <= 2000:
         raise ChainError("cover fee is above 20% per period")
+    # Same rule as the contract: the fee, as charged now, must leave one maximum payment under what the cover can pay
+    period = 30 * 86400 * 10**9
+    left = max(0, r["valid_until_ns"] - int(datetime.datetime.now(datetime.timezone.utc).timestamp()) * 10**9)
+    fee = min(limit, limit * c["premium_bps"] * max(1, -(-left // period)) // 10000)
+    if fee > min(limit, n * unit * (10000 - c["deductible_bps"]) // 10000) - r["max_links"] * unit:
+        raise ChainError("cover fee leaves too little of what the cover can pay")
     if not 0 < window <= 10 * 365 * 86400:
         raise ChainError("cover claim window is outside what the contract accepts")
-    if c["arbiter"] in (verifier, r["funder"]):
+    if r["funder"] == verifier:
+        raise ChainError("the company cannot be its own guarantor")
+    if c["arbiter"] in (verifier, r["funder"], contract):
         raise ChainError("cover arbiter is the guarantor or the company")
-    if set(r["scope"]) & {verifier, r["funder"], c["arbiter"]}:
-        raise ChainError("mandate scope lets the agent pay the company, the guarantor or the arbiter")
+    if set(r["scope"]) & {verifier, r["funder"], c["arbiter"], contract}:
+        raise ChainError("mandate scope lets the agent pay the company, the guarantor, the arbiter or the contract")
     return c
 
 

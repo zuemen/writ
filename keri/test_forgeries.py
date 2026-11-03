@@ -38,12 +38,12 @@ CONTRACT = "writ.test.near"
 VERIFIER = "verifier.test.near"
 COVER_TEXT = "cover terms under test"
 # With 100 links of unit 1 and at most 5 per payment, a limit from 50 to 100 is allowed
-COVER_OK = dict(limit="50", deductible_bps=2000, premium_bps=200, claim_window="2419200", arbiter="arbiter.test.near", terms_hash=hashlib.sha256(COVER_TEXT.encode()).hexdigest())
+COVER_OK = dict(limit="50", deductible_bps=2000, premium_bps=0, claim_window="2419200", arbiter="arbiter.test.near", terms_hash=hashlib.sha256(COVER_TEXT.encode()).hexdigest())
 
 
 def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge_o="I2I", pin_other=False,
           revoke_after_bundle=None, rogue_qvi=False, ecr_lei="WRITDEMO000000000017", no_rules=False, bad_edge_said=False, altered_rules=False,
-          cover=None, cover_after=None, cover_signer="le", scope=("merchant.test.near",)):
+          cover=None, cover_after=None, cover_signer="le", scope=("merchant.test.near",), rail="acme.test.near"):
     """Build a chain and write the bundle/registrar. The parameters decide where to forge."""
     with habbing.openHby(name=name, temp=True) as hby:
         rgy = credentialing.Regery(hby=hby, name=name, temp=True)
@@ -97,7 +97,7 @@ def build(name, forge_ecr=False, forge_amc=False, schema=None, edge_s=None, edge
         amc = proving.credential(issuer=human.pre, schema=AMC.said, recipient=agent.pre, status=reg_a.regk, private=True,
                                  data=dict(actionClass="supplier-payment", counterparties=list(scope),
                                            validUntil="2099-01-01T00:00:00+00:00", unitYocto="1", paywordRoot="00" * 32,
-                                           paywordLength=100 if cover is not None else 5, dailyLinks=5, maxLinksPerPayment=5, maxStrikes=3, settlementRail="acme.test.near"),
+                                           paywordLength=100 if cover is not None else 5, dailyLinks=5, maxLinksPerPayment=5, maxStrikes=3, settlementRail=rail),
                                  source=block(ecr=dict(n=ecr.said, s=edge_s or sch.said, o=edge_o)))
         iss_a = reg_a.issue(said=amc.said)
         anchor(hab_a, reg_a, iss_a, "0")
@@ -178,6 +178,10 @@ CASES = [
     ("F30 agent's scope includes the arbiter", dict(cover={}, scope=("merchant.test.near", "arbiter.test.near")), False),
     ("F31 agent's scope includes the company", dict(cover={}, scope=("merchant.test.near", "acme.test.near")), False),
     ("F32 limit written in a non-canonical form", dict(cover=dict(limit="050")), False),
+    ("F33 cover fee as large as the limit (this AMC runs to 2099)", dict(cover=dict(premium_bps=200)), False),
+    ("F34 agent's scope includes the contract", dict(cover={}, scope=("merchant.test.near", CONTRACT)), False),
+    ("F35 arbiter is the contract", dict(cover=dict(arbiter=CONTRACT)), False),
+    ("F36 the company is its own guarantor", dict(cover={}, rail=VERIFIER), False),
 ]
 
 fails = 0

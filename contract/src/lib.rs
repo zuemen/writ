@@ -79,9 +79,13 @@ fn fee_periods(due_at: u64, now: u64) -> u128 {
     ((left + period - 1) / period).max(1)
 }
 
-/// Guarantee fee = amount x rate per period x periods / 10000, and never more than the amount.
+/// Guarantee fee = amount x rate per period x periods / 10000, rounded down, and never more than the amount. Written so a very large token amount cannot overflow.
 fn guarantee_fee(amount: u128, premium_bps: u32, periods: u128) -> u128 {
-    (amount * (premium_bps as u128) * periods / 10_000).min(amount)
+    let rate = (premium_bps as u128).saturating_mul(periods);
+    if rate >= 10_000 {
+        return amount;
+    }
+    amount / 10_000 * rate + amount % 10_000 * rate / 10_000
 }
 
 /// Refusals that are not the agent being fooled, so they cost no strike: FROZEN is the company's debt, RESERVE is a reserve other agents used up,
@@ -272,6 +276,7 @@ pub struct Cover {
     pub upheld: u32,
     pub denied: u32,
     pub timed_out: u32,
+    pub offered_at: U64,            // when the mandate registered; activation must come in the first half of the term
 }
 
 #[near(serializers = [borsh, json])]
@@ -737,6 +742,7 @@ impl Contract {
                 upheld: 0,
                 denied: 0,
                 timed_out: 0,
+                offered_at: U64(env::block_timestamp()),
             });
         }
         if args.credit.is_some() || args.cover.is_some() {
@@ -1522,7 +1528,7 @@ impl Contract {
             "cell": cell.0.to_string(),
             "chain_valid": self.verifiers.contains_key(&c.verifier),
             "credit": self.terms.contains_key(&c.root),
-            "cover": self.covers.contains_key(&c.root),
+            "cover": self.covers.get(&c.root).is_some_and(|v| v.state == CoverState::Active),
             "verifier": c.verifier,
             "not_revoked": c.status == Status::Active,
             "not_expired": now <= c.valid_until.0,
@@ -1612,6 +1618,11 @@ impl Contract {
             "frozen": t.open_debts > 0,
             "status": root.status,
         }))
+    }
+
+    /// The time windows this deployment was created with, in seconds. Documents give the defaults; a demo deployment uses shorter ones.
+    pub fn windows(&self) -> Windows {
+        self.windows.clone()
     }
 
     pub fn verifiers(&self) -> Vec<(AccountId, String)> {
@@ -2529,12 +2540,15 @@ impl Contract {
         require!(r.status == Status::Active, "NOT_ACTIVE");
         let now = env::block_timestamp();
         require!(now <= r.valid_until.0, "MANDATE_EXPIRED");
+        // A guarantor who waits until the term is nearly over would take a fee for cover nobody can use
+        require!(now <= Self::activate_by(&cv, r.valid_until.0), "ACTIVATION_TOO_LATE");
         require!(!self.owes_guarantor(root.0), "COMPANY_FROZEN");
         let premium = guarantee_fee(cv.args.limit.0, cv.args.premium_bps, fee_periods(r.valid_until.0, now));
         require!(self.free_vault(root.0, &r) >= premium, "PREMIUM_SHORT");
         let asset = r.asset.clone();
         let mut st = self.stake_get(&who, &asset);
-        require!(st.amount.0.saturating_add(premium).saturating_sub(st.exposure.0) >= cv.args.limit.0, "GUARANTOR_CAPACITY");
+        // The guarantor's own free stake must back the limit. The company's fee does not count, or the company would be insuring itself.
+        require!(st.amount.0.saturating_sub(st.exposure.0) >= cv.args.limit.0, "GUARANTOR_CAPACITY");
         r.vault = U128(r.vault.0 - premium);
         self.cells.insert(root.0, r);
         st.amount = U128(st.amount.0 + premium);
@@ -2590,6 +2604,8 @@ impl Contract {
             Ruling::Uphold { loss } => {
                 require!(loss.0 > 0 && loss.0 <= rec.amount.0, "BAD_LOSS");
                 let payout = cover_payout(loss.0, cv.args.deductible_bps).min(cv.locked.0);
+                // A ruling that pays nothing would use up the only claim on this payment
+                require!(payout > 0, "BAD_LOSS");
                 let mut r = self.cells.get(&root.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
                 let asset = r.asset.clone();
                 let mut st = self.stake_get(&cv.guarantor, &asset);
@@ -2684,9 +2700,11 @@ impl Contract {
     pub fn cover_of(&self, cell: U64) -> Option<Value> {
         let root = self.cells.get(&cell.0)?.root;
         let cv = self.covers.get(&root)?;
-        let asset = self.cells.get(&root)?.asset.clone();
+        let (asset, valid_until) = { let r = self.cells.get(&root)?; (r.asset.clone(), r.valid_until.0) };
         let st = self.stake_get(&cv.guarantor, &asset);
+        let quote = (cv.state == CoverState::Offered).then(|| U128(guarantee_fee(cv.args.limit.0, cv.args.premium_bps, fee_periods(valid_until, env::block_timestamp()))));
         Some(serde_json::json!({
+            "premium_if_activated_now": quote, "activate_by": U64(Self::activate_by(cv, valid_until)), "root_valid_until": U64(valid_until), "dispute_timeout": self.windows.dispute_timeout,
             "root": root.to_string(), "asset": asset, "state": cv.state, "guarantor": cv.guarantor, "arbiter": cv.args.arbiter,
             "limit": cv.args.limit, "remaining": cv.locked, "paid": cv.paid, "premium": cv.premium,
             "deductible_bps": cv.args.deductible_bps, "premium_bps": cv.args.premium_bps, "claim_window": cv.args.claim_window, "terms_hash": cv.args.terms_hash,
@@ -2699,6 +2717,11 @@ impl Contract {
     pub fn payment_of(&self, cell: U64, invoice_hash: String) -> Option<PaymentRecord> {
         let root = self.cells.get(&cell.0)?.root;
         self.payments.get(&Self::invoice_key(root, &invoice_hash)?).cloned()
+    }
+
+    /// The last moment to activate: halfway through the term from registration.
+    fn activate_by(cv: &Cover, valid_until: u64) -> u64 {
+        cv.offered_at.0 + valid_until.saturating_sub(cv.offered_at.0) / 2
     }
 
     fn cover_get(&self, root: u64) -> Cover {
@@ -2738,12 +2761,21 @@ impl Contract {
         require!(limit <= (a.n as u128).saturating_mul(unit), "COVER_LIMIT_HIGH");
         require!((MIN_DEDUCTIBLE_BPS..=MAX_DEDUCTIBLE_BPS).contains(&cv.deductible_bps), "COVER_DEDUCTIBLE");
         require!(cv.premium_bps <= 2_000, "COVER_PREMIUM");
+        // Cover must never cost more than it can pay. The most it can pay is the limit, or the company's share of every link if that is less.
+        // The fee, as it would be charged now, must leave at least one maximum payment on top. It only falls with time, so this holds at activation too.
+        let most = limit.min(cover_payout((a.n as u128).saturating_mul(unit), cv.deductible_bps));
+        let fee = guarantee_fee(limit, cv.premium_bps, fee_periods(a.valid_until.0, env::block_timestamp()));
+        require!(fee <= most.saturating_sub((a.max_links as u128).saturating_mul(unit)), "COVER_PREMIUM");
         require!(dispute_timeout.saturating_mul(2) <= cv.claim_window.0 && cv.claim_window.0 <= MAX_TENOR_SECS, "COVER_WINDOW");
         // Past this the release time could overflow and the stake would be stuck
         require!(a.valid_until.0 <= env::block_timestamp().saturating_add(MAX_TENOR_SECS.saturating_mul(NS_PER_SEC)), "COVER_TENOR");
-        require!(cv.arbiter != a.verifier && cv.arbiter != *funder && cv.arbiter != *owner, "COVER_ARBITER");
+        // The company guaranteeing itself would only inflate the guarantor's record
+        require!(*funder != a.verifier, "COVER_GUARANTOR");
+        // The contract account can never rule, and paying it would strand the money
+        let this = env::current_account_id();
+        require!(cv.arbiter != a.verifier && cv.arbiter != *funder && cv.arbiter != *owner && cv.arbiter != this, "COVER_ARBITER");
         // Scope only narrows when hiring, so these can never receive a covered payment in this tree
-        require!(!a.scope.iter().any(|s| s == funder || *s == a.verifier || *s == cv.arbiter), "COVER_SCOPE");
+        require!(!a.scope.iter().any(|s| s == funder || *s == a.verifier || *s == cv.arbiter || *s == this), "COVER_SCOPE");
         hex32(&cv.terms_hash, "cover_terms_hash");
     }
 }

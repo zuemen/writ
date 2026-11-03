@@ -3016,7 +3016,7 @@ async fn a98_a_claim_gets_the_loss_not_the_payment() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn a99_revoking_cannot_release_the_lock_early() -> anyhow::Result<()> {
-    let cw = cover_world(CvOpts { valid_secs: 20, window: 12, dispute: 2, premium: 1000, ..Default::default() }).await?;
+    let cw = cover_world(CvOpts { valid_secs: 30, window: 12, dispute: 2, premium: 1000, ..Default::default() }).await?;
     cw.activate().await.unwrap();
     let earned = cw.stake().await["earned"].clone();
     cw.act(&cw.w.verifier, "revoke", json!({"cell": cw.root(), "evidence": "guarantor walks away"})).await.unwrap();
@@ -3024,7 +3024,7 @@ async fn a99_revoking_cannot_release_the_lock_early() -> anyhow::Result<()> {
     must(release().await, "TOO_EARLY");
     assert_eq!(cw.stake().await["exposure"], (50 * UNIT).to_string(), "the lock stays");
     bench("A99", "guarantor collects the fee, revokes and takes its lock back", "TOO_EARLY", "TOO_EARLY", gain(&cw.w).await);
-    wait_secs(34).await;
+    wait_secs(44).await;
     release().await.unwrap();
     let st = cw.stake().await;
     assert_eq!((st["exposure"].clone(), st["earned"].clone()), (json!("0"), earned));
@@ -3141,7 +3141,7 @@ async fn b44_the_storage_fee_pays_for_the_largest_record() -> anyhow::Result<()>
         let inv = format!("INV-{}", k);
         let s0 = cw.w.writ.view_account().await?.storage_usage;
         let v: Value = cw.agent.call(cw.w.writ.id(), "spend").args_json(json!({"preimage": cw.pw.link(k), "j": 1, "to": long, "invoice_hash": h(&inv), "context_hash": h("largest context")}))
-            .gas(near_workspaces::types::Gas::from_tgas(100)).transact().await?.into_result()?.json()?;
+            .gas(near_workspaces::types::Gas::from_tgas(80)).transact().await?.into_result()?.json()?;
         assert!(v.get("Paid").is_some(), "{}", v);
         cw.file(&inv).await.unwrap();
         cw.uphold(&inv, UNIT).await.unwrap();
@@ -3406,5 +3406,143 @@ async fn a118_no_claim_without_a_covered_payment_and_no_bad_context() -> anyhow:
         .gas(near_workspaces::types::Gas::from_tgas(100)).transact().await?.into_result()?.json()?;
     assert_eq!(v["Rejected"]["reason"], "INVOICE");
     bench("A119", "agent pays with a context hash nobody can check later", "Rejected:INVOICE", "Rejected:INVOICE", gain(&cw.w).await);
+    Ok(())
+}
+
+// The worst case for gas: a sub-agent three levels down (each parent is read), a full scope of 64-character accounts in every cell (each cell is read and written),
+// and the callback writing the largest record, on the 80 Tgas the SDK and the site attach. NEAR and token.
+async fn worst_case_spend(token: bool) -> anyhow::Result<u64> {
+    let x = if token { CvOpts { token: true, credit: true, vault: 30 * T, stake: 60, ..Default::default() } } else { CvOpts { credit: true, ..Default::default() } };
+    let mut cw = cover_world(x.clone()).await?;
+    let unit = if token { T } else { UNIT };
+    let longest: Vec<AccountId> = (0..16u8).map(|k| format!("{:02x}", 0xa0 + k).repeat(32).parse().unwrap()).collect();
+    let (mut args, agent_sk, pw) = cover_args(&cw.w, &cw.x, cw.arbiter.id(), cw.token.as_ref().map(|t| t.id()), unit).await?;
+    args["scope"] = json!(longest);
+    sign_args(&cw.w, &mut args);
+    let until = args["valid_until"].as_str().unwrap().to_string();
+    let deposit = if token { cover_fee(x.n) + NEAR_RESERVE } else { cover_fee(x.n) + x.vault };
+    let id = try_register(&cw.w, &args, deposit).await.map_err(|e| anyhow::anyhow!(e))?;
+    cw.cell = id.parse()?;
+    cw.pw = pw;
+    cw.agent = Account::from_secret_key(cw.w.writ.id().clone(), agent_sk, &cw.w.worker);
+    if let Some(t) = &cw.token {
+        cw.w.funder.call(t.id(), "ft_transfer_call").args_json(json!({"receiver_id": cw.w.writ.id(), "amount": x.vault.to_string(), "msg": id})).deposit(NearToken::from_yoctonear(1)).max_gas().transact().await?.into_result()?;
+        cw.w.funder.call(t.id(), "storage_deposit").args_json(json!({"account_id": longest[3]})).deposit(NearToken::from_millinear(10)).transact().await?.into_result()?;
+    }
+    cw.activate().await.unwrap();
+    // Three hires, each a level down
+    let mut agent = Account::from_secret_key(cw.w.writ.id().clone(), cw.agent.secret_key().clone(), &cw.w.worker);
+    let mut chain = Payword::new(0);
+    let mut link = cw.pw.link(9);
+    for (level, j) in [(1u32, 9u32), (2, 7), (3, 5)] {
+        let sk = SecretKey::from_random(KeyType::ED25519);
+        let next = Payword::new(j);
+        let v = hire(&agent, cw.w.writ.id(), &link, j, json!({"agent_pk": sk.public_key(), "w0": next.w0(), "scope": longest, "valid_until": until, "daily_links": 9, "max_links": 5})).await;
+        assert!(v.get("Hired").is_some(), "level {}: {}", level, v);
+        agent = Account::from_secret_key(cw.w.writ.id().clone(), sk, &cw.w.worker);
+        chain = next;
+        if level < 3 { link = chain.link(if level == 1 { 7 } else { 5 }); }
+    }
+    let out = agent.call(cw.w.writ.id(), "spend").args_json(json!({"preimage": chain.link(3), "j": 3, "to": longest[3], "invoice_hash": h("INV-WORST"), "context_hash": h("largest context")}))
+        .gas(near_workspaces::types::Gas::from_tgas(80)).transact().await?;
+    let burnt = out.total_gas_burnt.as_gas();
+    let v: Value = out.into_result()?.json()?;
+    assert!(v.get("Paid").is_some(), "{}", v);
+    let rec = cw.rec("INV-WORST").await;
+    assert_eq!(rec["context_hash"], h("largest context"), "the callback wrote the record");
+    assert_eq!(rec["to"], longest[3].as_str());
+    // And the record can be claimed on, from the root
+    cw.file("INV-WORST").await.unwrap();
+    Ok(burnt)
+}
+
+#[tokio::test]
+async fn b47_the_worst_payment_fits_in_80_tgas_in_near() -> anyhow::Result<()> {
+    let burnt = worst_case_spend(false).await?;
+    let tg = burnt / 1_000_000_000_000;
+    println!("COVER_GAS|near|{}", burnt);
+    bench("B47", "worst payment in NEAR on 80 Tgas: third-level sub-agent, 16 longest accounts, context hash, record written", "Paid and recorded", &format!("Paid and recorded, {} Tgas burnt", tg), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b48_the_worst_payment_fits_in_80_tgas_in_a_token() -> anyhow::Result<()> {
+    let burnt = worst_case_spend(true).await?;
+    let tg = burnt / 1_000_000_000_000;
+    println!("COVER_GAS|token|{}", burnt);
+    bench("B48", "worst payment in a token on 80 Tgas: third-level sub-agent, 16 longest accounts, context hash, record written", "Paid and recorded", &format!("Paid and recorded, {} Tgas burnt", tg), 0);
+    Ok(())
+}
+
+// The audit's terms: what cover costs, when it can start, and who can name it
+#[tokio::test]
+async fn a120_cover_that_cannot_pay_for_itself_is_refused() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts::default()).await?;
+    let w = &cw.w;
+    let x = CvOpts { premium: 2000, valid_secs: 121 * 86_400, ..Default::default() };
+    let (args, _, _) = cover_args(w, &x, cw.arbiter.id(), None, UNIT).await?;
+    let e = try_register(w, &args, cover_fee(x.n) + UNIT).await.unwrap_err();
+    assert!(e.contains("COVER_PREMIUM"), "{}", e);
+    bench("A120", "a fee as large as the limit, so the company pays for its own guarantee", "COVER_PREMIUM", "COVER_PREMIUM", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a121_a_guarantor_with_no_stake_or_no_time_left_cannot_activate() -> anyhow::Result<()> {
+    // The stake is short by what the fee would have added
+    let cw = cover_world(CvOpts { n: 200, limit_links: 100, stake: 1, premium: 100, ..Default::default() }).await?;
+    cw.act(&cw.w.verifier, "activate_cover", json!({"root": cw.root()})).await.unwrap();
+    let cw = cover_world(CvOpts { n: 200, limit_links: 101, stake: 1, premium: 2000, ..Default::default() }).await?;
+    must(cw.activate().await, "GUARANTOR_CAPACITY");
+    bench("A121", "guarantor with too little stake lets the company's fee back the company's own cover", "GUARANTOR_CAPACITY", "GUARANTOR_CAPACITY", gain(&cw.w).await);
+    let cw = cover_world(CvOpts { valid_secs: 8, window: 20, dispute: 2, premium: 200, ..Default::default() }).await?;
+    wait_secs(5).await;
+    let v0 = cw.cell_state().await["vault"].clone();
+    must(cw.activate().await, "ACTIVATION_TOO_LATE");
+    assert_eq!(cw.cell_state().await["vault"], v0, "no fee taken");
+    bench("A122", "guarantor waits until the term is nearly over, takes a full period's fee, and covers almost nothing", "ACTIVATION_TOO_LATE", "ACTIVATION_TOO_LATE", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a123_the_company_cannot_guarantee_itself_or_name_the_contract() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts::default()).await?;
+    let w = &cw.w;
+    let x = CvOpts::default();
+    let dep = cover_fee(x.n) + UNIT;
+    // The funder is whitelisted as a verifier and signs for itself
+    let sk = SigningKey::generate(&mut rand::thread_rng());
+    w.writ.call("set_verifier").args_json(json!({"account": w.funder.id(), "pk_hex": hex::encode(sk.verifying_key().to_bytes())})).transact().await?.into_result()?;
+    let (mut args, _, _) = cover_args(w, &x, cw.arbiter.id(), None, UNIT).await?;
+    args["verifier"] = json!(w.funder.id());
+    args["signature"] = json!(hex::encode(sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
+    let e = try_register(w, &args, dep).await.unwrap_err();
+    assert!(e.contains("COVER_GUARANTOR"), "{}", e);
+    bench("A123", "a listed verifier guarantees its own company and inflates its record", "COVER_GUARANTOR", "COVER_GUARANTOR", gain(w).await);
+    let (mut args, _, _) = cover_args(w, &x, cw.arbiter.id(), None, UNIT).await?;
+    args["scope"] = json!([w.merchant.id(), w.writ.id()]);
+    sign_args(w, &mut args);
+    let e = try_register(w, &args, dep).await.unwrap_err();
+    assert!(e.contains("COVER_SCOPE"), "{}", e);
+    bench("A124", "the mandate's scope lets the agent pay the contract itself, stranding the money", "COVER_SCOPE", "COVER_SCOPE", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a125_a_ruling_that_pays_nothing_does_not_use_up_the_claim() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts::default()).await?;
+    cw.activate().await.unwrap();
+    cw.paid(1, 1, "INV-1").await;
+    cw.file("INV-1").await.unwrap();
+    must(cw.uphold("INV-1", 1).await, "BAD_LOSS");
+    assert_eq!(cw.cover().await["open_claim"], h("INV-1"));
+    cw.uphold("INV-1", UNIT).await.unwrap();
+    bench("A125", "someone with the arbiter's key upholds a loss of one yocto: it pays nothing and burns the claim", "BAD_LOSS", "BAD_LOSS", gain(&cw.w).await);
+    let p: Value = cw.w.writ.view("present").args_json(json!({"cell": cw.root()})).await?.json()?;
+    assert_eq!(p["cover"], true);
+    let win: Value = cw.w.writ.view("windows").await?.json()?;
+    assert_eq!(win["dispute_timeout"], "5");
+    let c = cw.cover().await;
+    assert_eq!(c["dispute_timeout"], "5");
     Ok(())
 }

@@ -323,7 +323,7 @@ mod fuzz {
                 if i < 2 { w.vault_total += reserve_near; }
                 if tk.is_some() { w.stakes.insert((acc("g.near"), tk.clone()), Stake::default()); }
                 if i != 1 {
-                    w.covers.insert(id, Cover { args: CoverArgs { limit: U128(cover_limit), deductible_bps: cover_ded, premium_bps: cover_fee, claim_window: U64(cover_window), arbiter: acc("arb.near"), terms_hash: "00".repeat(32) }, guarantor: acc("g.near"), state: CoverState::Offered, premium: U128(0), paid: U128(0), locked: U128(0), open_claim: None, needs_clear: false, upheld: 0, denied: 0, timed_out: 0 });
+                    w.covers.insert(id, Cover { args: CoverArgs { limit: U128(cover_limit), deductible_bps: cover_ded, premium_bps: cover_fee, claim_window: U64(cover_window), arbiter: acc("arb.near"), terms_hash: "00".repeat(32) }, guarantor: acc("g.near"), state: CoverState::Offered, premium: U128(0), paid: U128(0), locked: U128(0), open_claim: None, needs_clear: false, upheld: 0, denied: 0, timed_out: 0, offered_at: U64(now) });
                 }
                 if i < 2 {
                     w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(20 * UNIT), bond_bps: bps, premium_bps: 150, min_tenor: U64(10), max_tenor: U64(1000), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: format!("t{}", i), arbiter: acc("arb.near"), fee_payer: payer, seller_cap_bps: cap, asset: tk.clone() }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });

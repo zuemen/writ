@@ -112,12 +112,12 @@ A rejection is a successful transaction with a hash, not a failure.
 |---|---|---|
 | `limit` | U128 | The most the guarantor pays in total under this mandate. At least 10 × `max_links` × `unit`, at most `n` × `unit`. |
 | `deductible_bps` | u32 | The company's share of each loss, 1000 to 9000. |
-| `premium_bps` | u32 | Fee on `limit` per 30 days or part of it, at most 2000. Charged once, at activation, for all of `valid_until`. Never refunded. |
+| `premium_bps` | u32 | Fee on `limit` per 30 days or part of it, at most 2000. Charged once, at activation, for all of `valid_until`. Never refunded. At register the fee must leave one maximum payment under what the cover can pay, which is `limit` or the company's repaid share of `n × unit`, whichever is less. |
 | `claim_window` | U64 | Seconds after a payment during which it can be claimed. At least 2 × `dispute_timeout`, at most 10 years. |
 | `arbiter` | AccountId | Rules on claims. Not the company, the guarantor or the contract owner. |
 | `terms_hash` | hex | Hash of the terms the arbiter rules on: what is covered and excluded, the seller's chance to respond, the company's statement that it was not refunded, transfer of rights. |
 
-With cover, `valid_until` must be within 10 years, and `scope` must not contain the company, the guarantor or the arbiter. A hired agent's scope can only narrow, so this holds for the whole tree.
+With cover, the company cannot be the guarantor, `valid_until` must be within 10 years, the arbiter cannot be the contract account, and `scope` must not contain the company, the guarantor, the arbiter or the contract account. A hired agent's scope can only narrow, so this holds for the whole tree.
 
 The attestation message is `attestation_message` in `lib.rs`: a `writ:attest:v7` line, then `contract=`, `amc=`, `issuer_aid=`, `issuer_pk=`, `agent_pk=`, `w0=`, `n=`, `unit=`, `scope=` (comma-separated), `valid_until=`, `daily_links=`, `max_links=`, `max_strikes=`, `lei_commit=`, `ecr_commit=`, `funder=`, `verifier=`, `attested_at=`, `asset=` (`near` if none), `credit=` (`none`, or the CreditArgs values comma-separated in the order of the table above, with `near` for no asset), `cover=` (`none`, or `limit,deductible_bps,premium_bps,claim_window,arbiter,terms_hash`). Check yours with the view `attestation_preview`.
 
@@ -143,9 +143,9 @@ The contract cannot tell whether an agent was fooled. A named arbiter decides, a
 
 | Method | Parameters | Caller | Needs | Effect |
 |---|---|---|---|---|
-| `activate_cover` | `root` U64 | the guarantor, still on the whitelist | cover `Offered`; root `Active` and not expired; no debt to the guarantor; free vault at least the fee; stake + fee − exposure at least `limit` | Fee = `limit` × `premium_bps` / 10000 × started 30-day periods to `valid_until`, at most `limit`. Moves it from the root's vault to the stake and `earned`. Adds `limit` to `exposure`. Cover becomes `Active`. All or nothing. |
+| `activate_cover` | `root` U64 | the guarantor, still on the whitelist | cover `Offered`; root `Active` and not expired; in the first half of the term since register (`activate_by`); no debt to the guarantor; free vault at least the fee; stake − exposure at least `limit`, not counting the fee | Fee = `limit` × `premium_bps` / 10000 × started 30-day periods to `valid_until`, at most `limit`. Moves it from the root's vault to the stake and `earned`. Adds `limit` to `exposure`. Cover becomes `Active`. All or nothing. |
 | `file_claim` | `root` U64, `invoice_hash` hex, `evidence_hash` hex | funder | cover `Active`; no open claim; `paid` below `limit`; a payment recorded under active cover with no claim yet; inside the window, which runs from the earlier of the payment and `valid_until` | Opens the claim. The whole tree is refused with `UNDER_CLAIM`. `evidence_hash` goes only to the event. |
-| `resolve_claim` | `root` U64, `invoice_hash` hex, `ruling` Ruling, `ruling_hash` hex | arbiter | this is the open claim; up to and including `dispute_timeout` after filing | Uphold: 0 < `loss` ≤ the amount paid. Pays `loss` × (10000 − `deductible_bps`) / 10000 rounded down, at most what is locked, from the stake and from `exposure`. Goes to the root's vault if the tree has open credit or a debt, otherwise to the company's `claimable`. The tree is then refused with `NOT_CLEARED`. Deny: nothing moves. |
+| `resolve_claim` | `root` U64, `invoice_hash` hex, `ruling` Ruling, `ruling_hash` hex | arbiter | this is the open claim; up to and including `dispute_timeout` after filing | Uphold: 0 < `loss` ≤ the amount paid, and the payout must not round to 0. Pays `loss` × (10000 − `deductible_bps`) / 10000 rounded down, at most what is locked, from the stake and from `exposure`. Goes to the root's vault if the tree has open credit or a debt, otherwise to the company's `claimable`. The tree is then refused with `NOT_CLEARED`. Deny: nothing moves. |
 | `void_cover` | `root` U64, `invoice_hash` hex | arbiter | cover `Active`; no open claim; that payment's claim was denied | Fraud found: cover ends, the lock comes back, the fee stays. Becomes `Voided`. Later payments are not recorded. |
 | `claim_timeout` | `root` U64 | anyone | an open claim, past `dispute_timeout` | The payment goes back to no claim, `timed_out` + 1, nothing moves. It can be filed again inside its window. |
 | `clear_agent` | `root` U64 | funder | an upheld claim to clear; no open claim | The tree works again. A record, not a security control; the guarantor's control is `revoke`. |
@@ -186,9 +186,9 @@ Free to call. `Option` results are JSON null when the item does not exist.
 | `claimable_of` | `account` AccountId, `asset` AccountId optional | U128. |
 | `stake_of` | `account` AccountId, `asset` AccountId optional | `amount`, `exposure`, `unstake_at`, `earned`, `claims_paid` (all payments from the stake), `recovered`, `sellers`, `cover_paid` (the part of `claims_paid` on cover claims; nobody owes it back). `exposure` counts orders and locked cover together. |
 | `guarantor_book` | `account` AccountId, `asset` AccountId optional | `asset`, `stake`, `exposure`, `utilisation_bps`, `earned`, `claims_paid`, `cover_paid`, `recovered`, `net_loss`, `loss_ratio_bps` (null before any fee), `top_sellers` (at most 5 `{seller, exposure}`). |
-| `cover_of` | `cell` U64, any mandate in the tree | `root`, `asset`, `state`, `guarantor`, `arbiter`, `limit`, `remaining` (what is locked now), `paid`, `premium`, `deductible_bps`, `premium_bps`, `claim_window`, `terms_hash`, `upheld`, `denied`, `timed_out`, `open_claim` (invoice hash or null), `needs_clear`, `guarantor_stake`, `guarantor_exposure`, `guarantor_unstake_at`. Null if the tree has no cover. |
+| `cover_of` | `cell` U64, any mandate in the tree | `root`, `asset`, `state`, `guarantor`, `arbiter`, `limit`, `remaining` (what is locked now), `paid`, `premium`, `deductible_bps`, `premium_bps`, `claim_window`, `terms_hash`, `upheld`, `denied`, `timed_out`, `open_claim` (invoice hash or null), `needs_clear`, `guarantor_stake`, `guarantor_exposure`, `guarantor_unstake_at`, `dispute_timeout`, `root_valid_until`, `activate_by`, `premium_if_activated_now` (null unless `Offered`). Null if the tree has no cover. |
 | `payment_of` | `cell` U64, any mandate in the tree, `invoice_hash` hex | `cell` (the mandate that paid), `to`, `amount`, `paid_at`, `context_hash`, `claim`: `"None"`, `{"Open":{"filed_at"}}`, `{"Upheld":{"loss","payout","ruling_hash"}}` or `{"Denied":{"ruling_hash"}}`. Null if not recorded. |
-| `present` | `cell` U64 | `cell`, `chain_valid`, `credit`, `cover` (boolean), `verifier`, `not_revoked`, `not_expired`, `within_limit`, `scope`, `amc_said`, `lei`, `lei_commit`, `status`, `parent`, `children`, `depth`. |
+| `present` | `cell` U64 | `cell`, `chain_valid`, `credit`, `cover` (true only while cover is `Active`; other states are in `cover_of`), `verifier`, `not_revoked`, `not_expired`, `within_limit`, `scope`, `amc_said`, `lei`, `lei_commit`, `status`, `parent`, `children`, `depth`. |
 | `get_cell` | `cell` U64 | The whole mandate record. |
 | `cell_of` | `agent_pk` PublicKey | Mandate id or null. |
 | `get_unseal` | `cell` U64 | `requester`, `reason_hash`, `requested_at`, `objected`, `lei`. |
@@ -196,6 +196,7 @@ Free to call. `Option` results are JSON null when the item does not exist.
 | `token_total` | `asset` AccountId | The contract's books for that token. Its balance should be at least this. |
 | `solvency` | none | `vault_total`, `balance`, `storage`, `solvent`. NEAR only. |
 | `stats` | none | `cells`, `paid`, `paid_yocto`, `rejected`, `tripped`, `revoked`. |
+| `windows` | none | This deployment's windows, in seconds: `accept_ttl`, `inspect`, `grace`, `recourse`, `dispute_timeout`, `unstake_delay`. |
 | `verifiers` | none | `[account, pk_hex]` pairs. |
 | `owner` | none | The owner account. |
 | `attestation_preview` | `args` RegisterArgs, `funder` AccountId | The exact string the verifier must sign. |
@@ -217,7 +218,7 @@ A panic returns the tokens through NEP-141's `ft_resolve_transfer`.
 
 ## Windows
 
-Seconds, set once by `new`. No view returns them, and demo deployments use short values (`DEMO_WINDOWS` in `app/src/near.ts`).
+Seconds, set once by `new`. The view `windows` returns them, and demo deployments use short values (`DEMO_WINDOWS` in `app/src/near.ts`).
 
 | Window | Default | Controls |
 |---|---|---|

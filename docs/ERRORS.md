@@ -184,16 +184,18 @@ Who sees them: the agent, as `{"Rejected":{"cell","reason","strikes","tripped"}}
 | `COVER_LIMIT_THIN` | `register` | Company | `limit` is under 10 × `max_links` × `unit`, so a few rulings could reach it. | Raise `limit` or lower `max_links`. |
 | `COVER_LIMIT_HIGH` | `register` | Company | `limit` is over `n` × `unit`: it would lock money no claim can reach. | Lower `limit`. |
 | `COVER_DEDUCTIBLE` | `register` | Company | `deductible_bps` is outside 1000 to 9000. | Fix the terms. |
-| `COVER_PREMIUM` | `register` | Company | `premium_bps` is above 2000. | Fix the terms. |
+| `COVER_PREMIUM` | `register` | Company | `premium_bps` is above 2000, or the fee would not leave one maximum payment under what the cover can pay. | Lower the rate or shorten `valid_until`. |
+| `COVER_GUARANTOR` | `register` | Company | The company is its own guarantor. | Use another guarantor. |
 | `COVER_WINDOW` | `register` | Company | `claim_window` is under 2 × `dispute_timeout` or over 10 years. | Fix the terms. |
 | `COVER_TENOR` | `register` | Company | `valid_until` is more than 10 years away. | Shorten it. |
-| `COVER_ARBITER` | `register` | Company | The arbiter is the company, the guarantor or the contract owner. | Name another. |
-| `COVER_SCOPE` | `register` | Company | The scope has the company, the guarantor or the arbiter in it. | Remove them. |
+| `COVER_ARBITER` | `register` | Company | The arbiter is the company, the guarantor, the contract owner or the contract account. | Name another. |
+| `COVER_SCOPE` | `register` | Company | The scope has the company, the guarantor, the arbiter or the contract account in it. | Remove them. |
 | `NO_COVER` | any cover method | Anyone | That id is not a root with cover. | Read `cover_of`; it gives `root`. |
 | `COVER_NOT_OFFERED` | `activate_cover` | Guarantor | Already activated, voided or released. | Read `cover_of`. |
 | `COVER_NOT_ACTIVE` | `file_claim`, `void_cover`, `release_cover` | Company, arbiter, guarantor | Not activated yet, or already voided or released. | Read `cover_of`. |
 | `PREMIUM_SHORT` | `activate_cover`, `accept_credit` | Guarantor, seller | The free vault cannot pay the fee. For cover, nothing changes and it stays `Offered`. | The company funds the vault. |
-| `GUARANTOR_CAPACITY` | `activate_cover`, `accept_credit` | Guarantor, seller | Stake plus the fee, less exposure, is short. Orders and cover share one stake. | The guarantor stakes more. |
+| `ACTIVATION_TOO_LATE` | `activate_cover` | Guarantor | Past `activate_by`, halfway through the term. Nothing is charged. | A new mandate. |
+| `GUARANTOR_CAPACITY` | `activate_cover`, `accept_credit` | Guarantor, seller | Free stake is short. For cover the fee does not count; for orders it does. Orders and cover share one stake. | The guarantor stakes more. |
 | `GUARANTOR_DELISTED` | `activate_cover`, `accept_credit` | Guarantor, seller | The guarantor left the whitelist. | Ask the owner, or use another mandate. |
 | `MANDATE_EXPIRED` | `activate_cover`, `accept_credit` | Guarantor, seller | Past `valid_until`. | A new mandate. |
 | `COMPANY_FROZEN` | `activate_cover`, `accept_credit` | Guarantor, seller | The company owes its guarantor. | The company repays first. |
@@ -204,7 +206,7 @@ Who sees them: the agent, as `{"Rejected":{"cell","reason","strikes","tripped"}}
 | `WINDOW_CLOSED` | `file_claim` | Company | Past `claim_window` after the payment, or after `valid_until` if that came first. | Too late. |
 | `NO_OPEN_CLAIM` | `resolve_claim`, `claim_timeout` | Arbiter, anyone | No claim is open, or that invoice is not the open one. | Read `cover_of`. |
 | `RULING_TOO_LATE` | `resolve_claim` | Arbiter | Past `dispute_timeout`. | Anyone calls `claim_timeout`; the company can file again. |
-| `BAD_LOSS` | `resolve_claim` | Arbiter | `loss` is 0 or above the amount paid. | Use the real loss. |
+| `BAD_LOSS` | `resolve_claim` | Arbiter | `loss` is 0, above the amount paid, or so small the payout rounds to 0. The claim stays open. | Use the real loss. |
 | `NOT_DENIED` | `void_cover` | Arbiter | That payment has no denied claim. | Void needs a denial to point at. |
 | `ARBITER_STILL_HAS_TIME` | `claim_timeout`, `resolve_timeout` | Anyone | The deadline has not passed. | Wait. |
 | `NOTHING_TO_CLEAR` | `clear_agent` | Company | No upheld claim is waiting. | Nothing to do. |
