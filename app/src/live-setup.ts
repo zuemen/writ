@@ -55,7 +55,7 @@ async function ft(from: { id: string; sk: KeyPairString }, method: string, args:
 const s0 = await stakeOf();
 const free0 = s0.amount > s0.exposure ? s0.amount - s0.exposure : 0n;
 const need = LIMIT + SPARE;
-const topUp = free0 + fee >= need ? 0n : need - free0 - fee;
+const topUp = free0 >= need ? 0n : need - free0; // activate_cover wants stake - exposure >= limit, not counting the fee
 const verifierUsdc = await bal(a.verifier.id).catch(() => 0n);
 const toVerifier = verifierUsdc >= topUp ? 0n : topUp - verifierUsdc;
 const acmeUsdc = await bal(a.acme.id);

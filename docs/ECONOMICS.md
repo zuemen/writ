@@ -34,7 +34,7 @@ F = (c + p × (1 − s)) / (1 − e)      lowest yearly fee that does not lose m
 How the fee works in the contract:
 
 - It is charged once, at activation, for every started 30-day period to `valid_until`. It is never refunded.
-- It is capped only at the limit, so a long mandate can pay up to the whole limit. The guarantor chooses when to activate.
+- At register it must leave one maximum payment under what the cover can pay, so on a long mandate it can still come close to the limit. The guarantor chooses when to activate, within the first half of the term.
 - A guarantor can revoke right after activating and keep the fee. Its lock isn't released early, so this doesn't free its money.
 
 Whether anyone would pay this is untested. Nobody has been asked. Offering it for real money may be regulated insurance or guarantee business, depending on the jurisdiction; no lawyer has reviewed it.

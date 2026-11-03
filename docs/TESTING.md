@@ -60,7 +60,7 @@ DEMO_RESULT|PASS|paid=true|injection=SCOPE|attacker_gain=0|disclosed=true|revoke
 | Credential forgeries | `keri/test_forgeries.py` | F1–F32: forged or stale chains the verifier must refuse. |
 | Live models | `app/src/agent-live.ts`, `app/src/agent-credit.ts` | Real LLMs on a local sandbox. Small samples that show the contract holds whichever way the model goes, not how often models fail. |
 
-The numbers on this page, the README and the site are from CI run [41617290940](https://github.com/zuemen/writ/actions/runs/41617290940), on commit `8da5d7c`: 119 attacks, 97 integration tests, 101 unit tests, 32 credential forgeries, `COVER_RESULT|PASS`. [bench.md](bench.md) is that run's table. The audit that followed it may change the contract; rerun before quoting them against a later commit.
+The numbers on this page, the README and the site are from CI run [41617290940](https://github.com/zuemen/writ/actions/runs/41617290940), on commit `8da5d7c`: 119 attacks, 97 integration tests, 101 unit tests, 32 credential forgeries, `COVER_RESULT|PASS`. [bench.md](bench.md) is that run's table. The contract changed after it (`838562d`, audit fixes); rerun before quoting them against a later commit.
 
 ## The live model
 
