@@ -88,7 +88,8 @@ const acct = (a: Agent) => new Account(cfg.contract, provider, KeyPairSigner.fro
 const btn = (id: string) => $(id) as HTMLButtonElement;
 const nearStr = (y: any) => {
   if (!cfg.asset) return `${near(String(y))} NEAR`;
-  return `${(Number(BigInt(String(y))) / 10 ** cfg.asset.decimals).toFixed(2)} ${cfg.asset.symbol}`;
+  const v = Number(BigInt(String(y))) / 10 ** cfg.asset.decimals;
+  return `${v > 0 && v < 0.1 ? v.toFixed(4).replace(/0+$/, "") : v.toFixed(2)} ${cfg.asset.symbol}`;
 };
 const scale = () => (cfg.asset ? 10n ** BigInt(cfg.asset.decimals) : 10n ** 24n);
 const toUnits = (v: number) => (BigInt(Math.round(v * 10000)) * scale()) / 10000n;

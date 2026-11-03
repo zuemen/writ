@@ -36,9 +36,9 @@ if (!pool.relayer) {
     receiverId: id,
     actions: [
       actions.createAccount(),
-      actions.transfer(NEAR("1")),
+      actions.transfer(NEAR("0.4")),
       actions.addFullAccessKey(full.getPublicKey()),
-      actions.addFunctionCallAccessKey(kp.getPublicKey(), a.writ.id, ["revoke_by_kel"], NEAR("0.8")),
+      actions.addFunctionCallAccessKey(kp.getPublicKey(), a.writ.id, ["revoke_by_kel"], NEAR("0.3")),
     ],
     waitUntil: "FINAL",
   });
@@ -73,7 +73,7 @@ if (!pool.seller) {
   // 賣方規則先存一條寬鬆的（押金要帶錢，受限鑰匙帶不了），之後訪客的規則用受限鑰匙改
   const sp = await call(as(a.merchant.id, a.merchant.sk), a.writ.id, "set_seller_policy", { policy: { max_amount: (100n * MICRO).toString(), max_tenor_secs: "86400", min_bond_bps: 0, max_defaults: 1000, guarantors: [], asset: USDC, max_fee_bps: 10000, arbiters: [] } }, { deposit: NEAR("0.015") });
   if (sp.error) throw new Error("set_seller_policy: " + sp.error);
-  await ft(a.acme, "storage_deposit", { account_id: a.writ.id }, "30");
+  for (const id of [a.writ.id, a.verifier.id, a.merchant.id]) await ft(a.acme, "storage_deposit", { account_id: id, registration_only: true }, "30");
   await ft(a.acme, "ft_transfer", { receiver_id: a.verifier.id, amount: (BigInt(process.env.WRIT_STAKE_USDC ?? "1500000")).toString() }, "30");
   writeJson(path, pool);
 }
