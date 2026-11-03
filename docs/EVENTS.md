@@ -53,7 +53,7 @@ EVENT_JSON:{"standard":"writ","version":"1.0.0","event":"credit_opened","data":[
 | `claim_upheld` | `cell`, `invoice`, `loss`, `payout`, `retained` (boolean: true means it stayed in the root's vault because the tree owes), `ruling_hash` | `resolve_claim` |
 | `claim_denied` | `cell`, `invoice`, `ruling_hash` | `resolve_claim` |
 | `claim_timed_out` | `cell`, `invoice` | `claim_timeout` |
-| `cover_fee_returned` | `cell`, `amount` | `revoke` by the guarantor, when periods have not started |
+| `cover_fee_returned` | `cell`, `amount` | `revoke` by the guarantor, when periods have not started. If the company still has debts, the money stays in the root vault to pay them. |
 | `cover_voided` | `cell`, `invoice`, `released` | `void_cover` |
 | `agent_cleared` | `cell` | `clear_agent` |
 | `cover_released` | `cell`, `released` | `release_cover` |

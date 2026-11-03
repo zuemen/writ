@@ -3015,6 +3015,15 @@ async fn a98_a_claim_gets_the_loss_not_the_payment() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn a126_guarantor_cannot_swap_signers_to_skip_the_fee_it_owes() -> anyhow::Result<()> {
+    let cw = cover_world(CvOpts { valid_secs: 30, window: 12, dispute: 2, premium: 1000, ..Default::default() }).await?;
+    cw.activate().await.unwrap();
+    must(cw.act(&cw.w.verifier, "update_signers", json!({"cell": cw.root(), "issuer_aid": "x", "issuer_pk": "ab".repeat(32), "ecr_commit": "cd".repeat(32)})).await, "COVER_ACTIVE");
+    bench("A126", "guarantor names itself as signer, to revoke by KEL and skip the fee it owes", "COVER_ACTIVE", "COVER_ACTIVE", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a99_revoking_cannot_release_the_lock_early() -> anyhow::Result<()> {
     let cw = cover_world(CvOpts { valid_secs: 30, window: 12, dispute: 2, premium: 1000, ..Default::default() }).await?;
     cw.activate().await.unwrap();

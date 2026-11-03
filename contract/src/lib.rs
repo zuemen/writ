@@ -1389,6 +1389,8 @@ impl Contract {
         require!(env::predecessor_account_id() == c.verifier && self.verifiers.contains_key(&c.verifier), "ONLY_CELL_VERIFIER");
         require!(c.status == Status::Active, "NOT_ACTIVE");
         require!(c.parent.is_none(), "NOT_ROOT");
+        // The verifier could name itself as signer and revoke by KEL, which would skip the fee it owes for revoking
+        require!(self.covers.get(&cell.0).is_none_or(|cv| cv.state != CoverState::Active), "COVER_ACTIVE");
         hex32(&issuer_pk, "issuer_pk");
         hex32(&ecr_commit, "ecr_commit");
         c.issuer_aid = issuer_aid;
@@ -2743,7 +2745,6 @@ impl Contract {
         }
     }
 
-    /// Ends the lock: stake.exposure drops by what is still locked.
     /// A guarantor that walks away returns the fee for the 30-day periods not yet started, out of its free stake. It goes through the vault, so `close` refunds it or holds it against debts.
     fn refund_unstarted_fee(&mut self, root: u64, c: &Cell, who: &AccountId) -> u128 {
         let Some(mut cv) = self.covers.get(&root).cloned() else { return 0 };
@@ -2765,6 +2766,7 @@ impl Contract {
         event("cover_fee_returned", serde_json::json!({"cell": root.to_string(), "amount": back.to_string()}));
         back
     }
+    /// Ends the lock: stake.exposure drops by what is still locked.
     fn unlock_cover(&mut self, root: u64, cv: &mut Cover, state: CoverState) -> u128 {
         let asset = self.cells.get(&root).and_then(|c| c.asset.clone());
         let mut st = self.stake_get(&cv.guarantor, &asset);

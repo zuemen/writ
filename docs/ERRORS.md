@@ -156,6 +156,7 @@ Who sees them: the agent, as `{"Rejected":{"cell","reason","strikes","tripped"}}
 | `NO_REVOCATION_SEAL` | `revoke_by_kel` | Relayer | No seal `{i: SAID, s: "1"}` with a `d`. An issuance anchor is not a revocation. | Use the revocation's anchor. |
 | `ONLY_CELL_VERIFIER` | `update_signers`, `release_unseal` | Others | Only that mandate's verifier, while it is listed. | Sign with it. |
 | `NOT_ROOT` | `update_signers` | Verifier | Sub-agents have no signers. | Call it on the root. |
+| `COVER_ACTIVE` | `update_signers` | Verifier | Signers can't change while cover runs: a guarantor could name itself and skip the fee it owes for revoking. | Wait until cover ends. |
 
 ### Guarantor
 

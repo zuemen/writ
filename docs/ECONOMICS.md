@@ -35,7 +35,7 @@ How the fee works in the contract:
 
 - It is charged once, at activation, for every started 30-day period to `valid_until`.
 - At register it must leave one maximum payment under what the cover can pay, so on a long mandate it can still come close to the limit. The guarantor chooses when to activate, within the first half of the term.
-- A guarantor that revokes keeps the fee for periods already started and returns the rest, as far as its free stake reaches. Its lock isn't released early, so revoking doesn't free its money. A company revoking its own mandate gets no fee back.
+- A guarantor that revokes keeps the fee for periods already started, which can be two periods even after a few seconds, and returns the rest, as far as its free stake reaches. Its lock isn't released early, so revoking doesn't free its money. A company revoking its own mandate gets no fee back.
 
 Whether anyone would pay this is untested. Nobody has been asked. Offering it for real money may be regulated insurance or guarantee business, depending on the jurisdiction; no lawyer has reviewed it.
 

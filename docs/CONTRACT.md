@@ -65,7 +65,7 @@ A rejection is a successful transaction with a hash, not a failure.
 | `reimburse` | `credit` U64 | funder | what the free vault does not cover; excess goes to `claimable` | Repays the guarantor from the free vault first, then the deposit. Unfreezes when no other debt remains. |
 | `reinstate` | `cell` U64 | funder | at least 0.25 NEAR | Re-adds the key of a tripped mandate. |
 | `refresh_key` | `cell` U64 | funder, or the mandate's still-listed verifier | at least 0.25 NEAR | Re-adds the same key with a fresh gas allowance. |
-| `revoke` | `cell` U64, `evidence` string up to 128 bytes | funder, the mandate's still-listed verifier, or owner | none | Deletes the keys of the tree and refunds the vaults, or keeps them in the root while credit is open or a debt remains. |
+| `revoke` | `cell` U64, `evidence` string up to 128 bytes | funder, the mandate's still-listed verifier, or owner | none | Deletes the keys of the tree and refunds the vaults, or keeps them in the root while credit is open or a debt remains. A guarantor revoking a root with active cover first returns the fee for periods not started, up to its free stake. |
 | `claim_refund` | `cell` U64 | funder | none | Collects `unclaimed`: a failed refund, or retained money released after debts ended. |
 | `object_unseal` | `cell` U64 | funder | none | Records a public objection to a supervisor's request. Not a veto. |
 
@@ -132,7 +132,7 @@ The attestation message is `attestation_message` in `lib.rs`: a `writ:attest:v7`
 | `withdraw_stake` | `amount` U128, `asset` AccountId optional | guarantor | none | Up to stake minus exposure, after the delay. Each withdrawal needs a new request. |
 | `enforce_recourse` | `credit` U64 | guarantor | none | After `recourse_until`, closes the tree and repays from what is left in it. Ends in `Enforced` or, if that cleared the debt, `Reimbursed`. Can run again. |
 | `credit_unseal` | `credit` U64, `lei` string, `salt` string, `ecr` EcrOpening | guarantor | none | From `Enforced`: names the company. |
-| `update_signers` | `cell` U64, `issuer_aid` string, `issuer_pk` hex, `ecr_commit` hex | the mandate's still-listed verifier | none | After a key rotation. Root mandates only. |
+| `update_signers` | `cell` U64, `issuer_aid` string, `issuer_pk` hex, `ecr_commit` hex | the mandate's still-listed verifier | none | After a key rotation. Root mandates only. Refused while cover is active. |
 | `release_unseal` | `cell` U64, `lei` string, `salt` string | the mandate's still-listed verifier | none | After a supervisor's request and the waiting period. |
 
 `EcrOpening`: `le_aid`, `le_pk` (hex), `ecr_said`, `salt`, all strings.

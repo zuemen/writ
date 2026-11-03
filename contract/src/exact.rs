@@ -1893,7 +1893,7 @@ mod exact {
     fn revoking_does_not_bring_the_release_forward() {
         let (mut cx, r) = active();
         pay(&mut cx, r, 1, 1);
-        // The guarantor is the verifier: it can revoke and keep its fee, but not take its lock back
+        // The guarantor is the verifier: it can revoke, but not take its lock back
         cx.run("revoke", &acc("g.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
         let release = |cx: &mut Cx| cx.run("release", &acc("g.near"), None, 0, |w| w.release_cover(U64(r))).is_some();
         cx.now = T0 + 10_000 * NS;
@@ -2073,6 +2073,61 @@ mod exact {
         assert!(cx.run("revoke", &acc("g.near"), None, 0, |w| w.revoke(U64(r), "x".into())).is_none());
         err(&cx, "ALREADY_CLOSED");
         assert_eq!(stake(&cx).amount.0, a1);
+    }
+
+    #[test]
+    fn signers_cannot_change_while_cover_runs() {
+        let change = |cx: &mut Cx, r: u64| cx.run("signers", &acc("g.near"), None, 0, |w| w.update_signers(U64(r), "x".into(), "ab".repeat(32), "cd".repeat(32))).is_some();
+        let (mut cx, r) = world(opt());
+        offer(&mut cx, r, 8 * U, 2000, 0, 1000);
+        assert!(change(&mut cx, r), "before activation it can");
+        assert!(activate(&mut cx, r));
+        assert!(!change(&mut cx, r));
+        err(&cx, "COVER_ACTIVE");
+        let until = cell(&cx, r).valid_until.0;
+        cx.now = until + 1000 * NS + 1;
+        assert!(cx.run("release", &acc("g.near"), None, 0, |w| w.release_cover(U64(r))).is_some());
+        cx.now = until - 1;
+        assert!(change(&mut cx, r), "released, it can again");
+    }
+
+    #[test]
+    fn a_revoking_guarantor_keeps_the_books_straight_in_every_state() {
+        const P: u64 = 30 * DAY * 1_000_000_000;
+        let mut returned = 0;
+        for seed in 0..60u64 { // every mix of asset, credit, state and time
+            let token = seed % 2 == 1;
+            let credit = !token && seed % 3 == 0;
+            let mut o = opt();
+            if credit { o.bond = 5000; }
+            let (mut cx, r) = if token { let (c, r, _) = tworld(o); (c, r) } else { world(o) };
+            let open_order = credit && seed % 2 == 0;
+            if open_order { let k = opened(open(&mut cx, r, 2)); accept(&mut cx, k); cx.credits.push(k); } else { drop_credit(&mut cx, r); }
+            let until = cx.now + 3 * P;
+            cx.run("poke", &writ(), None, 0, |w| { let mut c = w.cells.get(&r).cloned().unwrap(); c.valid_until = U64(until); w.cells.insert(r, c); }).unwrap();
+            offer(&mut cx, r, 8 * U, 2000, 100, 1000);
+            assert!(activate(&mut cx, r), "seed {} {}", seed, cx.last_err);
+            match seed / 2 % 5 {
+                1 => pay(&mut cx, r, 1, 1),
+                2 => { pay(&mut cx, r, 1, 1); assert!(file(&mut cx, r, 1)); }
+                3 => { pay(&mut cx, r, 2, 1); assert!(file(&mut cx, r, 1)); assert!(uphold(&mut cx, r, 1, 2 * U)); }
+                4 => { pay(&mut cx, r, 1, 1); assert!(file(&mut cx, r, 1)); assert!(rule(&mut cx, r, 1, Ruling::Deny)); }
+                _ => {}
+            }
+            cx.check(seed, "before");
+            cx.now += match seed % 4 { 0 => 0, 1 => P + 1, 2 => 2 * P + 1, _ => 3 * P + 1 };
+            let st = if token { tstake(&cx) } else { stake(&cx) };
+            cx.run("revoke", &acc("g.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap_or_else(|| panic!("seed {} {}", seed, cx.last_err));
+            cx.check(seed, "revoked");
+            let after = if token { tstake(&cx) } else { stake(&cx) };
+            assert!(after.amount.0 >= after.exposure.0, "seed {}", seed);
+            assert_eq!(after.exposure.0, st.exposure.0, "the lock stays, seed {}", seed);
+            let back = st.amount.0 - after.amount.0;
+            assert!(back <= 2 * (8 * U / 100), "seed {}", seed);
+            returned += back;
+            while !cx.pending.is_empty() { let fail = cx.r(3) == 0; cx.resolve(fail); cx.check(seed, "cb"); }
+        }
+        assert!(returned > 0, "the money moved in some of these");
     }
 
     #[test]
