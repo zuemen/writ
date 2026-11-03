@@ -2020,6 +2020,62 @@ mod exact {
 
     // 6. M6: cover with no credit terms works, in NEAR and in a token
     #[test]
+    fn a_guarantor_that_revokes_returns_only_the_periods_not_started() {
+        const P: u64 = 30 * DAY * 1_000_000_000;
+        let world3 = || {
+            let (mut cx, r) = world(opt());
+            drop_credit(&mut cx, r);
+            let until = cx.now + 3 * P;
+            cx.run("poke", &writ(), None, 0, |w| { let mut c = w.cells.get(&r).cloned().unwrap(); c.valid_until = U64(until); w.cells.insert(r, c); }).unwrap();
+            offer(&mut cx, r, 8 * U, 2000, 100, 1000);
+            assert!(activate(&mut cx, r));
+            (cx, r)
+        };
+        let f = 8 * U / 100;
+        // one period started and a nanosecond into the second: two kept, one back
+        let (mut cx, r) = world3();
+        let (a0, e0) = (stake(&cx).amount.0, stake(&cx).earned.0);
+        assert_eq!(cover(&cx, r).premium.0, 3 * f);
+        let v0 = cell(&cx, r).vault.0;
+        cx.now += P + 1;
+        cx.run("revoke", &acc("g.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        assert!(get_logs().iter().any(|l| l.contains("cover_fee_returned") && l.contains(&format!("\"amount\":\"{}\"", f))));
+        assert!(get_logs().iter().any(|l| l.contains("\"revoked\"") && l.contains(&format!("\"refund\":\"{}\"", v0 + f))));
+        assert_eq!((stake(&cx).amount.0, stake(&cx).earned.0), (a0 - f, e0 - f));
+        assert_eq!(cover(&cx, r).premium.0, 2 * f);
+        assert_eq!(stake(&cx).exposure.0, 8 * U, "the lock stays");
+        // the same moment: nothing started beyond the first period
+        let (mut cx, r) = world3();
+        let a0 = stake(&cx).amount.0;
+        cx.run("revoke", &acc("g.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        assert_eq!(stake(&cx).amount.0, a0 - 2 * f);
+        // in the last period, nothing comes back
+        let (mut cx, r) = world3();
+        let a0 = stake(&cx).amount.0;
+        cx.now += 2 * P;
+        cx.run("revoke", &acc("g.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        assert_eq!(stake(&cx).amount.0, a0);
+        assert!(!get_logs().iter().any(|l| l.contains("cover_fee_returned")));
+        // the company revoking its own mandate keeps nothing back
+        let (mut cx, r) = world3();
+        let a0 = stake(&cx).amount.0;
+        cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        assert_eq!(stake(&cx).amount.0, a0);
+        // only free stake can come back
+        let (mut cx, r) = world3();
+        let st = stake(&cx);
+        let free = f / 2;
+        cx.run("poke", &writ(), None, 0, |w| { let mut s = st.clone(); s.exposure = U128(s.amount.0 - free); w.stakes.insert((acc("g.near"), None), s); }).unwrap();
+        cx.run("revoke", &acc("g.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        assert_eq!(stake(&cx).amount.0, st.amount.0 - free);
+        // revoked twice: refused, and nothing moves
+        let a1 = stake(&cx).amount.0;
+        assert!(cx.run("revoke", &acc("g.near"), None, 0, |w| w.revoke(U64(r), "x".into())).is_none());
+        err(&cx, "ALREADY_CLOSED");
+        assert_eq!(stake(&cx).amount.0, a1);
+    }
+
+    #[test]
     fn cover_alone_works_in_near_and_in_a_token() {
         let (mut cx, r) = world(opt());
         drop_credit(&mut cx, r);

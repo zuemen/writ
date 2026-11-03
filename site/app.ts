@@ -596,19 +596,25 @@ document.querySelectorAll<HTMLTableElement>(".cmp").forEach((t) => {
 function calc() {
   const raw = (id: string) => Number(($(id) as HTMLInputElement).value) || 0;
   const pctIn = (id: string, lo: number, hi: number) => Math.min(Math.max(raw(id), lo), hi) / 100;
-  const L = Math.max(raw("cL"), 0);
-  const s = pctIn("cS", 10, 90), p = pctIn("cP", 0, 100), c = pctIn("cC", 0, 60), e = pctIn("cE", 0, 90);
+  const V = Math.max(raw("cV"), 0), M = Math.max(raw("cM"), 0), L = Math.max(raw("cD"), 0) * Math.max(raw("cN"), 1);
+  const lost = Math.max(raw("cK"), 0) * M;
+  const s = pctIn("cS", 10, 90), p = L > 0 ? Math.min(lost / L, 1) : 0, c = pctIn("cC", 0, 60), e = pctIn("cE", 0, 90);
   const pct = (x: number, n = 2) => `${(x * 100).toFixed(n)}%`;
   const lowest = (c + p * (1 - s)) / (1 - e);
   const demo = 0.02 * 365 / 30;
   const absorb = (demo * (1 - e) - c) / (1 - s);
+  const usdN = (x: number) => `$${Math.round(x).toLocaleString("en-US")}`;
+  const fee = lowest * L;
   $("rF").textContent = pct(lowest);
-  $("rFee").textContent = `$${Math.round(lowest * L).toLocaleString("en-US")}`;
+  $("rL").textContent = usdN(L) + (L < 10 * M ? " (the contract needs 10 maximum payments)" : "");
+  $("rV").textContent = V > 0 ? pct(fee / V) : "n/a";
+  $("rBack").textContent = fee > 0 ? `$${(p * L * (1 - s) / fee).toFixed(2)}` : "n/a";
+  $("rFee").textContent = usdN(fee);
   $("rFloor").textContent = pct(c, 1);
   $("rDemo").textContent = `about ${Math.round(demo * 100)}%`;
   $("rP").textContent = absorb < 0 ? "none" : pct(Math.min(absorb, 1), 1);
 }
-["cL", "cS", "cP", "cC", "cE"].forEach((id) => $(id).addEventListener("input", calc));
+["cV", "cM", "cD", "cN", "cK", "cS", "cC", "cE"].forEach((id) => $(id).addEventListener("input", calc));
 calc();
 
 // ---------------- come and steal ----------------

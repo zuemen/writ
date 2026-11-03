@@ -57,10 +57,10 @@ DEMO_RESULT|PASS|paid=true|injection=SCOPE|attacker_gain=0|disclosed=true|revoke
 | Attack bench | `contract/tests/bench.rs` | Runs the wasm in a sandbox. Attacks numbered `A..`, normal paths `B..`. Records who was refused and the attacker's balance. |
 | Exact values | `contract/src/exact.rs` | Every money path to the yoctoNEAR and every deadline to the nanosecond. |
 | Fuzz | `contract/src/fuzz.rs` | Random call sequences with random failed callbacks; the books are checked after every step. |
-| Credential forgeries | `keri/test_forgeries.py` | F1–F32: forged or stale chains the verifier must refuse. |
+| Credential forgeries | `keri/test_forgeries.py` | F1–F36: forged or stale chains the verifier must refuse. |
 | Live models | `app/src/agent-live.ts`, `app/src/agent-credit.ts` | Real LLMs on a local sandbox. Small samples that show the contract holds whichever way the model goes, not how often models fail. |
 
-The numbers on this page, the README and the site are from CI run [41626045777](https://github.com/zuemen/writ/actions/runs/41626045777), on commit `ea27d76`: 125 attacks, 103 integration tests, 105 unit tests, 36 credential forgeries, `COVER_RESULT|PASS`. [bench.md](bench.md) is that run's table. The contract changed after it (`838562d`, audit fixes); rerun before quoting them against a later commit.
+The numbers on this page, the README and the site are from CI run [41626045777](https://github.com/zuemen/writ/actions/runs/41626045777), on commit `ea27d76`: 125 attacks, 103 integration tests, 105 unit tests, 36 credential forgeries, `COVER_RESULT|PASS`. [bench.md](bench.md) is that run's table. Rerun before quoting them against a later commit.
 
 ## The live model
 

@@ -33,11 +33,46 @@ F = (c + p × (1 − s)) / (1 − e)      lowest yearly fee that does not lose m
 
 How the fee works in the contract:
 
-- It is charged once, at activation, for every started 30-day period to `valid_until`. It is never refunded.
+- It is charged once, at activation, for every started 30-day period to `valid_until`.
 - At register it must leave one maximum payment under what the cover can pay, so on a long mandate it can still come close to the limit. The guarantor chooses when to activate, within the first half of the term.
-- A guarantor can revoke right after activating and keep the fee. Its lock isn't released early, so this doesn't free its money.
+- A guarantor that revokes keeps the fee for periods already started and returns the rest, as far as its free stake reaches. Its lock isn't released early, so revoking doesn't free its money. A company revoking its own mandate gets no fee back.
 
 Whether anyone would pay this is untested. Nobody has been asked. Offering it for real money may be regulated insurance or guarantee business, depending on the jurisdiction; no lawyer has reviewed it.
+
+### What you would have to believe
+
+No customer behind this; every input is an assumption. An agent pays $12M a year in invoices. Its mandate caps one payment at $5,000 and a day at $20,000, and the company reviews payments every 3 days, so one undetected run costs at most $60,000. That is the limit, not the $12M: filing a claim stops the whole tree. (The contract requires a limit of at least 10 maximum payments; $60,000 is 12.)
+
+Same formula, s=20%, e=25%. Loss rate p = fooled payments × $5,000 / $60,000.
+
+| Fooled $5,000 payments a year | p | Fee a year, c=4.6% to 14.2% | Share of $12M | The company gets back a year | Back per $1 of fee |
+|---|---|---|---|---|---|
+| 0 | 0% | $3,680–11,360 | 0.03–0.09% | $0 | $0 |
+| 1 every 4 years | 2.08% | $5,013–12,693 | 0.04–0.11% | $1,000 | $0.08–0.20 |
+| 1 | 8.33% | $9,013–16,693 | 0.08–0.14% | $4,000 | $0.24–0.44 |
+| 3 | 25% | $19,680–27,360 | 0.16–0.23% | $12,000 | $0.44–0.61 |
+
+Read the last column first. A company paying this itself gets back less than it pays, in every row, and full locking is why. So it would buy for another reason (a board or auditor that won't let an agent pay without it), or someone else pays.
+
+### Who would pay, if not the company
+
+Our first guess is the vendor of the agent, standing behind its own product to win a customer. It knows the agent, and it can fix what gets fooled, which a financial guarantor can't. Nobody has been asked, and nobody has agreed. The nearest public example we found is different in kind: [ElevenLabs](https://elevenlabs.io/blog/aiuc-announcement) insuring its own voice agents through an insurer, so that "risks associated with using AI, like an AI agent providing incorrect information to a customer, can now be insured against". That shows a vendor wanting this; it doesn't show one locking money.
+
+On the example above, for one customer, before any running cost: locked money $2,760–8,520 a year, plus $4,000 repaid if one payment is fooled, so $6,760–12,520. Ten such customers lock $600,000. The vendor should do this only if the cover wins sales worth more than that. Whether it does is untested.
+
+What this doesn't solve: the arbiter's pay isn't in this model and the contract has no arbiter fee; a claim stops the tree for up to 14 days by default, so a small loss may not be worth filing unless each agent has its own tree; and a vendor backing its own product may still be regulated. No lawyer has reviewed it.
+
+### Public cases
+
+What each would do on Writ is our reading of the rules, not a test.
+
+| Case | What happened | On Writ |
+|---|---|---|
+| [Grok and Bankrbot](https://incidentdatabase.ai/cite/1556/) | "An X user reportedly induced Grok and Bankrbot to transfer 3 billion DRB tokens, then valued at about $200,000." The same entry says "linked funds were later returned or converted." | The payee isn't in the mandate, so `SCOPE` refuses it. No loss, no claim. This is the firewall half. |
+| [FBI IC3, 2025](https://www.ic3.gov/AnnualReport/Reports/2025_IC3Report.pdf) | $3,046,598,558 reported lost to business email compromise, in 24,768 complaints. People were fooled, not agents, and many of these change the payee. | Changed payees: `SCOPE`. It can't be used as a loss rate for Writ. |
+| Our demo: a re-bill with a fake controller note | The model paid 10 of 10 (small sample), and every check passes. | The case cover is for. **We found no public case of this happening to an agent.** |
+
+The gap matters: public cases show agents do get talked out of money, but they fall in the half an allowlist stops. Whether the other half is common enough to pay for is what nobody knows yet.
 
 ## Second use: net-30 for sellers
 

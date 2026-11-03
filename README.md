@@ -34,6 +34,8 @@ sequenceDiagram
 
 The contract can't tell whether an agent was fooled. Someone has to decide, and the limit caps what a wrong or bought ruling costs the guarantor. Anything outside the mandate never gets this far: `SCOPE`, `PER_TX` and `DUPLICATE` refuse it. Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+**What cover is actually for.** A swapped payee never reaches cover: `SCOPE` refuses it. What's left is money sent to a seller you already approved: a re-bill under a new number, an inflated bill under the cap, a seller account someone took over, or a seller that bills twice and won't refund. If the seller refunds, there is no loss to claim, so this is the case where it doesn't. The terms are meant to transfer your rights against the seller to the guarantor. We haven't found a public case of an agent losing money this way; [the public losses we found](docs/ECONOMICS.md#public-cases) went to a payee an allowlist would have refused.
+
 **Second use: net-30 for sellers.** The same stake can back an order on credit: a seller sets a rule, ships if a guarantor has locked money for that order, and claims if the buyer doesn't pay. [`docs/INTEGRATE.md`](docs/INTEGRATE.md#second-use-net-30-for-sellers).
 
 ## Try it
@@ -47,7 +49,7 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with
 | 1 | `make setup` | contract builds; size and `sha256sum` of `contract/res/writ.wasm` printed |
 | 2 | `make cover-demo` | an agent fooled inside its limits: `DUPLICATE` on the same number, paid under a new one, a false claim denied, the real one upheld, the guarantor repays the loss less the company's share, then the same in a token; ends in `COVER_RESULT\|PASS` |
 | 3 | `make test` | `test result: ok. 105 passed`, then `test result: ok. 103 passed` and [`docs/bench.md`](docs/bench.md): 125 attacks, all blocked |
-| 4 | `make keri-check` | the credential chain is checked, then forged or stale chains are refused; last line `KERI_FORGERIES\|PASS\|32` |
+| 4 | `make keri-check` | the credential chain is checked, then forged or stale chains are refused; last line `KERI_FORGERIES\|PASS\|36` |
 | 5 | `make credit-demo` | the net-30 story with real KERI signatures; ends in `CREDIT_RESULT\|PASS` |
 | 6 | `make credit-usdc-demo` | the same in a mock 6-decimal stablecoin; ends in `CREDIT_USDC_RESULT\|PASS` |
 | 7 | `make demo` | a local sandbox starts (port 3030 must be free) and the prepaid story runs; last line starts `DEMO_RESULT\|PASS` |
@@ -70,7 +72,7 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 ## Economics
 
 - The cost floor is the locked money: 4.6–14.2% of the limit a year, before any claim or running cost. Fully locked money is why this is expensive.
-- **Nobody has data on how often agents get fooled.** We can't compute a loss rate, so we can't compute a price.
+- **Nobody has data on how often agents get fooled**, so we can't give a price. We can say what you'd have to believe: with a $60,000 limit, and every input here an assumption, a guarantor needs $9,013–16,693 a year if one $5,000 payment is fooled each year. A company paying that itself gets back $0.24–0.44 per $1, so our first guess at who pays is the vendor of the agent. [Worked example](docs/ECONOMICS.md#what-you-would-have-to-believe).
 - The demo's 2% per 30 days is about 24% of the limit a year. It is a placeholder, not a price. [`docs/ECONOMICS.md`](docs/ECONOMICS.md)
 
 ## Limits
@@ -78,7 +80,7 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 - **The arbiter is a person you must trust.** Bought by the company, it costs the guarantor up to the limit; the limit protects only the guarantor. Bought by the guarantor, it can deny claims and end the company's cover after a denial.
 - **Moral hazard is capped, not stopped.** A company that fools its own agent with a seller it controls can take the loss minus its share, up to the limit, if the arbiter upholds.
 - **Seller refunds are invisible**, and nothing adds up a company's mandates into a total.
-- **A guarantor can revoke right after activating and keep the fee.** Its lock isn't released early. The fee is charged once, can come close to the limit on a long mandate, and the guarantor chooses when to activate, within the first half of the term.
+- **A guarantor can revoke right after activating and keep the fee for every period already started.** Later periods go back to the company, as far as its free stake reaches. Its lock isn't released early. The fee is charged up front, can come close to the limit on a long mandate, and the guarantor chooses when to activate, within the first half of the term.
 - **The demo's windows are short:** the arbiter has 60 seconds and a payment can be claimed for 10 minutes. The 14 days in the docs is the contract's default.
 - **A fooled payment inside every limit still gets paid.** Cover repays it afterwards, if the arbiter upholds; it doesn't stop it.
 

@@ -3,6 +3,7 @@
 The contract cannot be upgraded, so each change to it is a new deployment on a new testnet account. Newest first. Taken from the git log.
 
 ## {CONTRACT} (cover; not yet deployed from this branch)
+- A guarantor that revokes returns the fee for 30-day periods not yet started, up to its free stake (`cover_fee_returned`). It used to keep all of it.
 
 Attestation format `writ:attest:v7`. The direction changes: from net-30 for sellers to who pays when an agent is fooled. Net-30 stays as a second use of the same stake.
 

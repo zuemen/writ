@@ -246,7 +246,7 @@ pub struct RegisterArgs {
 pub struct CoverArgs {
     pub limit: U128,         // most the guarantor can pay in total under this mandate, locked in full at activation
     pub deductible_bps: u32, // the company's share of each loss, 1000..=9000
-    pub premium_bps: u32,    // fee on the limit per 30 days, at most 2000; charged once, at activation, never refunded
+    pub premium_bps: u32,    // fee on the limit per 30 days, at most 2000; charged once, at activation; a guarantor that revokes returns the periods not started
     pub claim_window: U64,   // seconds after a payment during which it can be claimed
     pub arbiter: AccountId,  // rules on claims; not the company, the guarantor or the owner
     pub terms_hash: String,  // hash of the terms: what is covered and excluded, the seller's chance to respond, the no-refund statement, transfer of rights
@@ -1169,10 +1169,13 @@ impl Contract {
     /// Manual revocation, by the funder, this cell's verifier, or the owner.
     /// evidence: the SAID of the KERI rev event (supplied by a watcher) or "manual".
     pub fn revoke(&mut self, cell: U64, evidence: String) {
-        let c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
+        let mut c = self.cells.get(&cell.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
         let who = env::predecessor_account_id();
         require!(evidence.len() <= MAX_EVIDENCE, "EVIDENCE_TOO_LONG");
         require!(who == c.funder || (who == c.verifier && self.verifiers.contains_key(&who)) || who == self.owner, "NOT_AUTHORIZED");
+        require!(c.status == Status::Active || matches!(c.status, Status::Tripped), "ALREADY_CLOSED");
+        let back = self.refund_unstarted_fee(cell.0, &c, &who);
+        c.vault = U128(c.vault.0 + back);
         self.close(cell.0, c, Status::Revoked { by: who, evidence });
     }
 
@@ -2741,6 +2744,27 @@ impl Contract {
     }
 
     /// Ends the lock: stake.exposure drops by what is still locked.
+    /// A guarantor that walks away returns the fee for the 30-day periods not yet started, out of its free stake. It goes through the vault, so `close` refunds it or holds it against debts.
+    fn refund_unstarted_fee(&mut self, root: u64, c: &Cell, who: &AccountId) -> u128 {
+        let Some(mut cv) = self.covers.get(&root).cloned() else { return 0 };
+        if cv.state != CoverState::Active || *who != cv.guarantor {
+            return 0;
+        }
+        let left = fee_periods(c.valid_until.0, env::block_timestamp()) - 1;
+        let mut st = self.stake_get(who, &c.asset);
+        let free = st.amount.0.saturating_sub(st.exposure.0);
+        let back = guarantee_fee(cv.args.limit.0, cv.args.premium_bps, left).min(cv.premium.0).min(free);
+        if back == 0 {
+            return 0;
+        }
+        st.amount = U128(st.amount.0 - back);
+        st.earned = U128(st.earned.0.saturating_sub(back));
+        self.stake_put(who, &c.asset, st);
+        cv.premium = U128(cv.premium.0 - back);
+        self.covers.insert(root, cv);
+        event("cover_fee_returned", serde_json::json!({"cell": root.to_string(), "amount": back.to_string()}));
+        back
+    }
     fn unlock_cover(&mut self, root: u64, cv: &mut Cover, state: CoverState) -> u128 {
         let asset = self.cells.get(&root).and_then(|c| c.asset.clone());
         let mut st = self.stake_get(&cv.guarantor, &asset);

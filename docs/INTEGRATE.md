@@ -6,6 +6,12 @@ The commands use [NEAR CLI](https://github.com/near/near-cli-rs). Numbers and am
 
 ## Cover: a company and a guarantor
 
+**A scenario, not a customer.** A vendor sells an accounts-payable agent. A prospect's auditor asks: if the agent pays a bill it shouldn't have, inside its limits, who repays it? The vendor's contract caps its liability, and nobody has read the prospect's crime policy for this case.
+
+So the vendor signs a Writ mandate for this customer: $60,000 locked, the customer keeps 20% of each loss, and an outside accountant named as arbiter. The auditor can read all of that with one call to `cover_of`, without trusting the vendor's balance sheet. If the agent is fooled and the seller won't refund, the customer files, the agents stop, the accountant rules, and the customer is repaid from the lock.
+
+It costs the vendor $2,760–8,520 a year in locked money, plus $4,000 if one $5,000 payment is fooled. Every number here is an assumption. We haven't asked a vendor, an auditor or an accountant.
+
 You run an agent that pays invoices. You want a named party to repay what it gets fooled into paying inside its limits. Exact methods are in [CONTRACT.md](CONTRACT.md#cover-methods); `make cover-demo` runs all of this on a sandbox, and `app/src/cover-demo.ts` is the shortest worked example.
 
 ### Guarantor: agree terms and sign
@@ -340,4 +346,4 @@ Naming recovers no money. It is a public record, and whether it has any legal ef
 - **The company** gets credit for its agents without showing its purchasing to everyone, and pays only on what sellers accept.
 - **The guarantor** earns `premium_bps` of every accepted order, on-chain, and its income is accepted volume × fee, against losses it can price from a public payment record. It has its own stake at risk, so it has a reason to check the company.
 
-Nothing here has been priced with a real customer: the 2% in the demo is a placeholder. The likely guarantors are firms that already underwrite trade credit or verify companies, which is a hypothesis we have not tested with any of them. The contract takes no protocol fee.
+Nothing here has been priced with a real customer: the 2% in the demo is a placeholder. The first guarantor we would ask is the vendor or platform behind the company's agents, because it knows the agent and gains from the sale. Firms that already underwrite trade credit come after that. This is a hypothesis; nobody has been asked. The contract takes no protocol fee.

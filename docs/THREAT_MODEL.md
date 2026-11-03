@@ -64,7 +64,7 @@ The contract does not replay KELs. It trusts the verifier's binding of AID to ke
 | Threat | Defense | Tests |
 |---|---|---|
 | False or endless claims | One open claim per tree; one claim per payment; claim window; no claim on a payment before activation; loss at most the amount paid | `A98`, `A101`–`A104`, `A118` |
-| Cover taken back, or stake locked twice | Fee never refunded and lock not released early; orders and cover share one exposure; terms signed | `A99`, `A109`, `A110`, `A112`, `A113` |
+| Cover taken back, or stake locked twice | Fee for started periods kept, later periods returned if the guarantor revokes, and lock not released early; orders and cover share one exposure; terms signed | `A99`, `A109`, `A110`, `A112`, `A113` |
 | Injected payee, amount, repeat or terms | Scope, invoice hash, per-payment cap, tenor range | `A01`, `A20`, `A31`, `A32`, `A57`, `A58`, `A63` |
 | Budget invented, replayed, or drained fast | Hash chain, chain length, daily rate, vault check | `A02`–`A05`, `A23`, `A42` |
 | Stolen or expired agent key | Protocol limits on the key; expiry; three strikes delete it | `A06`–`A11`, `B01` |
@@ -133,8 +133,8 @@ All of these hold for the current contract.
 - **Moral hazard is capped, not stopped.** A company that fools its own agent, with a seller it controls, gets the loss minus its share, if the arbiter upholds. The share and the limit are the only brakes; there is no fraud check.
 - **Seller refunds are invisible.** If a seller refunds a fooled payment, the contract can't see it, so a company could be repaid twice. The terms ask for a statement; nothing on-chain checks it.
 - **No company-wide total.** Each mandate has its own limit. Nothing adds up a company's mandates, or stops it buying cover from several guarantors for one loss.
-- **A guarantor can revoke right after activating and keep the fee.** Its lock isn't released early (`A99`), but the agent is stopped and the company has paid for nothing it can use.
-- **The fee is charged once, can come close to the limit, and the guarantor chooses when.** It is taken at activation for every started 30-day period to `valid_until`. At register it must leave one maximum payment under what the cover can pay, and activation must fall in the first half of the term ([CONTRACT.md](CONTRACT.md#cover-methods)). Inside that, a company can't refuse an activation it signed for, except by revoking the mandate.
+- **A guarantor can revoke right after activating and keep the fee for the periods already started.** Later periods go back to the company, out of the guarantor's free stake, so a guarantor that has withdrawn or lost that stake returns less. Its lock isn't released early (`A99`), but the agent is stopped, and the company has paid for up to one period it can't use. Revoking its own mandate returns the company nothing.
+- **The fee is charged up front, can come close to the limit, and the guarantor chooses when.** It is taken at activation for every started 30-day period to `valid_until`. At register it must leave one maximum payment under what the cover can pay, and activation must fall in the first half of the term ([CONTRACT.md](CONTRACT.md#cover-methods)). Inside that, a company can't refuse an activation it signed for, except by revoking the mandate.
 - **Cover has no loss data behind it.** Full locking is the floor on price, and nobody can compute the rest. See [ECONOMICS.md](ECONOMICS.md).
 - **Clearing is a record, not a control.** `clear_agent` says the company dealt with its agent; nothing checks that. The guarantor's control is `revoke`.
 - **The demo's windows are short.** Its arbiter has 60 seconds and a payment can be claimed for 10 minutes. The 14 days in [CONTRACT.md](CONTRACT.md#windows) is the contract's default.

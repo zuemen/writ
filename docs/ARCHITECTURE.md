@@ -30,7 +30,7 @@ The contract can't tell whether an agent was fooled. It records each payment, an
 3. **Recorded.** Each payment whose money arrived while cover was `Active` keeps `{cell, to, amount, paid_at, context_hash, claim}`. Other payments can't be claimed (`A118`).
 4. **Stopped.** `file_claim` opens one claim for the tree (`A101`). `spend`, `hire` and `open_credit` return `UNDER_CLAIM` with no strike (`A107`), everywhere in the tree (`A97`). `settle` still works, because stopping it would manufacture a default.
 5. **Ruled.** `resolve_claim` inside `dispute_timeout` (`A104`). Uphold pays `loss × (1 − share)`, at most what is locked, from the stake to the company's `claimable`, or to the root's vault if there is open credit or a debt (`A100`). The tree then returns `NOT_CLEARED` until `clear_agent`. Deny moves nothing. No ruling: `claim_timeout`, nothing moves, and it can be filed again.
-6. **Ended.** `release_cover` after `valid_until` + `claim_window`; revoking doesn't bring that forward (`A99`). `void_cover` ends it early after a denied claim, if the arbiter finds fraud.
+6. **Ended.** `release_cover` after `valid_until` + `claim_window`; revoking doesn't bring that forward (`A99`), and a guarantor that revokes returns the fee for periods not started. `void_cover` ends it early after a denied claim, if the arbiter finds fraud.
 
 Limits of this path are in [THREAT_MODEL.md](THREAT_MODEL.md#cover).
 
@@ -180,7 +180,7 @@ sequenceDiagram
 
 **One key, two worlds.** The agent's KERI identifier is a *delegated AID* under the employee's key event log (GLEIF discussion paper, Annex A p.44). Its Ed25519 signing key is the same key that is added as a NEAR function-call key on the contract account. `keri/issuer.py` exports it as a NEAR secret key; `app/src/flow.ts` signs NEAR transactions with it.
 
-**What the chain is here.** `make keri-check` checks a mock root → QVI → legal entity → ECR → AMC: KEL, TEL, ACDC, registry control, schemas, I2I edges, delegation. It then refuses forged or stale chains (`keri/test_forgeries.py`, F1–F14). The QVI, legal entity and ECR credentials use the official vLEI schemas (`keri/schemas/`); the issuers are mocks. GLEIF has not published an AMC schema, so `keri/common.py` is a proposal.
+**What the chain is here.** `make keri-check` checks a mock root → QVI → legal entity → ECR → AMC: KEL, TEL, ACDC, registry control, schemas, I2I edges, delegation. It then refuses forged or stale chains (`keri/test_forgeries.py`, F1–F36). The QVI, legal entity and ECR credentials use the official vLEI schemas (`keri/schemas/`); the issuers are mocks. GLEIF has not published an AMC schema, so `keri/common.py` is a proposal.
 
 **The contract does not replay KELs.** It trusts the verifier's binding of AID to key, then checks one signed anchoring event. Duplicity detection and key-state verification happen off-chain in `keri/verify.py`, with no witnesses or watchers in this demo.
 

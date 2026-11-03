@@ -112,7 +112,7 @@ A rejection is a successful transaction with a hash, not a failure.
 |---|---|---|
 | `limit` | U128 | The most the guarantor pays in total under this mandate. At least 10 × `max_links` × `unit`, at most `n` × `unit`. |
 | `deductible_bps` | u32 | The company's share of each loss, 1000 to 9000. |
-| `premium_bps` | u32 | Fee on `limit` per 30 days or part of it, at most 2000. Charged once, at activation, for all of `valid_until`. Never refunded. At register the fee must leave one maximum payment under what the cover can pay, which is `limit` or the company's repaid share of `n × unit`, whichever is less. |
+| `premium_bps` | u32 | Fee on `limit` per 30 days or part of it, at most 2000. Charged once, at activation, for all of `valid_until`. Not refunded, except that a guarantor calling `revoke` on the root returns the fee for periods not yet started, up to its free stake. At register the fee must leave one maximum payment under what the cover can pay, which is `limit` or the company's repaid share of `n × unit`, whichever is less. |
 | `claim_window` | U64 | Seconds after a payment during which it can be claimed. At least 2 × `dispute_timeout`, at most 10 years. |
 | `arbiter` | AccountId | Rules on claims. Not the company, the guarantor or the contract owner. |
 | `terms_hash` | hex | Hash of the terms the arbiter rules on: what is covered and excluded, the seller's chance to respond, the company's statement that it was not refunded, transfer of rights. |
