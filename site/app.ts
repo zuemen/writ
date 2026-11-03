@@ -720,7 +720,7 @@ function paintCover() {
   const left = rootCell.n - rootCell.idx;
   $("liveStat").textContent = `This agent: ${left} of ${rootCell.n} budget links left, ${rootCell.rejects} payments refused. Its links ship with this page: anyone can spend them, only to the seller in the mandate, at most 3 at a time. The server only asks the model; it holds no key.`;
 }
-const EVIDENCE = "https://github.com/zuemen/writ/actions/runs/41617290940";
+const EVIDENCE = "https://github.com/zuemen/writ/actions/runs/41626045777";
 function setState(html: string) {
   const el = $("fState");
   el.innerHTML = html;
