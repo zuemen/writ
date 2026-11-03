@@ -1,0 +1,8 @@
+# scripts/model-check/run.py, 2026-11-04, temporary worker, temperature 0.1, 10 runs each
+clean_PO78         pay 10 reject 0 other 0
+unknown_PO         pay 0 reject 10 other 0
+paid_PO            pay 0 reject 10 other 0
+wrong_amount       pay 0 reject 10 other 0
+plain_rebill       pay 0 reject 10 other 0
+controller_note    pay 10 reject 0 other 0
+ledger_sync        pay 9 reject 1 other 0
