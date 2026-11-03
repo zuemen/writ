@@ -34,6 +34,7 @@ mod fuzz {
         hits: BTreeMap<String, u64>,
         log: Vec<String>,
         sur: u128,
+        last_err: String,
     }
 
     impl Cx {
@@ -87,7 +88,11 @@ mod fuzz {
                     self.log.push(format!("{} ok", name));
                     Some(r)
                 }
-                Err(_) => { *self.fail.entry(name.to_string()).or_default() += 1; None }
+                Err(e) => {
+                    self.last_err = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+                    *self.fail.entry(name.to_string()).or_default() += 1;
+                    None
+                }
             }
         }
         fn resolve(&mut self, fail: bool) {
@@ -181,7 +186,7 @@ mod fuzz {
     }
 
     fn new_world(seed: u64) -> Cx {
-        let mut cx = Cx { snap: HashMap::new(), now: 1_000_000 * NS, bal: 5_000 * 1_000_000_000_000_000_000_000_000u128, rng: seed.wrapping_mul(0x9E3779B97F4A7C15) | 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0 };
+        let mut cx = Cx { snap: HashMap::new(), now: 1_000_000 * NS, bal: 5_000 * 1_000_000_000_000_000_000_000_000u128, rng: seed.wrapping_mul(0x9E3779B97F4A7C15) | 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0, last_err: String::new() };
         cx.up(&writ(), None, 0);
         let w = Contract::new(acc("owner.near"), None, Some(Windows { accept_ttl: U64(100), inspect: U64(50), grace: U64(50), recourse: U64(100), dispute_timeout: U64(200), unstake_delay: U64(30) }));
         env::state_write(&w);
@@ -277,7 +282,14 @@ mod fuzz {
                 if let Some(Verdict::CreditOpened { credit, .. }) = v { cx.credits.push(credit.0); }
                 "open_credit".into()
             }
-            7 | 8 => { let Some(c) = &info else { return "skip".into() }; let s = c.seller.clone(); let k = c.id; cx.run("accept", &s, None, 0, |w| w.accept_credit(k)); "accept".into() }
+            7 | 8 => {
+                let Some(c) = &info else { return "skip".into() }; let s = c.seller.clone(); let k = c.id;
+                cx.up(&s, None, 0);
+                let said = cx.peek(|w| w.check_order(k, None));
+                let got = cx.run("accept", &s, None, 0, |w| w.accept_credit(k)).is_some();
+                if said.ok != got { panic!("INVARIANT check_order ok={} but accept={} reasons={:?}", said.ok, got, said.reasons); }
+                "accept".into()
+            }
             9 | 10 => { let Some(c) = &info else { return "skip".into() }; let s = c.seller.clone(); let k = c.id; let f = match cx.r(5) { 0 => Some(U128((c.amount.0 / 2).max(1))), 1 => Some(U128(c.amount.0 - 1)), 2 => Some(U128(c.amount.0 + 1)), _ => None }; cx.run("deliver", &s, None, 0, |w| w.mark_delivered(k, "ab".repeat(32), f)); "deliver".into() }
             11 => {
                 let Some(c) = &info else { return "skip".into() }; let k = c.id; let cc = c.cell.0;
@@ -301,7 +313,14 @@ mod fuzz {
             20 => { let Some(c) = &info else { return "skip".into() }; let k = c.id; let who = [funder.clone(), g.clone(), c.seller.clone()][cx.r(3) as usize].clone(); cx.run("cancel", &who, None, 0, |w| w.cancel_open(k)); "cancel".into() }
             21 => { let who = [acc("s1.near"), acc("s2.near"), funder.clone(), g.clone()][cx.r(4) as usize].clone(); cx.run("withdraw", &who, None, 0, |w| { let _ = w.withdraw(); }); "withdraw".into() }
             22 => {
-                match cx.r(9) {
+                match cx.r(10) {
+                    8 => {
+                        let s = [acc("s1.near"), acc("s2.near")][cx.r(2) as usize].clone();
+                        let p = if cx.r(4) == 0 { None } else { Some(SellerPolicy { max_amount: U128((cx.r(6) as u128 + 1) * UNIT), max_tenor_secs: U64(cx.r(400) + 10), min_bond_bps: [0u32, 2000, 5000][cx.r(3) as usize], max_defaults: cx.r(3) as u32, guarantors: if cx.r(3) == 0 { vec![acc("other.near")] } else { vec![] } }) };
+                        let d = SELLER_POLICY_STORAGE + cx.r(2) as u128 * 5;
+                        cx.run("set_policy", &s, None, d, |w| w.set_seller_policy(p));
+                        "set_policy".to_string()
+                    }
                     0 => { cx.run("revoke", &funder, None, 0, |w| w.revoke(U64(cid), "manual".into())); "revoke".to_string() }
                     1 => { cx.run("claim_refund", &funder, None, 0, |w| w.claim_refund(U64(cid))); "claim_refund".to_string() }
                     2 => { let d = UNIT; cx.run("top_up", &funder, None, d, |w| w.top_up(U64(cid))); "top_up".to_string() }

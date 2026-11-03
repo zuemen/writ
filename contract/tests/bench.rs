@@ -1374,19 +1374,19 @@ async fn credit_world_fee(bond_bps: u32, premium_bps: u32, stake: u128, grace: u
 }
 
 /// 信用世界的所有選項。預設：沒保證金、沒費用、質押 5 NEAR、金庫 30 節。
-struct CwOpts { bond: u32, premium: u32, stake: u128, grace: u64, recourse: u64, vault: u128, lei: String, inspect: u64, max_tenor: u64, fee_payer: &'static str }
+struct CwOpts { bond: u32, premium: u32, stake: u128, grace: u64, recourse: u64, vault: u128, lei: String, inspect: u64, max_tenor: u64, fee_payer: &'static str, accept_ttl: u64 }
 impl Default for CwOpts {
     fn default() -> Self {
-        Self { bond: 0, premium: 0, stake: 5, grace: 0, recourse: 1, vault: 30 * UNIT, lei: LEI.to_string(), inspect: 0, max_tenor: 3600, fee_payer: "Buyer" }
+        Self { bond: 0, premium: 0, stake: 5, grace: 0, recourse: 1, vault: 30 * UNIT, lei: LEI.to_string(), inspect: 0, max_tenor: 3600, fee_payer: "Buyer", accept_ttl: 2 }
     }
 }
 
 async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
-    let CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei, inspect, max_tenor, fee_payer } = x;
+    let CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei, inspect, max_tenor, fee_payer, accept_ttl } = x;
     let worker = near_workspaces::sandbox().await?;
     let writ = worker.dev_deploy(&wasm_bytes()?).await?;
     writ.call("new").args_json(json!({"owner": writ.id(), "unseal_delay_secs": 5,
-        "windows": {"accept_ttl": "2", "inspect": inspect.to_string(), "grace": grace.to_string(), "recourse": recourse.to_string(), "dispute_timeout": "2", "unstake_delay": "1"}}))
+        "windows": {"accept_ttl": accept_ttl.to_string(), "inspect": inspect.to_string(), "grace": grace.to_string(), "recourse": recourse.to_string(), "dispute_timeout": "2", "unstake_delay": "1"}}))
         .transact().await?.into_result()?;
     let verifier = worker.dev_create_account().await?;
     let funder = worker.dev_create_account().await?;
@@ -2259,6 +2259,49 @@ async fn b32_a_usage_order_settles_only_what_was_used() -> anyhow::Result<()> {
     assert_eq!(p["idx"], 10, "the budget links stay spent");
     assert_eq!(cw.solvent().await["solvent"], true);
     bench("B32", "usage order: limit 10, seller bills 7.3, bond and exposure follow, only 7.3 settles", "7.3 paid", "7.3 paid", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn b33_a_seller_rule_refuses_is_adjusted_and_ships() -> anyhow::Result<()> {
+    let cw = credit_world_x(CwOpts { bond: 2500, accept_ttl: 3600, ..Default::default() }).await?;
+    let w = &cw.w;
+    let rule = |bond: u32, max: u128, gs: Value| json!({"max_amount": max.to_string(), "max_tenor_secs": "7200", "min_bond_bps": bond, "max_defaults": 0, "guarantors": gs});
+    let dep = NearToken::from_millinear(10);
+    // 沒付儲存押金
+    let r = w.merchant.call(w.writ.id(), "set_seller_policy").args_json(json!({"policy": rule(5000, 3 * UNIT, json!([]))})).transact().await?.into_result();
+    assert!(format!("{:?}", r).contains("POLICY_STORAGE"), "{:?}", r);
+    bench("A83", "seller makes the contract store a rule without paying for the storage", "POLICY_STORAGE", "POLICY_STORAGE", gain(w).await);
+    w.merchant.call(w.writ.id(), "set_seller_policy").args_json(json!({"policy": rule(5000, 3 * UNIT, json!([w.attacker.id()]))})).deposit(dep).transact().await?.into_result()?;
+
+    let id = cw.opened(5, 5, 3600, "INV-RULE").await;
+    let c: Value = w.writ.view("check_order").args_json(json!({"credit": id})).await?.json()?;
+    assert_eq!(c["ok"], false);
+    assert_eq!(c["reasons"], json!(["ORDER_TOO_LARGE", "BOND_TOO_LOW", "GUARANTOR_NOT_APPROVED"]), "{}", c);
+    assert_eq!(c["order"]["amount"], (5 * UNIT).to_string());
+    assert_eq!(c["order"]["guarantor"], w.verifier.id().as_str());
+    let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
+    assert!(e.contains("POLICY:ORDER_TOO_LARGE"), "{}", e);
+    assert_eq!(cw.credit(&id).await["status"], "Open");
+    bench("A84", "an order outside the seller's own rule gets accepted anyway", "POLICY:ORDER_TOO_LARGE", "POLICY:ORDER_TOO_LARGE", gain(w).await);
+
+    // 別人設的規則只算他自己的，動不到賣方的
+    w.attacker.call(w.writ.id(), "set_seller_policy").args_json(json!({"policy": rule(0, 5 * UNIT, json!([]))})).deposit(dep).transact().await?.into_result()?;
+    let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
+    assert!(e.contains("POLICY:ORDER_TOO_LARGE"), "{}", e);
+
+    // 先用傳入的規則試算，不會存下來
+    let c: Value = w.writ.view("check_order").args_json(json!({"credit": id, "policy": rule(2500, 5 * UNIT, json!([]))})).await?.json()?;
+    assert_eq!(c["ok"], true, "{}", c);
+    let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
+    assert!(e.contains("POLICY:ORDER_TOO_LARGE"), "{}", e);
+    // 調整規則（不用再付押金）就出貨
+    cw.seller("set_seller_policy", json!({"policy": rule(2500, 5 * UNIT, json!([w.verifier.id()]))})).await.unwrap();
+    let c: Value = w.writ.view("check_order").args_json(json!({"credit": id})).await?.json()?;
+    assert_eq!(c["ok"], true, "{}", c);
+    cw.seller("accept_credit", json!({"credit": id})).await.unwrap();
+    assert_eq!(cw.credit(&id).await["status"], "Accepted");
+    bench("B33", "seller rule: refused with reasons, rule adjusted, order ships", "refused, adjusted, accepted", "refused, adjusted, accepted", 0);
     Ok(())
 }
 

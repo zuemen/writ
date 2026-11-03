@@ -14,7 +14,7 @@ mod exact {
     }
 
     fn world(o: Opt) -> (Cx, u64) {
-        let mut cx = Cx { snap: HashMap::new(), now: T0, bal: 5_000_000 * 1_000_000_000_000_000_000_000_000u128, rng: 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0 };
+        let mut cx = Cx { snap: HashMap::new(), now: T0, bal: 5_000_000 * 1_000_000_000_000_000_000_000_000u128, rng: 1, pending: VecDeque::new(), cells: vec![], roots: vec![], credits: vec![], nextpk: 0, nextinv: 1, ok: Default::default(), fail: Default::default(), hits: Default::default(), log: vec![], sur: 0, last_err: String::new() };
         cx.up(&writ(), None, 0);
         let w = Contract::new(acc("owner.near"), None, Some(Windows { accept_ttl: U64(100), inspect: U64(50), grace: U64(50), recourse: U64(100), dispute_timeout: U64(200), unstake_delay: U64(30) }));
         env::state_write(&w);
@@ -586,6 +586,132 @@ mod exact {
         assert_eq!(cred(&cx, k).debt.0, 0);
         assert_eq!(stake(&cx).exposure.0, 0);
     }
+
+    fn rule(max: u128, tenor: u64, bond: u32, defaults: u32, gs: &[&str]) -> SellerPolicy {
+        SellerPolicy { max_amount: U128(max), max_tenor_secs: U64(tenor), min_bond_bps: bond, max_defaults: defaults, guarantors: gs.iter().map(|g| acc(g)).collect() }
+    }
+    fn set_rule(cx: &mut Cx, p: Option<SellerPolicy>, dep: u128) -> bool { cx.run("set", &acc("s1.near"), None, dep, |w| w.set_seller_policy(p)).is_some() }
+    fn accept_err(cx: &mut Cx, k: u64) -> bool { cx.run("accept", &acc("s1.near"), None, 0, |w| w.accept_credit(U64(k))).is_none() }
+    fn check(cx: &Cx, k: u64, p: Option<SellerPolicy>) -> OrderCheck { cx.peek(|w| w.check_order(U64(k), p)) }
+
+    #[test]
+    fn a_policy_costs_a_deposit_once_and_the_excess_is_claimable() {
+        let (mut cx, _) = world(opt());
+        let p = || Some(rule(U, 100, 0, 0, &[]));
+        assert!(!set_rule(&mut cx, p(), SELLER_POLICY_STORAGE - 1));
+        assert!(cx.peek(|w| w.policies.get(&acc("s1.near")).is_none()));
+        let (t, ok) = (total(&cx), set_rule(&mut cx, p(), SELLER_POLICY_STORAGE));
+        assert!(ok);
+        assert_eq!((total(&cx), claim(&cx, "s1.near")), (t, None), "the deposit pays for storage, it is nobody's money");
+        assert!(set_rule(&mut cx, Some(rule(2 * U, 100, 0, 0, &[])), 0), "changing the rule costs nothing");
+        assert_eq!(cx.peek(|w| w.seller_policy(acc("s1.near"))).unwrap().max_amount.0, 2 * U);
+        assert!(set_rule(&mut cx, p(), 9));
+        assert_eq!((total(&cx), claim(&cx, "s1.near")), (t + 9, Some(9)));
+        assert!(set_rule(&mut cx, None, 0));
+        assert!(cx.peek(|w| w.seller_policy(acc("s1.near"))).is_none());
+        assert!(!set_rule(&mut cx, p(), SELLER_POLICY_STORAGE - 1), "setting it again pays again");
+        assert!(set_rule(&mut cx, p(), SELLER_POLICY_STORAGE));
+        // 上限與比例
+        let many: Vec<AccountId> = (0..MAX_POLICY_GUARANTORS).map(|i| acc(&format!("g{}.near", i))).collect();
+        let mut q = rule(U, 1, 10_000, 0, &[]);
+        q.guarantors = many.clone();
+        assert!(set_rule(&mut cx, Some(q.clone()), 0), "exactly the maximum");
+        q.guarantors.push(acc("gx.near"));
+        assert!(!set_rule(&mut cx, Some(q), 0), "one more");
+        assert!(!set_rule(&mut cx, Some(rule(U, 1, 10_001, 0, &[])), 0));
+    }
+
+    #[test]
+    fn every_rule_refuses_at_its_exact_boundary() {
+        // 金額
+        let (mut cx, r) = world(opt());
+        let k = opened(open(&mut cx, r, 2));
+        assert!(set_rule(&mut cx, Some(rule(2 * U - 1, 10_000, 0, 9, &[])), SELLER_POLICY_STORAGE));
+        assert_eq!(check(&cx, k, None).reasons, vec!["ORDER_TOO_LARGE"]);
+        assert!(accept_err(&mut cx, k));
+        assert_eq!(cred(&cx, k).status, CreditStatus::Open);
+        assert!(set_rule(&mut cx, Some(rule(2 * U, 10_000, 0, 9, &[])), 0));
+        assert!(check(&cx, k, None).ok);
+        accept(&mut cx, k);
+        // 天期
+        let (mut cx, r) = world(opt());
+        let n = cx.now;
+        let k = opened(open_at(&mut cx, r, 1, n + 100 * NS));
+        assert!(set_rule(&mut cx, Some(rule(U, 99, 0, 9, &[])), SELLER_POLICY_STORAGE));
+        assert_eq!(check(&cx, k, None).reasons, vec!["TENOR_TOO_LONG"]);
+        assert!(set_rule(&mut cx, Some(rule(U, 100, 0, 9, &[])), 0));
+        assert!(check(&cx, k, None).ok);
+        // 保證金
+        let mut o = opt(); o.bond = 2500;
+        let (mut cx, r) = world(o);
+        let k = opened(open(&mut cx, r, 1));
+        assert!(set_rule(&mut cx, Some(rule(U, 10_000, 2501, 9, &[])), SELLER_POLICY_STORAGE));
+        assert_eq!(check(&cx, k, None).reasons, vec!["BOND_TOO_LOW"]);
+        assert!(set_rule(&mut cx, Some(rule(U, 10_000, 2500, 9, &[])), 0));
+        assert!(check(&cx, k, None).ok);
+        // 違約數
+        let (mut cx, r) = world(opt());
+        let k = opened(open(&mut cx, r, 1));
+        cx.run("rec", &writ(), None, 0, |w| { w.entities.insert("g.near:t".to_string(), EntityRecord { defaults: 2, ..Default::default() }); }).unwrap();
+        assert!(set_rule(&mut cx, Some(rule(U, 10_000, 0, 1, &[])), SELLER_POLICY_STORAGE));
+        assert_eq!(check(&cx, k, None).reasons, vec!["TOO_MANY_DEFAULTS"]);
+        assert!(set_rule(&mut cx, Some(rule(U, 10_000, 0, 2, &[])), 0));
+        assert!(check(&cx, k, None).ok);
+        // 保證人清單
+        assert!(set_rule(&mut cx, Some(rule(U, 10_000, 0, 2, &["other.near"])), 0));
+        assert_eq!(check(&cx, k, None).reasons, vec!["GUARANTOR_NOT_APPROVED"]);
+        assert!(set_rule(&mut cx, Some(rule(U, 10_000, 0, 2, &["other.near", "g.near"])), 0));
+        assert!(check(&cx, k, None).ok);
+    }
+
+    #[test]
+    fn check_order_reports_every_reason_and_accept_panics_with_the_first_rule() {
+        let mut o = opt(); o.bond = 10_000; o.vault = U; o.stake = 0;
+        let (mut cx, r) = world(o);
+        let n = cx.now;
+        let k = opened(open_at(&mut cx, r, 3, n + 100 * NS));
+        cx.run("rec", &writ(), None, 0, |w| { w.entities.insert("g.near:t".to_string(), EntityRecord { defaults: 1, ..Default::default() }); }).unwrap();
+        let strict = rule(U, 10, 20_000, 0, &["other.near"]);
+        let c = check(&cx, k, Some(strict.clone()));
+        assert!(!c.ok);
+        assert_eq!(c.reasons, vec!["ORDER_TOO_LARGE", "TENOR_TOO_LONG", "BOND_TOO_LOW", "TOO_MANY_DEFAULTS", "GUARANTOR_NOT_APPROVED", "BOND_SHORT"]);
+        assert_eq!(c.order["bond"], json_str(3 * U));
+        assert_eq!(c.order["guarantor_exposure"], json_str(0));
+        assert_eq!(c.order["policy_applied"], true);
+        // 傳入的規則只是問問：沒有存，accept 不看它
+        assert!(cx.peek(|w| w.policies.get(&acc("s1.near")).is_none()));
+        let g = cx.peek(|w| w.check_order(U64(k), None));
+        assert_eq!((g.reasons, g.order["policy_applied"].clone()), (vec!["BOND_SHORT".to_string()], Value::Bool(false)));
+        // 存了之後 accept 用第一條理由報錯
+        assert!(set_rule(&mut cx, Some(rule(U, 10, 0, 9, &[])), SELLER_POLICY_STORAGE));
+        assert!(accept_err(&mut cx, k));
+        assert!(cx.last_err.contains("POLICY:ORDER_TOO_LARGE"), "{}", cx.last_err);
+    }
+
+    #[test]
+    fn check_order_also_sees_what_the_money_and_the_state_would_refuse() {
+        // 沒質押
+        let mut o = opt(); o.stake = 0;
+        let (mut cx, r) = world(o);
+        let k = opened(open(&mut cx, r, 1));
+        assert_eq!(check(&cx, k, None).reasons, vec!["GUARANTOR_CAPACITY"]);
+        // 付不起費用，也鎖不起保證金
+        let mut o = opt(); o.premium = 2000; o.vault = S + 1; o.bond = 5000;
+        let (mut cx, r) = world(o);
+        let k = opened(open(&mut cx, r, 1));
+        assert_eq!(check(&cx, k, None).reasons, vec!["PREMIUM_SHORT", "BOND_SHORT"]);
+        // 過期的報價、已接受的單
+        let (mut cx, r) = world(opt());
+        let k = opened(open(&mut cx, r, 1));
+        assert!(check(&cx, k, None).ok);
+        accept(&mut cx, k);
+        assert_eq!(check(&cx, k, None).reasons, vec!["NOT_OPEN"]);
+        let k = opened(open(&mut cx, r, 1));
+        cx.now += 101 * NS;
+        assert_eq!(check(&cx, k, None).reasons, vec!["OFFER_EXPIRED"]);
+    }
+
+    fn json_str(v: u128) -> Value { Value::String(v.to_string()) }
 
     #[test]
     fn settle_may_use_only_its_own_bond() {

@@ -74,6 +74,9 @@ const MAX_EVIDENCE: usize = 128;
 /// 一筆信用紀錄的儲存，開單時從根格金庫收，不退。
 const CREDIT_STORAGE: u128 = 5_000_000_000_000_000_000_000;
 const GAS_FOR_FT: Gas = Gas::from_tgas(10);
+/// 賣方規則的儲存押金（1000 bytes，夠放 MAX_POLICY_GUARANTORS 個帳號）。第一次設定時收，刪除規則不退。
+pub const SELLER_POLICY_STORAGE: u128 = 10_000_000_000_000_000_000_000;
+pub const MAX_POLICY_GUARANTORS: usize = 8;
 
 #[derive(BorshStorageKey)]
 #[near]
@@ -92,6 +95,7 @@ enum StorageKey {
     Entities,
     UsedKeys,
     PendingInvoices,
+    Policies,
 }
 
 /// 格的狀態。Revoked / Tripped 之後鑰匙已不在合約帳號上。
@@ -269,6 +273,35 @@ pub struct Stake {
     pub earned: U128,    // 累計收到的保證費
 }
 
+/// 賣方的自動授信規則：訂單符合就出貨，不符合就回傳原因。
+#[near(serializers = [borsh, json])]
+#[derive(Clone)]
+pub struct SellerPolicy {
+    pub max_amount: U128,
+    pub max_tenor_secs: U64,
+    pub min_bond_bps: u32,
+    pub max_defaults: u32,            // 公司假名最多幾筆違約紀錄
+    pub guarantors: Vec<AccountId>,   // 核准的保證人；空 = 都接受
+}
+
+/// check_order 的回傳：ok = 現在呼叫 accept_credit 會成功。
+#[near(serializers = [json])]
+pub struct OrderCheck {
+    pub ok: bool,
+    pub reasons: Vec<String>,
+    pub order: Value,
+}
+
+/// 接受一張單要動的錢，以及錢不夠或曝險超限的理由。
+struct Quote {
+    fee: u128,
+    periods: u128,
+    charge: u128, // 接受當下從根格金庫收的費用：買方付 = fee，賣方付 = 0
+    bond: u128,
+    exposure: u128,
+    failures: Vec<String>,
+}
+
 /// 假名的付款紀錄，風險卡顯示。
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Default)]
@@ -360,6 +393,7 @@ pub struct Contract {
     entities: LookupMap<String, EntityRecord>,
     next_credit: u64,
     windows: Windows,
+    policies: LookupMap<AccountId, SellerPolicy>,
 }
 
 // ---------------- 小工具 ----------------
@@ -440,6 +474,7 @@ impl Contract {
                 dispute_timeout: U64(14 * 86_400),
                 unstake_delay: U64(30 * 86_400),
             }),
+            policies: LookupMap::new(StorageKey::Policies),
         }
     }
 
@@ -1472,46 +1507,172 @@ impl Contract {
     pub fn accept_credit(&mut self, credit: U64) {
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
         require!(env::predecessor_account_id() == cr.seller, "ONLY_SELLER");
-        require!(cr.status == CreditStatus::Open, "NOT_OPEN");
-        require!(env::block_timestamp() <= cr.opened_at.0 + self.windows.accept_ttl.0 * 1_000_000_000, "OFFER_EXPIRED");
+        let now = env::block_timestamp();
         let mut t = self.terms.get(&cr.root.0).cloned().unwrap();
         let mut root = self.cells.get(&cr.root.0).cloned().unwrap();
         let cell = self.cells.get(&cr.cell.0).cloned().unwrap();
-        // 公司已撤銷或停權、已凍結、期限已過：這張報價不能再成立，否則是拿保證人的錢墊
-        require!(cell.status == Status::Active && !self.suspended(&cell), "AGENT_NOT_ACTIVE");
-        require!(t.open_debts == 0, "COMPANY_FROZEN");
-        require!(env::block_timestamp() <= cell.valid_until.0, "MANDATE_EXPIRED");
-        require!(cr.seller != t.args.arbiter, "ARBITER_NOT_INDEPENDENT");
-        // 保證人或公司自己當賣方，等於自己製造違約：前者可走到揭露，後者把質押領給自己
-        require!(cr.seller != t.guarantor && cr.seller != root.funder, "SELLER_NOT_INDEPENDENT");
-        // 保證費：這是保證人肯做的理由。買方付的接受當下收，之後怎麼結束都不退（曝險已經承擔）；賣方付的等收款時扣
-        let periods = fee_periods(cr.due_at.0, env::block_timestamp());
-        let fee = guarantee_fee(cr.amount.0, t.args.premium_bps, periods);
-        let premium = if t.args.fee_payer == FeePayer::Buyer { fee } else { 0 };
-        let free = root.vault.0.saturating_sub(t.bond_locked.0);
-        require!(free >= premium, "PREMIUM_SHORT");
-        root.vault = U128(root.vault.0 - premium);
+        if let Some(r) = self.accept_state_failures(&cr, &t, &root, &cell, now).first() {
+            env::panic_str(r);
+        }
+        // 賣方自己設的規則；沒設就不檢查
+        if let Some(p) = self.policies.get(&cr.seller) {
+            if let Some(r) = self.policy_failures(p, &cr, &t, now).first() {
+                env::panic_str(&format!("POLICY:{}", r));
+            }
+        }
+        let q = self.quote(&cr, &t, &root, now);
+        if let Some(r) = q.failures.first() {
+            env::panic_str(r);
+        }
+        root.vault = U128(root.vault.0 - q.charge);
         self.cells.insert(cr.root.0, root);
-        let free = free - premium;
-        // 保證金是硬性要求：風險卡寫幾成就鎖幾成，付不出來這張單就不成立，差額不會靜默轉給保證人
-        let bond = cr.amount.0 * (t.args.bond_bps as u128) / 10_000;
-        require!(free >= bond, "BOND_SHORT");
-        let exposure = cr.amount.0 - bond;
         let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
-        require!(st.amount.0.saturating_add(premium).saturating_sub(st.exposure.0) >= exposure, "GUARANTOR_CAPACITY");
-        st.amount = U128(st.amount.0 + premium);
-        st.earned = U128(st.earned.0 + premium);
-        st.exposure = U128(st.exposure.0 + exposure);
+        st.amount = U128(st.amount.0 + q.charge);
+        st.earned = U128(st.earned.0 + q.charge);
+        st.exposure = U128(st.exposure.0 + q.exposure);
         self.stakes.insert(t.guarantor.clone(), st);
-        t.bond_locked = U128(t.bond_locked.0 + bond);
+        t.bond_locked = U128(t.bond_locked.0 + q.bond);
         self.terms.insert(cr.root.0, t);
-        cr.bond_locked = U128(bond);
-        cr.exposure = U128(exposure);
-        cr.fee = U128(fee);
-        cr.fee_periods = periods as u32;
+        cr.bond_locked = U128(q.bond);
+        cr.exposure = U128(q.exposure);
+        cr.fee = U128(q.fee);
+        cr.fee_periods = q.periods as u32;
         cr.status = CreditStatus::Accepted;
         self.credits.insert(credit.0, cr);
-        event("credit_accepted", serde_json::json!({"credit": credit.0.to_string(), "bond": bond.to_string(), "premium": premium.to_string(), "fee": fee.to_string(), "guarantor_exposure": exposure.to_string()}));
+        event("credit_accepted", serde_json::json!({"credit": credit.0.to_string(), "bond": q.bond.to_string(), "premium": q.charge.to_string(), "fee": q.fee.to_string(), "guarantor_exposure": q.exposure.to_string()}));
+    }
+
+    /// 這張單的狀態本身能不能被接受。順序就是 accept_credit 報錯的順序。
+    fn accept_state_failures(&self, cr: &Credit, t: &CreditTerms, root: &Cell, cell: &Cell, now: u64) -> Vec<String> {
+        let mut out: Vec<String> = vec![];
+        let mut no = |bad: bool, r: &str| {
+            if bad {
+                out.push(r.to_string());
+            }
+        };
+        no(cr.status != CreditStatus::Open, "NOT_OPEN");
+        no(now > cr.opened_at.0 + self.windows.accept_ttl.0 * 1_000_000_000, "OFFER_EXPIRED");
+        // 公司已撤銷或停權、已凍結、期限已過：這張報價不能再成立，否則是拿保證人的錢墊
+        no(cell.status != Status::Active || self.suspended(cell), "AGENT_NOT_ACTIVE");
+        no(t.open_debts != 0, "COMPANY_FROZEN");
+        no(now > cell.valid_until.0, "MANDATE_EXPIRED");
+        no(cr.seller == t.args.arbiter, "ARBITER_NOT_INDEPENDENT");
+        // 保證人或公司自己當賣方，等於自己製造違約：前者可走到揭露，後者把質押領給自己
+        no(cr.seller == t.guarantor || cr.seller == root.funder, "SELLER_NOT_INDEPENDENT");
+        out
+    }
+
+    /// 賣方規則逐條核對，回報每一條不符合的。
+    fn policy_failures(&self, p: &SellerPolicy, cr: &Credit, t: &CreditTerms, now: u64) -> Vec<String> {
+        let mut out: Vec<String> = vec![];
+        let mut no = |bad: bool, r: &str| {
+            if bad {
+                out.push(r.to_string());
+            }
+        };
+        no(cr.amount.0 > p.max_amount.0, "ORDER_TOO_LARGE");
+        no(cr.due_at.0.saturating_sub(now) > p.max_tenor_secs.0.saturating_mul(1_000_000_000), "TENOR_TOO_LONG");
+        no(t.args.bond_bps < p.min_bond_bps, "BOND_TOO_LOW");
+        let defaults = self.entities.get(&Self::entity_key(&t.guarantor, &t.args.entity_tag)).map(|r| r.defaults).unwrap_or(0);
+        no(defaults > p.max_defaults, "TOO_MANY_DEFAULTS");
+        no(!p.guarantors.is_empty() && !p.guarantors.contains(&t.guarantor), "GUARANTOR_NOT_APPROVED");
+        out
+    }
+
+    /// 這張單現在接受要多少錢、鎖多少。
+    fn quote(&self, cr: &Credit, t: &CreditTerms, root: &Cell, now: u64) -> Quote {
+        // 保證費：這是保證人肯做的理由。買方付的接受當下收，之後怎麼結束都不退（曝險已經承擔）；賣方付的等收款時扣
+        let periods = fee_periods(cr.due_at.0, now);
+        let fee = guarantee_fee(cr.amount.0, t.args.premium_bps, periods);
+        let charge = if t.args.fee_payer == FeePayer::Buyer { fee } else { 0 };
+        let free = root.vault.0.saturating_sub(t.bond_locked.0);
+        // 保證金是硬性要求：風險卡寫幾成就鎖幾成，付不出來這張單就不成立，差額不會靜默轉給保證人
+        let bond = cr.amount.0 * (t.args.bond_bps as u128) / 10_000;
+        let exposure = cr.amount.0 - bond;
+        let st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+        let mut failures: Vec<String> = vec![];
+        if free < charge {
+            failures.push("PREMIUM_SHORT".to_string());
+        }
+        if free.saturating_sub(charge) < bond {
+            failures.push("BOND_SHORT".to_string());
+        }
+        if st.amount.0.saturating_add(charge).saturating_sub(st.exposure.0) < exposure {
+            failures.push("GUARANTOR_CAPACITY".to_string());
+        }
+        Quote { fee, periods, charge, bond, exposure, failures }
+    }
+
+    /// 賣方設定自己的自動授信規則。第一次要付儲存押金，之後改規則不用；多付的記進可提領。
+    /// 傳 None 刪除規則，押金不退（再設一次要再付）。
+    #[payable]
+    pub fn set_seller_policy(&mut self, policy: Option<SellerPolicy>) {
+        let who = env::predecessor_account_id();
+        let attached = env::attached_deposit().as_yoctonear();
+        let mut owed = 0;
+        if let Some(p) = &policy {
+            require!(p.guarantors.len() <= MAX_POLICY_GUARANTORS, "POLICY_TOO_LONG");
+            require!(p.min_bond_bps <= 10_000, "BAD_POLICY");
+            if !self.policies.contains_key(&who) {
+                owed = SELLER_POLICY_STORAGE;
+            }
+        }
+        require!(attached >= owed, "POLICY_STORAGE");
+        match policy {
+            Some(p) => {
+                self.policies.insert(who.clone(), p);
+            }
+            None => {
+                self.policies.remove(&who);
+            }
+        }
+        if attached > owed {
+            self.vault_total += attached - owed;
+            self.credit_seller(&who, attached - owed);
+        }
+        event("seller_policy_set", serde_json::json!({"seller": who}));
+    }
+
+    pub fn seller_policy(&self, seller: AccountId) -> Option<SellerPolicy> {
+        self.policies.get(&seller).cloned()
+    }
+
+    /// 賣方決定要不要出貨之前問一次：用傳入的規則，或（None）自己存的規則，回報所有不符合的理由。
+    /// ok = 現在呼叫 accept_credit 會成功，所以錢不夠、單據狀態不對也會列出來。
+    pub fn check_order(&self, credit: U64, policy: Option<SellerPolicy>) -> OrderCheck {
+        let cr = self.credits.get(&credit.0).unwrap_or_else(|| env::panic_str("NO_CREDIT"));
+        let now = env::block_timestamp();
+        let t = self.terms.get(&cr.root.0).unwrap();
+        let root = self.cells.get(&cr.root.0).unwrap();
+        let cell = self.cells.get(&cr.cell.0).unwrap();
+        let rule = policy.or_else(|| self.policies.get(&cr.seller).cloned());
+        let mut reasons = match &rule {
+            Some(p) => self.policy_failures(p, cr, t, now),
+            None => vec![],
+        };
+        reasons.extend(self.accept_state_failures(cr, t, root, cell, now));
+        let q = self.quote(cr, t, root, now);
+        reasons.extend(q.failures.iter().cloned());
+        let st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
+        let rec = self.entities.get(&Self::entity_key(&t.guarantor, &t.args.entity_tag)).cloned().unwrap_or_default();
+        let seller_fee = if t.args.fee_payer == FeePayer::Seller { q.fee.min(cr.amount.0) } else { 0 };
+        OrderCheck {
+            ok: reasons.is_empty(),
+            reasons,
+            order: serde_json::json!({
+                "credit": cr.id, "cell": cr.cell, "seller": cr.seller, "status": cr.status,
+                "amount": cr.amount, "original_amount": cr.original_amount,
+                "seller_receives": U128(cr.amount.0 - seller_fee),
+                "due_at": cr.due_at, "tenor_secs": U64(cr.due_at.0.saturating_sub(now) / 1_000_000_000),
+                "fee": U128(q.fee), "fee_periods": q.periods as u32, "fee_payer": t.args.fee_payer,
+                "bond": U128(q.bond), "bond_bps": t.args.bond_bps, "guarantor_exposure": U128(q.exposure),
+                "guarantor": t.guarantor, "guarantor_listed": self.verifiers.contains_key(&t.guarantor),
+                "guarantor_stake": st.amount, "guarantor_total_exposure": st.exposure,
+                "entity_tag": t.args.entity_tag, "settled": rec.settled, "defaults": rec.defaults,
+                "terms_hash": t.args.terms_hash, "arbiter": t.args.arbiter,
+                "policy_applied": rule.is_some(),
+            }),
+        }
     }
 
     /// 取消：沒人接受的報價逾時後任何人可取消，公司或保證人隨時可取消；
