@@ -57,9 +57,19 @@ fn fee_periods(due_at: u64, now: u64) -> u128 {
     ((left + period - 1) / period).max(1)
 }
 
-/// 保證費 = 金額 × 每期費率 × 期數 / 10000。
+/// 保證費 = 金額 × 每期費率 × 期數 / 10000，最多等於金額。
 fn guarantee_fee(amount: u128, premium_bps: u32, periods: u128) -> u128 {
-    amount * (premium_bps as u128) * periods / 10_000
+    (amount * (premium_bps as u128) * periods / 10_000).min(amount)
+}
+
+/// 這些拒絕不是 agent 被騙，不計 strike：FROZEN 是公司的債，RESERVE 是準備被別的 agent 用完。
+fn no_strike(reason: &str) -> bool {
+    reason == "FROZEN" || reason == "RESERVE"
+}
+
+/// 必填的 Option：serde 預設會把缺欄位當 None，規則一定要明講它收哪種資產（null = NEAR）。
+fn named_asset<'de, D: near_sdk::serde::Deserializer<'de>>(d: D) -> Result<Option<AccountId>, D::Error> {
+    <Option<AccountId> as near_sdk::serde::Deserialize>::deserialize(d)
 }
 /// agent 鑰匙能呼叫的方法——只有這一個寫入方法。
 pub const AGENT_METHODS: &str = "spend,hire,dismiss,open_credit,settle";
@@ -68,15 +78,18 @@ pub const MAX_SCOPE: usize = 16;
 const NS_PER_DAY: u64 = 86_400_000_000_000;
 /// 保證費按天期計價：premium_bps 是每一期（30 天）的費率。
 pub const NS_PER_PERIOD: u64 = 30 * NS_PER_DAY;
-const GAS_FOR_CALLBACK: Gas = Gas::from_tgas(25); // 要付得起撤銷後的 ft_transfer（10）＋ on_refund（5）
+const GAS_FOR_CALLBACK: Gas = Gas::from_tgas(35); // 要付得起撤銷後的 ft_transfer（20）＋ on_refund（5）
 const GAS_FOR_REFUND_CB: Gas = Gas::from_tgas(5);
 const MAX_EVIDENCE: usize = 128;
 /// 一筆信用紀錄的儲存（單據約 430 bytes＋單一賣方曝險紀錄約 250 bytes），開單時從根格金庫收，不退。
 const CREDIT_STORAGE: u128 = 7_000_000_000_000_000_000_000;
-const GAS_FOR_FT: Gas = Gas::from_tgas(10);
-/// 賣方規則的儲存押金（1000 bytes，夠放 MAX_POLICY_GUARANTORS 個帳號）。第一次設定時收，刪除規則不退。
-pub const SELLER_POLICY_STORAGE: u128 = 10_000_000_000_000_000_000_000;
+const GAS_FOR_FT: Gas = Gas::from_tgas(20);
+/// 賣方規則的儲存押金（1500 bytes，夠放滿兩份清單）。第一次設定時收，刪除規則不退。
+pub const SELLER_POLICY_STORAGE: u128 = 15_000_000_000_000_000_000_000;
+/// 規則裡的保證人清單、仲裁人清單各自的上限。
 pub const MAX_POLICY_GUARANTORS: usize = 8;
+/// 條款最長天期 10 年：到期日加各時間窗不能溢位，否則取消與求償會永遠失敗。
+pub const MAX_TENOR_SECS: u64 = 10 * 365 * 86_400;
 /// 保證人帳簿最多記幾個賣方。滿了就換掉曝險最小的，所以 top_sellers 只是前幾大，不是完整清單。
 pub const MAX_BOOK_SELLERS: usize = 8;
 const TOP_SELLERS: usize = 5;
@@ -294,12 +307,18 @@ pub struct SellerPolicy {
     pub min_bond_bps: u32,
     pub max_defaults: u32,            // 公司假名最多幾筆違約紀錄
     pub guarantors: Vec<AccountId>,   // 核准的保證人；空 = 都接受
+    #[serde(deserialize_with = "named_asset")]
+    pub asset: Option<AccountId>,     // 這條規則收的資產（必填，null = NEAR）；max_amount 就是這個資產的單位
+    pub max_fee_bps: u32,             // 保證費最多占金額的萬分比；不論誰付
+    pub arbiters: Vec<AccountId>,     // 核准的仲裁人；空 = 都接受
 }
 
-/// check_order 的回傳：ok = 現在呼叫 accept_credit 會成功。
+/// check_order 的回傳。ok：問的這條規則（沒傳就是存的規則）加上單據與錢都通過。
+/// would_accept：現在呼叫 accept_credit 真的會成功，一律看賣方存的規則。
 #[near(serializers = [json])]
 pub struct OrderCheck {
     pub ok: bool,
+    pub would_accept: bool,
     pub reasons: Vec<String>,
     pub order: Value,
 }
@@ -587,7 +606,7 @@ impl Contract {
         if let Some(cr) = &args.credit {
             require!(cr.asset == args.asset, "CREDIT_ASSET_MISMATCH");
             require!(cr.arbiter != args.verifier && cr.arbiter != funder, "ARBITER_NOT_INDEPENDENT");
-            require!(cr.bond_bps <= 10_000 && cr.premium_bps <= 2_000 && cr.seller_cap_bps <= 10_000 && cr.min_tenor.0 <= cr.max_tenor.0, "BAD_CREDIT_TERMS");
+            require!(cr.bond_bps <= 10_000 && cr.premium_bps <= 2_000 && cr.seller_cap_bps <= 10_000 && cr.min_tenor.0 <= cr.max_tenor.0 && cr.max_tenor.0 <= MAX_TENOR_SECS, "BAD_CREDIT_TERMS");
             hex32(&cr.terms_hash, "terms_hash");
             require!(hex::decode(&cr.terms_sig).map(|v| v.len() == 64).unwrap_or(false), "BAD_TERMS_SIG");
             self.terms.insert(id, CreditTerms {
@@ -598,7 +617,7 @@ impl Contract {
                 bond_locked: U128(0),
                 open_debts: 0,
             });
-            let key = Self::entity_key(&args.verifier, &cr.entity_tag);
+            let key = Self::entity_key(&args.verifier, &args.asset, &cr.entity_tag);
             if !self.entities.contains_key(&key) {
                 self.entities.insert(key, EntityRecord { first_seen: U64(env::block_timestamp()), ..Default::default() });
             }
@@ -654,7 +673,7 @@ impl Contract {
     /// preimage：人鏈下撥給 agent 的鏈節（hex）；j：這筆要消耗幾節；金額 = j × unit。
     /// invoice_hash：這筆付款對應的發票 sha256（hex）。同一格不能付同一張發票兩次，也是對帳的依據。
     pub fn spend(&mut self, preimage: String, j: u32, to: AccountId, invoice_hash: String) -> PromiseOrValue<Verdict> {
-        require!(env::signer_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
+        require!(env::signer_account_id() == env::current_account_id() && env::predecessor_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
         let pk = env::signer_account_pk();
         let id = *self.key_to_cell.get(&pk).unwrap_or_else(|| env::panic_str("NO_CELL"));
         let mut c = self.cells.get(&id).cloned().unwrap();
@@ -699,7 +718,7 @@ impl Contract {
         };
 
         if let Some(r) = reason {
-            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "to": to, "j": j, "strikes": c.strikes + u32::from(r != "FROZEN")}));
+            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "to": to, "j": j, "strikes": c.strikes + u32::from(!no_strike(r))}));
             return PromiseOrValue::Value(self.reject(id, c, pk, r));
         }
 
@@ -734,7 +753,7 @@ impl Contract {
     /// 子 agent 能動用的錢，一定是員工已經撥給上層的鏈節；對手、期限、速率、單筆上限只能更窄。
     /// 政策拒絕跟 spend 一樣：回傳 Rejected、留痕、算 strike。
     pub fn hire(&mut self, preimage: String, j: u32, child: HireArgs) -> Verdict {
-        require!(env::signer_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
+        require!(env::signer_account_id() == env::current_account_id() && env::predecessor_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
         let pk = env::signer_account_pk();
         let id = *self.key_to_cell.get(&pk).unwrap_or_else(|| env::panic_str("NO_CELL"));
         let mut c = self.cells.get(&id).cloned().unwrap();
@@ -752,15 +771,16 @@ impl Contract {
         let fee = hire_fee(j);
         let token_tree = c.asset.is_some();
         let funded = if token_tree {
-            // 代幣樹：預算是代幣，雇用費是 NEAR，從根格的準備扣
-            let reserve = root_cell.as_ref().map(|r| r.near_reserve.0).unwrap_or(c.near_reserve.0);
-            self.free_vault(id, &c) >= amount && reserve >= fee
+            self.free_vault(id, &c) >= amount
         } else {
             match &root_cell {
                 None => self.free_vault(id, &c) >= amount.saturating_add(fee),
                 Some(r) => c.vault.0 >= amount && self.free_vault(c.root, r) >= fee,
             }
         };
+        // 代幣樹：預算是代幣，雇用費是 NEAR，從根格的準備扣
+        let reserve = root_cell.as_ref().map(|r| r.near_reserve.0).unwrap_or(c.near_reserve.0);
+        let reserve_ok = !token_tree || reserve >= fee;
         let w0_ok = hex::decode(&child.w0).map(|v| v.len() == 32).unwrap_or(false);
         let reason: Option<&str> = if now > c.valid_until.0 {
             Some("EXPIRED")
@@ -795,11 +815,13 @@ impl Contract {
             Some("RATE")
         } else if !funded {
             Some("FUNDS")
+        } else if !reserve_ok {
+            Some("RESERVE")
         } else {
             None
         };
         if let Some(r) = reason {
-            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "j": j, "strikes": c.strikes + u32::from(r != "FROZEN")}));
+            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "j": j, "strikes": c.strikes + u32::from(!no_strike(r))}));
             return self.reject(id, c, pk, r);
         }
 
@@ -884,7 +906,7 @@ impl Contract {
 
     /// agent 解僱自己雇用的子 agent（連同它底下的樹）。剩餘的錢退回法人。
     pub fn dismiss(&mut self, child: U64) {
-        require!(env::signer_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
+        require!(env::signer_account_id() == env::current_account_id() && env::predecessor_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
         let pk = env::signer_account_pk();
         let id = *self.key_to_cell.get(&pk).unwrap_or_else(|| env::panic_str("NO_CELL"));
         let c = self.cells.get(&child.0).cloned().unwrap_or_else(|| env::panic_str("NO_CELL"));
@@ -922,11 +944,11 @@ impl Contract {
     fn reject(&mut self, id: u64, mut c: Cell, pk: PublicKey, r: &str) -> Verdict {
         c.rejects += 1;
         // 凍結是公司的債，不是 agent 被騙：不計 strike，還清後 agent 不必逐格復職
-        if r != "FROZEN" {
+        if !no_strike(r) {
             c.strikes += 1;
         }
         self.stats.rejected += 1;
-        let tripped = r != "FROZEN" && c.max_strikes > 0 && c.strikes >= c.max_strikes;
+        let tripped = !no_strike(r) && c.max_strikes > 0 && c.strikes >= c.max_strikes;
         if tripped {
             c.status = Status::Tripped;
             self.stats.tripped += 1;
@@ -1429,7 +1451,7 @@ impl Contract {
         let t = self.terms.get(&c.root)?;
         let root = self.cells.get(&c.root)?;
         let stake = self.stake_get(&t.guarantor, &t.args.asset);
-        let rec = self.entities.get(&Self::entity_key(&t.guarantor, &t.args.entity_tag)).cloned().unwrap_or_default();
+        let rec = self.entities.get(&Self::entity_key(&t.guarantor, &t.args.asset, &t.args.entity_tag)).cloned().unwrap_or_default();
         Some(serde_json::json!({
             "asset": t.args.asset,
             "near_reserve": root.near_reserve,
@@ -1530,7 +1552,7 @@ impl Contract {
 
     /// agent 下單賒帳：花鏈節（人授權的額度），不動錢。賣方接受前沒有任何人受拘束。
     pub fn open_credit(&mut self, preimage: String, j: u32, to: AccountId, invoice_hash: String, due_at: U64) -> Verdict {
-        require!(env::signer_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
+        require!(env::signer_account_id() == env::current_account_id() && env::predecessor_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
         let pk = env::signer_account_pk();
         let id = *self.key_to_cell.get(&pk).unwrap_or_else(|| env::panic_str("NO_CELL"));
         let mut c = self.cells.get(&id).cloned().unwrap();
@@ -1578,12 +1600,12 @@ impl Contract {
         {
             Some("TENOR")
         } else if storage_free < CREDIT_STORAGE {
-            Some("FUNDS")
+            Some(if token_tree { "RESERVE" } else { "FUNDS" })
         } else {
             None
         };
         if let Some(r) = reason {
-            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "to": to, "j": j, "strikes": c.strikes + u32::from(r != "FROZEN")}));
+            event("rejected", serde_json::json!({"cell": id.to_string(), "reason": r, "to": to, "j": j, "strikes": c.strikes + u32::from(!no_strike(r))}));
             return self.reject(id, c, pk, r);
         }
         let mut t = terms.unwrap();
@@ -1692,6 +1714,8 @@ impl Contract {
         // 公司已撤銷或停權、已凍結、期限已過：這張報價不能再成立，否則是拿保證人的錢墊
         no(cell.status != Status::Active || self.suspended(cell), "AGENT_NOT_ACTIVE");
         no(t.open_debts != 0, "COMPANY_FROZEN");
+        // 移出白名單是鎖定後唯一的緊急手段：這個保證人不再接新單，已接的照走
+        no(!self.verifiers.contains_key(&t.guarantor), "GUARANTOR_DELISTED");
         no(now > cell.valid_until.0, "MANDATE_EXPIRED");
         no(cr.seller == t.args.arbiter, "ARBITER_NOT_INDEPENDENT");
         // 保證人或公司自己當賣方，等於自己製造違約：前者可走到揭露，後者把質押領給自己
@@ -1710,9 +1734,13 @@ impl Contract {
         no(cr.amount.0 > p.max_amount.0, "ORDER_TOO_LARGE");
         no(cr.due_at.0.saturating_sub(now) > p.max_tenor_secs.0.saturating_mul(1_000_000_000), "TENOR_TOO_LONG");
         no(t.args.bond_bps < p.min_bond_bps, "BOND_TOO_LOW");
-        let defaults = self.entities.get(&Self::entity_key(&t.guarantor, &t.args.entity_tag)).map(|r| r.defaults).unwrap_or(0);
+        let defaults = self.entities.get(&Self::entity_key(&t.guarantor, &t.args.asset, &t.args.entity_tag)).map(|r| r.defaults).unwrap_or(0);
         no(defaults > p.max_defaults, "TOO_MANY_DEFAULTS");
         no(!p.guarantors.is_empty() && !p.guarantors.contains(&t.guarantor), "GUARANTOR_NOT_APPROVED");
+        no(cr.asset != p.asset, "ASSET_NOT_APPROVED");
+        let fee = guarantee_fee(cr.amount.0, t.args.premium_bps, fee_periods(cr.due_at.0, now));
+        no(fee.saturating_mul(10_000) > cr.amount.0.saturating_mul(p.max_fee_bps as u128), "FEE_TOO_HIGH");
+        no(!p.arbiters.is_empty() && !p.arbiters.contains(&t.args.arbiter), "ARBITER_NOT_APPROVED");
         out
     }
 
@@ -1745,7 +1773,7 @@ impl Contract {
         Quote { fee, periods, charge, bond, exposure, failures }
     }
 
-    /// 賣方設定自己的自動授信規則。第一次要付儲存押金，之後改規則不用；多付的記進可提領。
+    /// 賣方設定自己的自動授信規則。第一次要付儲存押金，之後改規則不用；多付的直接退回，不留任何紀錄。
     /// 傳 None 刪除規則，押金不退（再設一次要再付）。
     #[payable]
     pub fn set_seller_policy(&mut self, policy: Option<SellerPolicy>) {
@@ -1753,7 +1781,7 @@ impl Contract {
         let attached = env::attached_deposit().as_yoctonear();
         let mut owed = 0;
         if let Some(p) = &policy {
-            require!(p.guarantors.len() <= MAX_POLICY_GUARANTORS, "POLICY_TOO_LONG");
+            require!(p.guarantors.len() <= MAX_POLICY_GUARANTORS && p.arbiters.len() <= MAX_POLICY_GUARANTORS, "POLICY_TOO_LONG");
             require!(p.min_bond_bps <= 10_000, "BAD_POLICY");
             if !self.policies.contains_key(&who) {
                 owed = SELLER_POLICY_STORAGE;
@@ -1769,8 +1797,7 @@ impl Contract {
             }
         }
         if attached > owed {
-            self.vault_total += attached - owed;
-            self.credit_seller(&who, &None, attached - owed);
+            Promise::new(who.clone()).transfer(NearToken::from_yoctonear(attached - owed)).detach();
         }
         event("seller_policy_set", serde_json::json!({"seller": who}));
     }
@@ -1779,35 +1806,46 @@ impl Contract {
         self.policies.get(&seller).cloned()
     }
 
-    /// 賣方決定要不要出貨之前問一次：用傳入的規則，或（None）自己存的規則，回報所有不符合的理由。
-    /// ok = 現在呼叫 accept_credit 會成功，所以錢不夠、單據狀態不對也會列出來。
+    /// 賣方決定要不要出貨之前問一次：用傳入的規則，或（None）自己存的規則，回報所有不符合的理由，
+    /// 錢不夠、單據狀態不對也會列出來。傳入的規則只是試算：accept_credit 看的永遠是存的規則，見 would_accept。
+    /// 接受之後，費用、保證金、曝險回報單上定下來的值，不是重新試算。
     pub fn check_order(&self, credit: U64, policy: Option<SellerPolicy>) -> OrderCheck {
         let cr = self.credits.get(&credit.0).unwrap_or_else(|| env::panic_str("NO_CREDIT"));
         let now = env::block_timestamp();
         let t = self.terms.get(&cr.root.0).unwrap();
         let root = self.cells.get(&cr.root.0).unwrap();
         let cell = self.cells.get(&cr.cell.0).unwrap();
-        let rule = policy.or_else(|| self.policies.get(&cr.seller).cloned());
-        let mut reasons = match &rule {
+        let stored = self.policies.get(&cr.seller);
+        let rule = policy.as_ref().or(stored);
+        let mut reasons = match rule {
             Some(p) => self.policy_failures(p, cr, t, now),
             None => vec![],
         };
-        reasons.extend(self.accept_state_failures(cr, t, root, cell, now));
+        let mut common = self.accept_state_failures(cr, t, root, cell, now);
         let q = self.quote(cr, t, root, now);
-        reasons.extend(q.failures.iter().cloned());
+        common.extend(q.failures.iter().cloned());
+        let would_accept = common.is_empty() && stored.map(|p| self.policy_failures(p, cr, t, now).is_empty()).unwrap_or(true);
+        reasons.extend(common);
+        // 接受之後回報單上定下來的值
+        let (fee, periods, bond, exposure) = if cr.status != CreditStatus::Open {
+            (cr.fee.0, cr.fee_periods as u128, cr.bond_locked.0, cr.exposure.0)
+        } else {
+            (q.fee, q.periods, q.bond, q.exposure)
+        };
         let st = self.stake_get(&t.guarantor, &t.args.asset);
-        let rec = self.entities.get(&Self::entity_key(&t.guarantor, &t.args.entity_tag)).cloned().unwrap_or_default();
-        let seller_fee = if t.args.fee_payer == FeePayer::Seller { q.fee.min(cr.amount.0) } else { 0 };
+        let rec = self.entities.get(&Self::entity_key(&t.guarantor, &t.args.asset, &t.args.entity_tag)).cloned().unwrap_or_default();
+        let seller_fee = if t.args.fee_payer == FeePayer::Seller { fee.min(cr.amount.0) } else { 0 };
         OrderCheck {
             ok: reasons.is_empty(),
+            would_accept,
             reasons,
             order: serde_json::json!({
                 "credit": cr.id, "cell": cr.cell, "seller": cr.seller, "status": cr.status, "asset": cr.asset,
                 "amount": cr.amount, "original_amount": cr.original_amount,
                 "seller_receives": U128(cr.amount.0 - seller_fee),
                 "due_at": cr.due_at, "tenor_secs": U64(cr.due_at.0.saturating_sub(now) / 1_000_000_000),
-                "fee": U128(q.fee), "fee_periods": q.periods as u32, "fee_payer": t.args.fee_payer,
-                "bond": U128(q.bond), "bond_bps": t.args.bond_bps, "exposure": U128(q.exposure),
+                "fee": U128(fee), "fee_periods": periods as u32, "fee_payer": t.args.fee_payer,
+                "bond": U128(bond), "bond_bps": t.args.bond_bps, "exposure": U128(exposure),
                 "guarantor": t.guarantor, "guarantor_listed": self.verifiers.contains_key(&t.guarantor),
                 "guarantor_stake": st.amount, "guarantor_total_exposure": st.exposure,
                 "entity_tag": t.args.entity_tag, "settled": rec.settled, "defaults": rec.defaults,
@@ -1873,7 +1911,7 @@ impl Contract {
 
     /// agent 從自己的金庫結清。agent 鑰匙不受過期影響；被撤銷後由公司結清。
     pub fn settle(&mut self, credit: U64) -> Verdict {
-        require!(env::signer_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
+        require!(env::signer_account_id() == env::current_account_id() && env::predecessor_account_id() == env::current_account_id(), "NOT_AGENT_KEY");
         let pk = env::signer_account_pk();
         let id = *self.key_to_cell.get(&pk).unwrap_or_else(|| env::panic_str("NO_CELL"));
         let mut cr = self.credits.get(&credit.0).cloned().unwrap_or_else(|| env::panic_str("NO_CREDIT"));
@@ -2040,7 +2078,7 @@ impl Contract {
         if left > 0 {
             t.open_debts += 1;
         }
-        let key = Self::entity_key(&t.guarantor, &t.args.entity_tag);
+        let key = Self::entity_key(&t.guarantor, &t.args.asset, &t.args.entity_tag);
         let mut rec = self.entities.get(&key).cloned().unwrap_or_default();
         rec.defaults += 1;
         self.entities.insert(key, rec);
@@ -2167,9 +2205,9 @@ impl Contract {
         }))
     }
 
-    /// 假名只在同一個保證人底下有意義；別的保證人不能冒用這份紀錄。
-    fn entity_key(guarantor: &AccountId, tag: &str) -> String {
-        format!("{}:{}", guarantor, tag)
+    /// 假名只在同一個保證人、同一種資產底下有意義：別的保證人不能冒用，假代幣也灌不到真代幣的紀錄。
+    fn entity_key(guarantor: &AccountId, asset: &Option<AccountId>, tag: &str) -> String {
+        format!("{}:{}:{}", guarantor, asset.as_ref().map(|a| a.as_str()).unwrap_or("near"), tag)
     }
 
     /// 用量單縮小：額度、保證金、曝險一起放回去，保證金維持條款承諾的比例。
@@ -2298,10 +2336,10 @@ impl Contract {
 
     fn finish_settled(&mut self, cr: &mut Credit) {
         let t = self.terms.get(&cr.root.0).unwrap();
-        let tag = Self::entity_key(&t.guarantor, &t.args.entity_tag);
+        let tag = Self::entity_key(&t.guarantor, &t.args.asset, &t.args.entity_tag);
         let mut rec = self.entities.get(&tag).cloned().unwrap_or_default();
         rec.settled += 1;
-        rec.settled_amount = U128(rec.settled_amount.0 + cr.amount.0);
+        rec.settled_amount = U128(rec.settled_amount.0.saturating_add(cr.amount.0));
         self.entities.insert(tag, rec);
         self.release(cr, CreditStatus::Settled, 0);
         event("credit_settled", serde_json::json!({"credit": cr.id.0.to_string(), "amount": cr.amount.0.to_string()}));

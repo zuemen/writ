@@ -62,7 +62,7 @@ if (!pool.seller) {
   pool.guarantor = await scopedKey(a.verifier, ["enforce_recourse", "credit_unseal"], "1.5");
   pool.company = DEMO_COMPANY;
   // 賣方規則先存一條寬鬆的（押金要帶錢，鑰匙帶不了），之後訪客用受限鑰匙調整不用再付
-  const sp = await call(as(a.merchant.id, a.merchant.sk), a.writ.id, "set_seller_policy", { policy: { max_amount: NEAR("1").toString(), max_tenor_secs: "86400", min_bond_bps: 0, max_defaults: 1000, guarantors: [] } }, { deposit: NEAR("0.01") });
+  const sp = await call(as(a.merchant.id, a.merchant.sk), a.writ.id, "set_seller_policy", { policy: { max_amount: NEAR("1").toString(), max_tenor_secs: "86400", min_bond_bps: 0, max_defaults: 1000, guarantors: [], asset: null, max_fee_bps: 10000, arbiters: [] } }, { deposit: NEAR("0.015") });
   if (sp.error) throw new Error("set_seller_policy: " + sp.error);
   const st = await call(as(a.verifier.id, a.verifier.sk), a.writ.id, "stake", {}, { deposit: NEAR(process.env.WRIT_STAKE ?? "4") });
   if (st.error) throw new Error("stake: " + st.error);

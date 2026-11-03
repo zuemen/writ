@@ -29,14 +29,14 @@ export async function register(depositNear = "5") {
   return { ok: !r.error, checks, cell: r.value as string, hash: r.hash, error: r.error, agent_pk: att.args.agent_pk };
 }
 
-export type SellerPolicy = { max_amount: string; max_tenor_secs: string; min_bond_bps: number; max_defaults: number; guarantors: string[] };
+export type SellerPolicy = { max_amount: string; max_tenor_secs: string; min_bond_bps: number; max_defaults: number; guarantors: string[]; asset: string | null; max_fee_bps: number; arbiters: string[] };
 
-/** 賣方設定自動授信規則。第一次要附儲存押金（0.01 NEAR），之後改規則不用，多付的記進可提領。 */
+/** 賣方設定自動授信規則。第一次要附儲存押金（0.015 NEAR），之後改規則不用，多付的直接退回。 */
 export async function setSellerPolicy(policy: SellerPolicy | null, submitter = "merchant") {
   const a = A();
   const who = a[submitter];
   const has = await view(W(), "seller_policy", { seller: who.id });
-  return call(as(who.id, who.sk), W(), "set_seller_policy", { policy }, { deposit: has || !policy ? 0n : NEAR("0.01") });
+  return call(as(who.id, who.sk), W(), "set_seller_policy", { policy }, { deposit: has || !policy ? 0n : NEAR("0.015") });
 }
 
 /** 這張單現在接受會怎樣：不傳 policy 就用賣方存的規則，回報每一個不符合的理由。 */

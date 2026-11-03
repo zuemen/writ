@@ -170,7 +170,7 @@ fn default_opts(w: &World) -> Opts {
 }
 
 async fn spend(agent: &Account, writ: &AccountId, preimage: &str, j: u32, to: &AccountId) -> Result<Value, String> {
-    match agent.call(writ, "spend").args_json(json!({"preimage": preimage, "j": j, "to": to, "invoice_hash": hex::encode(rand::random::<[u8; 32]>())})).gas(near_workspaces::types::Gas::from_tgas(50)).transact().await {
+    match agent.call(writ, "spend").args_json(json!({"preimage": preimage, "j": j, "to": to, "invoice_hash": hex::encode(rand::random::<[u8; 32]>())})).gas(near_workspaces::types::Gas::from_tgas(80)).transact().await {
         Ok(out) => match out.clone().into_result() {
             Ok(v) => Ok(v.json::<Value>().unwrap()),
             Err(e) => Err(format!("EXEC:{:?}", e)),
@@ -824,7 +824,7 @@ async fn b07_hr_revokes_the_ecr_without_the_departing_employee() -> anyhow::Resu
 async fn spend_invoice(agent: &Account, writ: &AccountId, preimage: &str, j: u32, to: &AccountId, invoice: &[u8]) -> Value {
     let inv = hex::encode(Sha256::digest(invoice));
     agent.call(writ, "spend").args_json(json!({"preimage": preimage, "j": j, "to": to, "invoice_hash": inv}))
-        .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await.unwrap().into_result().unwrap().json().unwrap()
+        .gas(near_workspaces::types::Gas::from_tgas(80)).transact().await.unwrap().into_result().unwrap().json().unwrap()
 }
 
 #[tokio::test]
@@ -2313,8 +2313,8 @@ async fn b32_a_usage_order_settles_only_what_was_used() -> anyhow::Result<()> {
 async fn b33_a_seller_rule_refuses_is_adjusted_and_ships() -> anyhow::Result<()> {
     let cw = credit_world_x(CwOpts { bond: 2500, accept_ttl: 3600, ..Default::default() }).await?;
     let w = &cw.w;
-    let rule = |bond: u32, max: u128, gs: Value| json!({"max_amount": max.to_string(), "max_tenor_secs": "7200", "min_bond_bps": bond, "max_defaults": 0, "guarantors": gs});
-    let dep = NearToken::from_millinear(10);
+    let rule = |bond: u32, max: u128, gs: Value| json!({"max_amount": max.to_string(), "max_tenor_secs": "7200", "min_bond_bps": bond, "max_defaults": 0, "guarantors": gs, "asset": null, "max_fee_bps": 10_000, "arbiters": []});
+    let dep = NearToken::from_millinear(15);
     // 沒付儲存押金
     let r = w.merchant.call(w.writ.id(), "set_seller_policy").args_json(json!({"policy": rule(5000, 3 * UNIT, json!([]))})).transact().await?.into_result();
     assert!(format!("{:?}", r).contains("POLICY_STORAGE"), "{:?}", r);
@@ -2367,7 +2367,7 @@ async fn a85_a_colluding_seller_can_only_reach_its_share_of_the_stake() -> anyho
     assert!(e.contains("SELLER_CONCENTRATION"), "{}", e);
     let st: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
     assert_eq!(st["exposure"], UNIT.to_string());
-    bench("A85", "a straw seller takes the whole stake through collusive orders", "SELLER_CONCENTRATION", "SELLER_CONCENTRATION", gain(w).await);
+    bench("A85", "one straw seller account takes more of the stake than its cap at once", "SELLER_CONCENTRATION", "SELLER_CONCENTRATION", gain(w).await);
     // 第一筆結清，曝險放回來，第二筆就成立
     cw.funder("settle_by_funder", json!({"credit": first}), 0).await.unwrap();
     cw.seller("accept_credit", json!({"credit": second})).await.unwrap();
@@ -2751,6 +2751,63 @@ async fn b39_the_contract_says_where_its_source_is_and_check_order_gives_a_selle
     assert_eq!(o["fee"], (4 * UNIT / 50).to_string());
     assert_eq!(o["fee_payer"], "Seller");
     bench("B39", "NEP-330 source metadata; check_order gives amount, asset, tenor, bond, exposure, fee, payer", "all present", "all present", 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a93_terms_with_an_unbounded_tenor_are_refused() -> anyhow::Result<()> {
+    // 到期日接近 u64 上限時，到期日加時間窗會溢位，取消與求償永遠失敗
+    let r = credit_world_x(CwOpts { max_tenor: 10 * 365 * 86_400 + 1, ..Default::default() }).await;
+    let e = match r { Ok(_) => panic!("register must refuse"), Err(e) => format!("{:?}", e) };
+    assert!(e.contains("BAD_CREDIT_TERMS"), "{}", e);
+    let cw = credit_world_x(CwOpts { max_tenor: 10 * 365 * 86_400, ..Default::default() }).await?;
+    bench("A93", "guarantor signs a tenor long enough to overflow the deadlines, so an order can never end", "BAD_CREDIT_TERMS", "BAD_CREDIT_TERMS", gain(&cw.w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a94_a_rule_catches_the_wrong_asset_a_high_fee_and_an_unknown_arbiter() -> anyhow::Result<()> {
+    let cw = credit_world_x(CwOpts { premium: 2000, fee_payer: "Seller", max_tenor: 200 * 86_400, accept_ttl: 3600, ..tworld() }).await?;
+    let w = &cw.w;
+    // NEAR 單位的上限，對 6 位小數的代幣形同沒有上限：規則沒寫這種代幣就不收
+    let rule = json!({"max_amount": (100u128 * 1_000_000_000_000_000_000_000_000).to_string(), "max_tenor_secs": "20000000", "min_bond_bps": 0, "max_defaults": 0, "guarantors": [], "asset": null, "max_fee_bps": 500, "arbiters": [w.attacker.id()]});
+    // 不寫資產的規則開不了
+    let mut missing = rule.clone();
+    missing.as_object_mut().unwrap().remove("asset");
+    let r = w.merchant.call(w.writ.id(), "set_seller_policy").args_json(json!({"policy": missing})).deposit(NearToken::from_millinear(15)).transact().await?.into_result();
+    assert!(r.is_err(), "a rule must name its asset");
+    w.merchant.call(w.writ.id(), "set_seller_policy").args_json(json!({"policy": rule})).deposit(NearToken::from_millinear(15)).transact().await?.into_result()?;
+    let due = now_ns(w).await? + 150 * 86_400 * SEC;
+    let v: Value = cw.agent.call(w.writ.id(), "open_credit").args_json(json!({"preimage": cw.pw.link(5), "j": 5, "to": w.merchant.id(), "invoice_hash": hex::encode(Sha256::digest("INV-EMPTY")), "due_at": due.to_string()}))
+        .gas(near_workspaces::types::Gas::from_tgas(50)).transact().await?.into_result()?.json()?;
+    let id = v["CreditOpened"]["credit"].as_str().unwrap_or_else(|| panic!("{}", v)).to_string();
+    let c: Value = w.writ.view("check_order").args_json(json!({"credit": id})).await?.json()?;
+    assert_eq!(c["reasons"], json!(["ASSET_NOT_APPROVED", "FEE_TOO_HIGH", "ARBITER_NOT_APPROVED"]), "{}", c);
+    assert_eq!(c["would_accept"], false);
+    assert_eq!(c["order"]["seller_receives"], "0", "five periods at 20% take the whole amount");
+    let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
+    assert!(e.contains("POLICY:ASSET_NOT_APPROVED"), "{}", e);
+    bench("A94", "an order in a scaled or fake asset, with a fee that empties it or a friendly arbiter, passes the seller's rule", "ASSET_NOT_APPROVED, FEE_TOO_HIGH, ARBITER_NOT_APPROVED", "ASSET_NOT_APPROVED, FEE_TOO_HIGH, ARBITER_NOT_APPROVED", gain(w).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a95_one_yocto_cannot_create_a_row_and_a_delisted_guarantor_takes_no_order() -> anyhow::Result<()> {
+    let cw = credit_world_x(CwOpts { accept_ttl: 3600, ..Default::default() }).await?;
+    let w = &cw.w;
+    let s0 = w.writ.view_account().await?.storage_usage;
+    let t0 = cw.solvent().await["vault_total"].clone();
+    w.attacker.call(w.writ.id(), "set_seller_policy").args_json(json!({"policy": null})).deposit(NearToken::from_yoctonear(1)).transact().await?.into_result()?;
+    assert_eq!(w.writ.view_account().await?.storage_usage, s0, "no row for one yocto");
+    assert_eq!(cw.solvent().await["vault_total"], t0);
+    let c: Value = w.writ.view("claimable_of").args_json(json!({"account": w.attacker.id()})).await?.json()?;
+    assert_eq!(c, "0");
+    bench("A95", "throwaway accounts make the contract store a row for one yocto each", "no row, excess returned", "no row, excess returned", gain(w).await);
+    let id = cw.opened(1, 1, 3600, "INV-DELIST").await;
+    w.writ.call("set_verifier").args_json(json!({"account": w.verifier.id()})).transact().await?.into_result()?;
+    let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
+    assert!(e.contains("GUARANTOR_DELISTED"), "{}", e);
+    bench("A96", "a seller's order is accepted on a guarantor the owner has delisted", "GUARANTOR_DELISTED", "GUARANTOR_DELISTED", gain(w).await);
     Ok(())
 }
 

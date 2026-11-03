@@ -1,6 +1,6 @@
 [package]
 name = "writ"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 # Spike 版（D1）：驗證 Keypom 模式、ed25519_verify、sha256 鏈。D2 起長成正式合約。
 

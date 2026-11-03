@@ -359,7 +359,7 @@ mod fuzz {
                 cx.up(&s, None, 0);
                 let said = cx.peek(|w| w.check_order(k, None));
                 let got = cx.run("accept", &s, None, 0, |w| w.accept_credit(k)).is_some();
-                if said.ok != got { panic!("INVARIANT check_order ok={} but accept={} reasons={:?}", said.ok, got, said.reasons); }
+                if said.ok != got || said.would_accept != got { panic!("INVARIANT check_order ok={} would_accept={} but accept={} reasons={:?}", said.ok, said.would_accept, got, said.reasons); }
                 if let Some(r) = said.reasons.first() { let r = format!("ACCEPT:{}", r); cx.hit(&r); }
                 "accept".into()
             }
@@ -397,7 +397,7 @@ mod fuzz {
                     8 => {
                         // 規則只設在 s2：s1 一直沒有規則，才走得到後面的路徑
                         let s = acc("s2.near");
-                        let p = if cx.r(4) == 0 { None } else { Some(SellerPolicy { max_amount: U128((cx.r(6) as u128 + 1) * UNIT), max_tenor_secs: U64(cx.r(400) + 10), min_bond_bps: [0u32, 0, 2000][cx.r(3) as usize], max_defaults: cx.r(3) as u32, guarantors: if cx.r(6) == 0 { vec![acc("other.near")] } else { vec![] } }) };
+                        let p = if cx.r(4) == 0 { None } else { Some(SellerPolicy { max_amount: U128((cx.r(6) as u128 + 1) * UNIT), max_tenor_secs: U64(cx.r(400) + 10), min_bond_bps: [0u32, 0, 2000][cx.r(3) as usize], max_defaults: cx.r(3) as u32, guarantors: if cx.r(6) == 0 { vec![acc("other.near")] } else { vec![] }, asset: if cx.r(8) == 0 { Some(acc("fake.near")) } else { cx.token.clone() }, max_fee_bps: [100u32, 500, 10_000][cx.r(3) as usize], arbiters: if cx.r(8) == 0 { vec![acc("other.near")] } else { vec![] } }) };
                         let d = SELLER_POLICY_STORAGE + cx.r(2) as u128 * 5;
                         cx.run("set_policy", &s, None, d, |w| w.set_seller_policy(p));
                         "set_policy".to_string()

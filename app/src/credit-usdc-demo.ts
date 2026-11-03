@@ -83,7 +83,7 @@ async function seller_(m: string, args: object) {
 }
 
 // ---- 賣方規則
-const rule = (minBond: number) => ({ max_amount: (10n * USD).toString(), max_tenor_secs: "7200", min_bond_bps: minBond, max_defaults: 0, guarantors: [] as string[] });
+const rule = (minBond: number) => ({ max_amount: (10n * USD).toString(), max_tenor_secs: "7200", min_bond_bps: minBond, max_defaults: 0, guarantors: [] as string[], asset: usdc, max_fee_bps: 500, arbiters: [] as string[] });
 const set1 = await setSellerPolicy(rule(5000));
 if (set1.error) throw new Error("set_seller_policy: " + set1.error);
 const k1 = await open(5, "INV-USDC-1", 3600);

@@ -65,7 +65,7 @@ const card0: any = await view(a.writ.id, "risk_card", { cell });
 say(`1  risk card: legal entity=${card0.legal_entity}, guarantor=${card0.guarantor}, stake=${fmt(card0.guarantor_stake)}, limit=${fmt(card0.credit_limit)}, guarantee fee=${card0.premium_bps / 100}%`);
 
 // 賣方規則：要求 25% 保證金、單筆 0.05 NEAR。這家公司的條款沒有保證金，訂單不符合就回傳原因
-const strict = { max_amount: NEAR("0.05").toString(), max_tenor_secs: "7200", min_bond_bps: 2500, max_defaults: 0, guarantors: [] as string[] };
+const strict = { max_amount: NEAR("0.05").toString(), max_tenor_secs: "7200", min_bond_bps: 2500, max_defaults: 0, guarantors: [] as string[], asset: null, max_fee_bps: 500, arbiters: [] as string[] };
 const set1 = await setSellerPolicy(strict);
 if (set1.error) throw new Error("set_seller_policy: " + set1.error);
 txs.push(["Seller sets its credit rule", set1.hash]);
