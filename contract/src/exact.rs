@@ -8,9 +8,9 @@ mod exact {
     const T0: u64 = 1_000_000 * NS;
     const VALID: u64 = T0 + 1_000_000 * NS;
 
-    struct Opt { vault: u128, stake: u128, bond: u32, premium: u32, limit: u128, n: u32, daily: u32, maxl: u32, scope: Vec<AccountId>, max_tenor: u64, payer: FeePayer }
+    struct Opt { vault: u128, stake: u128, bond: u32, premium: u32, limit: u128, n: u32, daily: u32, maxl: u32, scope: Vec<AccountId>, max_tenor: u64, payer: FeePayer, cap: u32 }
     fn opt() -> Opt {
-        Opt { vault: 100 * U, stake: 10 * U, bond: 0, premium: 0, limit: 1000 * U, n: 40, daily: 1000, maxl: 5, scope: vec![acc("s1.near"), acc("s2.near")], max_tenor: 1000, payer: FeePayer::Buyer }
+        Opt { vault: 100 * U, stake: 10 * U, bond: 0, premium: 0, limit: 1000 * U, n: 40, daily: 1000, maxl: 5, scope: vec![acc("s1.near"), acc("s2.near")], max_tenor: 1000, payer: FeePayer::Buyer, cap: 0 }
     }
 
     fn world(o: Opt) -> (Cx, u64) {
@@ -32,7 +32,7 @@ mod exact {
             w.key_to_cell.insert(p2.clone(), id);
             w.used_keys.insert(p2.clone());
             w.vault_total += o.vault;
-            w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(o.limit), bond_bps: o.bond, premium_bps: o.premium, min_tenor: U64(10), max_tenor: U64(o.max_tenor), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: "t".into(), arbiter: acc("arb.near"), fee_payer: o.payer }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
+            w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(o.limit), bond_bps: o.bond, premium_bps: o.premium, min_tenor: U64(10), max_tenor: U64(o.max_tenor), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: "t".into(), arbiter: acc("arb.near"), fee_payer: o.payer, seller_cap_bps: o.cap }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
             id
         }).unwrap();
         cx.cells.push(CellH { id, pk: p, links: ch });
@@ -712,6 +712,82 @@ mod exact {
     }
 
     fn json_str(v: u128) -> Value { Value::String(v.to_string()) }
+
+    fn to_seller(cx: &Cx, s: &str) -> u128 { let s = acc(s); cx.peek(|w| w.seller_exposure_of(&acc("g.near"), &s)) }
+    fn open_to(cx: &mut Cx, id: u64, j: u32, seller: &str) -> u64 {
+        cx.nextinv += 1;
+        let (p, k, inv, due, s) = (link(cx, id, j), key(cx, id), hex::encode(env_hash(cx.nextinv)), cx.now + 500 * NS, acc(seller));
+        opened(cx.run("open", &writ(), Some(&k), 0, |w| w.open_credit(p, j, s, inv, U64(due))).expect("open"))
+    }
+
+    #[test]
+    fn the_seller_cap_is_exact_and_per_seller() {
+        // 質押 10U，上限 20%：同一個賣方最多 2U
+        let mut o = opt(); o.cap = 2000;
+        let (mut cx, r) = world(o);
+        let (a, b, c) = (open_to(&mut cx, r, 1, "s1.near"), open_to(&mut cx, r, 1, "s1.near"), open_to(&mut cx, r, 1, "s1.near"));
+        accept(&mut cx, a);
+        assert_eq!(to_seller(&cx, "s1.near"), U);
+        accept(&mut cx, b);
+        assert_eq!(to_seller(&cx, "s1.near"), 2 * U, "exactly the cap is allowed");
+        assert_eq!(check(&cx, c, None).reasons, vec!["SELLER_CONCENTRATION"]);
+        assert!(accept_err(&mut cx, c));
+        assert!(cx.last_err.contains("SELLER_CONCENTRATION"), "{}", cx.last_err);
+        assert_eq!((to_seller(&cx, "s1.near"), stake(&cx).exposure.0), (2 * U, 2 * U));
+        // 別的賣方不受影響
+        let d = open_to(&mut cx, r, 2, "s2.near");
+        cx.run("accept", &acc("s2.near"), None, 0, |w| w.accept_credit(U64(d))).expect("another seller has its own cap");
+        assert_eq!(to_seller(&cx, "s2.near"), 2 * U);
+        // 結清一筆，額度回來
+        assert!(settle(&mut cx, r, a));
+        assert_eq!(to_seller(&cx, "s1.near"), U);
+        accept(&mut cx, c);
+        assert_eq!(to_seller(&cx, "s1.near"), 2 * U);
+
+        // 上限 0 = 不限；保證金 100% 的單沒有曝險，不佔上限
+        let mut o = opt(); o.cap = 0;
+        let (mut cx, r) = world(o);
+        let k = open_to(&mut cx, r, 5, "s1.near");
+        accept(&mut cx, k);
+        let mut o = opt(); o.cap = 1; o.bond = 10_000;
+        let (mut cx, r) = world(o);
+        let k = open_to(&mut cx, r, 5, "s1.near");
+        accept(&mut cx, k);
+        assert_eq!(to_seller(&cx, "s1.near"), 0);
+        assert!(cx.peek(|w| !w.seller_exposure.contains_key(&(acc("g.near"), acc("s1.near")))), "no entry for zero");
+    }
+
+    #[test]
+    fn the_seller_exposure_follows_every_way_an_order_ends() {
+        // 用量單縮小
+        let mut o = opt(); o.bond = 5000;
+        let (mut cx, r) = world(o);
+        let k = opened(open(&mut cx, r, 4));
+        accept(&mut cx, k);
+        assert_eq!(to_seller(&cx, "s1.near"), 2 * U);
+        assert!(deliver_final(&mut cx, k, 2 * U));
+        assert_eq!(to_seller(&cx, "s1.near"), U);
+        // 違約：曝險結束，賠多少記在債上
+        cx.now = cred(&cx, k).due_at.0 + 51 * NS;
+        cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(k))).unwrap();
+        assert_eq!(to_seller(&cx, "s1.near"), 0);
+        assert!(cx.peek(|w| !w.seller_exposure.contains_key(&(acc("g.near"), acc("s1.near")))));
+        // 接受了沒交貨，過期取消
+        let (mut cx, r) = world(opt());
+        let k = opened(open(&mut cx, r, 2));
+        accept(&mut cx, k);
+        cx.now = cred(&cx, k).due_at.0 + 51 * NS;
+        cx.run("x", &acc("x.near"), None, 0, |w| w.cancel_open(U64(k))).unwrap();
+        assert_eq!(to_seller(&cx, "s1.near"), 0);
+        // 爭議判公司勝
+        let (mut cx, r) = world(opt());
+        let k = opened(open(&mut cx, r, 2));
+        accept(&mut cx, k);
+        cx.run("d", &acc("funder.near"), None, 2 * U, |w| w.dispute(U64(k), "cd".repeat(32))).unwrap();
+        assert_eq!(to_seller(&cx, "s1.near"), 2 * U, "still exposed during the dispute");
+        cx.run("r", &acc("arb.near"), None, 0, |w| w.resolve_dispute(U64(k), false)).unwrap();
+        assert_eq!(to_seller(&cx, "s1.near"), 0);
+    }
 
     #[test]
     fn settle_may_use_only_its_own_bond() {

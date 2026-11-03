@@ -155,6 +155,14 @@ mod fuzz {
                 }
                 for k in &credits { let c = w.credits.get(k).unwrap(); if c.status == CreditStatus::Disputed { sum += c.dispute_escrow.0; } }
                 if st.exposure.0 != exp { e.push(format!("exposure {} vs {}", st.exposure.0, exp)); }
+                // 每個賣方的曝險 = 它所有未結單的曝險；歸零就不留紀錄
+                for s in ["s1.near", "s2.near"] {
+                    let s = acc(s);
+                    let want: u128 = credits.iter().map(|k| w.credits.get(k).unwrap()).filter(|c| c.seller == s && matches!(c.status, CreditStatus::Open | CreditStatus::Accepted | CreditStatus::Delivered | CreditStatus::Disputed)).map(|c| c.exposure.0).sum();
+                    let have = w.seller_exposure_of(&g, &s);
+                    if have != want { e.push(format!("seller exposure {} {} vs {}", s, have, want)); }
+                    if want == 0 && w.seller_exposure.contains_key(&(g.clone(), s.clone())) { e.push(format!("empty seller entry {}", s)); }
+                }
                 if st.amount.0 < st.exposure.0 { e.push("stake<exposure".into()); }
                 for id in &cells {
                     let c = w.cells.get(id).unwrap();
@@ -196,6 +204,7 @@ mod fuzz {
         let stake = (cx.r(25) as u128 + 6) * UNIT;
         let bps = [0u32, 2000, 5000, 10000][cx.r(4) as usize];
         let payer = if cx.r(2) == 0 { FeePayer::Buyer } else { FeePayer::Seller };
+        let cap = [0u32, 500, 3000, 8000][cx.r(4) as usize];
         let now = cx.now;
         let mut roots = vec![];
         for i in 0..3u8 {
@@ -213,7 +222,7 @@ mod fuzz {
                 w.used_keys.insert(p2.clone());
                 w.vault_total += v;
                 if i < 2 {
-                    w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(20 * UNIT), bond_bps: bps, premium_bps: 150, min_tenor: U64(10), max_tenor: U64(1000), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: format!("t{}", i), arbiter: acc("arb.near"), fee_payer: payer }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
+                    w.terms.insert(id, CreditTerms { terms_ecr_commit: String::new(), args: CreditArgs { limit: U128(20 * UNIT), bond_bps: bps, premium_bps: 150, min_tenor: U64(10), max_tenor: U64(1000), terms_hash: "00".repeat(32), terms_sig: "00".repeat(64), entity_tag: format!("t{}", i), arbiter: acc("arb.near"), fee_payer: payer, seller_cap_bps: cap }, guarantor: acc("g.near"), outstanding: U128(0), bond_locked: U128(0), open_debts: 0 });
                 }
                 id
             }).unwrap();

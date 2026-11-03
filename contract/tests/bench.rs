@@ -120,9 +120,9 @@ fn attest_msg(a: &Value, funder: &AccountId, contract: &AccountId) -> String {
         a["valid_until"].as_str().unwrap(), a["daily_links"], a["max_links"], a["max_strikes"], a["lei_commit"].as_str().unwrap(), a["ecr_commit"].as_str().unwrap(), funder,
         a["verifier"].as_str().unwrap(), a["attested_at"].as_str().unwrap(),
         a.get("asset").and_then(|v| v.as_str()).unwrap_or("near"),
-        a.get("credit").filter(|c| !c.is_null()).map(|c| format!("{},{},{},{},{},{},{},{},{},{}",
+        a.get("credit").filter(|c| !c.is_null()).map(|c| format!("{},{},{},{},{},{},{},{},{},{},{}",
             c["limit"].as_str().unwrap(), c["bond_bps"], c["premium_bps"], c["min_tenor"].as_str().unwrap(), c["max_tenor"].as_str().unwrap(),
-            c["terms_hash"].as_str().unwrap(), c["terms_sig"].as_str().unwrap(), c["entity_tag"].as_str().unwrap(), c["arbiter"].as_str().unwrap(), c["fee_payer"].as_str().unwrap())).unwrap_or_else(|| "none".to_string())
+            c["terms_hash"].as_str().unwrap(), c["terms_sig"].as_str().unwrap(), c["entity_tag"].as_str().unwrap(), c["arbiter"].as_str().unwrap(), c["fee_payer"].as_str().unwrap(), c["seller_cap_bps"])).unwrap_or_else(|| "none".to_string())
     )
 }
 
@@ -1374,15 +1374,15 @@ async fn credit_world_fee(bond_bps: u32, premium_bps: u32, stake: u128, grace: u
 }
 
 /// 信用世界的所有選項。預設：沒保證金、沒費用、質押 5 NEAR、金庫 30 節。
-struct CwOpts { bond: u32, premium: u32, stake: u128, grace: u64, recourse: u64, vault: u128, lei: String, inspect: u64, max_tenor: u64, fee_payer: &'static str, accept_ttl: u64 }
+struct CwOpts { bond: u32, premium: u32, stake: u128, grace: u64, recourse: u64, vault: u128, lei: String, inspect: u64, max_tenor: u64, fee_payer: &'static str, accept_ttl: u64, cap: u32 }
 impl Default for CwOpts {
     fn default() -> Self {
-        Self { bond: 0, premium: 0, stake: 5, grace: 0, recourse: 1, vault: 30 * UNIT, lei: LEI.to_string(), inspect: 0, max_tenor: 3600, fee_payer: "Buyer", accept_ttl: 2 }
+        Self { bond: 0, premium: 0, stake: 5, grace: 0, recourse: 1, vault: 30 * UNIT, lei: LEI.to_string(), inspect: 0, max_tenor: 3600, fee_payer: "Buyer", accept_ttl: 2, cap: 0 }
     }
 }
 
 async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
-    let CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei, inspect, max_tenor, fee_payer, accept_ttl } = x;
+    let CwOpts { bond: bond_bps, premium: premium_bps, stake, grace, recourse, vault, lei: committed_lei, inspect, max_tenor, fee_payer, accept_ttl, cap } = x;
     let worker = near_workspaces::sandbox().await?;
     let writ = worker.dev_deploy(&wasm_bytes()?).await?;
     writ.call("new").args_json(json!({"owner": writ.id(), "unseal_delay_secs": 5,
@@ -1421,13 +1421,14 @@ async fn credit_world_x(x: CwOpts) -> anyhow::Result<CreditWorld> {
         "scope": o.scope, "valid_until": until.to_string(), "daily_links": o.daily,
         "lei_commit": hex::encode(Sha256::digest(format!("{}|{}", committed_lei, LEI_SALT))), "ecr_commit": o.ecr_commit, "verifier": w.verifier.id(),
         "credit": {"limit": (10 * UNIT).to_string(), "bond_bps": bond_bps, "premium_bps": premium_bps, "min_tenor": "0", "max_tenor": max_tenor.to_string(), "terms_hash": terms_hash,
-                   "terms_sig": terms_sig, "entity_tag": "ENTITY-7", "arbiter": arbiter.id(), "fee_payer": fee_payer},
+                   "terms_sig": terms_sig, "entity_tag": "ENTITY-7", "arbiter": arbiter.id(), "fee_payer": fee_payer, "seller_cap_bps": cap},
     });
     args["signature"] = json!(hex::encode(w.verifier_sk.sign(attest_msg(&args, w.funder.id(), w.writ.id()).as_bytes()).to_bytes()));
     // 保證人簽的是 Seller，公司想改成 Buyer（反過來也一樣）：簽章不過
-    if fee_payer == "Seller" {
+    if fee_payer == "Seller" || cap > 0 {
         let mut tampered = args.clone();
         tampered["credit"]["fee_payer"] = json!("Buyer");
+        tampered["credit"]["seller_cap_bps"] = json!(0);
         let r = w.funder.call(w.writ.id(), "register").args_json(json!({"args": tampered})).deposit(NearToken::from_yoctonear(fee(20) + vault)).max_gas().transact().await?;
         assert!(format!("{:?}", r.into_result()).contains("BAD_ATTESTATION"));
     }
@@ -1690,7 +1691,7 @@ async fn a52_seller_side_attacks() -> anyhow::Result<()> {
 #[tokio::test]
 async fn a56_bond_is_locked_per_credit_and_cannot_be_raced() -> anyhow::Result<()> {
     // 金庫 4.x 節，保證金 100%：兩筆各鎖 2 節。串通的賣方先告違約，只能動到自己那筆的保證金
-    let cw = credit_world_with(10_000, 5, 0, 1, 5 * UNIT, LEI).await?;
+    let cw = credit_world_with(10_000, 5, 0, 1, 6 * UNIT, LEI).await?;
     let first = cw.delivered(2, 2, 3600, "INV-1").await;
     let second = cw.delivered(4, 2, 1, "INV-2").await;
     let c1 = cw.credit(&first).await;
@@ -1708,8 +1709,8 @@ async fn a56_bond_is_locked_per_credit_and_cannot_be_raced() -> anyhow::Result<(
 
 #[tokio::test]
 async fn a79_a_bond_the_company_cannot_fund_is_refused() -> anyhow::Result<()> {
-    // 金庫 3 節，保證金 100%：第一筆鎖 2 節，第二筆鎖不到 2 節。以前差額會靜默轉給保證人
-    let cw = credit_world_with(10_000, 5, 0, 1, 3 * UNIT, LEI).await?;
+    // 金庫 3.5 節，保證金 100%：第一筆鎖 2 節，第二筆鎖不到 2 節。以前差額會靜默轉給保證人
+    let cw = credit_world_with(10_000, 5, 0, 1, 7 * UNIT / 2, LEI).await?;
     let first = cw.delivered(2, 2, 3600, "INV-1").await;
     assert_eq!(cw.credit(&first).await["bond_locked"], (2 * UNIT).to_string());
     let second = cw.opened(4, 2, 3600, "INV-2").await;
@@ -2306,9 +2307,32 @@ async fn b33_a_seller_rule_refuses_is_adjusted_and_ships() -> anyhow::Result<()>
 }
 
 #[tokio::test]
+async fn a85_a_colluding_seller_can_only_reach_its_share_of_the_stake() -> anyhow::Result<()> {
+    // 質押 5 NEAR，單一賣方上限 0.3% = 1.5 節。人頭賣方開單、交貨、不付款的串通，一次最多領這麼多
+    let cw = credit_world_x(CwOpts { cap: 30, accept_ttl: 3600, ..Default::default() }).await?;
+    let w = &cw.w;
+    assert_eq!(cw.card().await["seller_cap_bps"], 30);
+    let first = cw.opened(1, 1, 3600, "INV-STRAW-1").await;
+    cw.seller("accept_credit", json!({"credit": first})).await.unwrap();
+    let second = cw.opened(2, 1, 3600, "INV-STRAW-2").await;
+    let c: Value = w.writ.view("check_order").args_json(json!({"credit": second})).await?.json()?;
+    assert_eq!(c["reasons"], json!(["SELLER_CONCENTRATION"]), "{}", c);
+    let e = cw.seller("accept_credit", json!({"credit": second})).await.unwrap_err();
+    assert!(e.contains("SELLER_CONCENTRATION"), "{}", e);
+    let st: Value = w.writ.view("stake_of").args_json(json!({"account": w.verifier.id()})).await?.json()?;
+    assert_eq!(st["exposure"], UNIT.to_string());
+    bench("A85", "a straw seller takes the whole stake through collusive orders", "SELLER_CONCENTRATION", "SELLER_CONCENTRATION", gain(w).await);
+    // 第一筆結清，曝險放回來，第二筆就成立
+    cw.funder("settle_by_funder", json!({"credit": first}), 0).await.unwrap();
+    cw.seller("accept_credit", json!({"credit": second})).await.unwrap();
+    assert_eq!(cw.credit(&second).await["status"], "Accepted");
+    Ok(())
+}
+
+#[tokio::test]
 async fn a78_a_company_with_no_money_for_the_fee_gets_no_guarantee() -> anyhow::Result<()> {
     let cw = credit_world_fee(0, 2000, 5, 0, 1, UNIT, LEI, 0).await?;
-    // 金庫 1 節扣掉單據儲存剩 0.5 節；5 節的 20% 是 1 節，付不起
+    // 金庫 1 節扣掉單據儲存，不到 1 節；5 節的 20% 是 1 節，付不起
     let id = cw.opened(5, 5, 3600, "INV-NOFEE").await;
     let e = cw.seller("accept_credit", json!({"credit": id})).await.unwrap_err();
     assert!(e.contains("PREMIUM_SHORT"), "{}", e);

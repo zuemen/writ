@@ -71,8 +71,8 @@ pub const NS_PER_PERIOD: u64 = 30 * NS_PER_DAY;
 const GAS_FOR_CALLBACK: Gas = Gas::from_tgas(25); // 要付得起撤銷後的 ft_transfer（10）＋ on_refund（5）
 const GAS_FOR_REFUND_CB: Gas = Gas::from_tgas(5);
 const MAX_EVIDENCE: usize = 128;
-/// 一筆信用紀錄的儲存，開單時從根格金庫收，不退。
-const CREDIT_STORAGE: u128 = 5_000_000_000_000_000_000_000;
+/// 一筆信用紀錄的儲存（單據約 430 bytes＋單一賣方曝險紀錄約 250 bytes），開單時從根格金庫收，不退。
+const CREDIT_STORAGE: u128 = 7_000_000_000_000_000_000_000;
 const GAS_FOR_FT: Gas = Gas::from_tgas(10);
 /// 賣方規則的儲存押金（1000 bytes，夠放 MAX_POLICY_GUARANTORS 個帳號）。第一次設定時收，刪除規則不退。
 pub const SELLER_POLICY_STORAGE: u128 = 10_000_000_000_000_000_000_000;
@@ -96,6 +96,7 @@ enum StorageKey {
     UsedKeys,
     PendingInvoices,
     Policies,
+    SellerExposure,
 }
 
 /// 格的狀態。Revoked / Tripped 之後鑰匙已不在合約帳號上。
@@ -211,6 +212,7 @@ pub struct CreditArgs {
     pub entity_tag: String,     // 保證人給這家公司的固定假名，跨格累積紀錄
     pub arbiter: AccountId,     // 爭議仲裁人，不得是保證人
     pub fee_payer: FeePayer,    // 保證費誰付，簽進 attestation
+    pub seller_cap_bps: u32,    // 單一賣方的曝險上限（質押的萬分比）；0 = 不限。防串通賣方把質押一次領走
 }
 
 /// 一棵樹的信用狀態（只存在根格）。
@@ -394,6 +396,7 @@ pub struct Contract {
     next_credit: u64,
     windows: Windows,
     policies: LookupMap<AccountId, SellerPolicy>,
+    seller_exposure: LookupMap<(AccountId, AccountId), u128>, // (保證人, 賣方) → 保證人對這個賣方的曝險；歸零就刪
 }
 
 // ---------------- 小工具 ----------------
@@ -433,7 +436,7 @@ pub fn attestation_message(a: &RegisterArgs, funder: &AccountId, contract: &Acco
         a.verifier,
         a.attested_at.0,
         a.asset.as_ref().map(|t| t.as_str()).unwrap_or("near"),
-        a.credit.as_ref().map(|c| format!("{},{},{},{},{},{},{},{},{},{:?}", c.limit.0, c.bond_bps, c.premium_bps, c.min_tenor.0, c.max_tenor.0, c.terms_hash, c.terms_sig, c.entity_tag, c.arbiter, c.fee_payer)).unwrap_or_else(|| "none".to_string())
+        a.credit.as_ref().map(|c| format!("{},{},{},{},{},{},{},{},{},{:?},{}", c.limit.0, c.bond_bps, c.premium_bps, c.min_tenor.0, c.max_tenor.0, c.terms_hash, c.terms_sig, c.entity_tag, c.arbiter, c.fee_payer, c.seller_cap_bps)).unwrap_or_else(|| "none".to_string())
     )
 }
 
@@ -475,6 +478,7 @@ impl Contract {
                 unstake_delay: U64(30 * 86_400),
             }),
             policies: LookupMap::new(StorageKey::Policies),
+            seller_exposure: LookupMap::new(StorageKey::SellerExposure),
         }
     }
 
@@ -568,7 +572,7 @@ impl Contract {
         if let Some(cr) = &args.credit {
             require!(args.asset.is_none(), "CREDIT_NEAR_ONLY");
             require!(cr.arbiter != args.verifier && cr.arbiter != funder, "ARBITER_NOT_INDEPENDENT");
-            require!(cr.bond_bps <= 10_000 && cr.premium_bps <= 2_000 && cr.min_tenor.0 <= cr.max_tenor.0, "BAD_CREDIT_TERMS");
+            require!(cr.bond_bps <= 10_000 && cr.premium_bps <= 2_000 && cr.seller_cap_bps <= 10_000 && cr.min_tenor.0 <= cr.max_tenor.0, "BAD_CREDIT_TERMS");
             hex32(&cr.terms_hash, "terms_hash");
             require!(hex::decode(&cr.terms_sig).map(|v| v.len() == 64).unwrap_or(false), "BAD_TERMS_SIG");
             self.terms.insert(id, CreditTerms {
@@ -1322,6 +1326,7 @@ impl Contract {
             "bond_bps": t.args.bond_bps,
             "premium_bps": t.args.premium_bps,
             "fee_payer": t.args.fee_payer,
+            "seller_cap_bps": t.args.seller_cap_bps,
             "guarantor_earned": stake.earned,
             "bond_available": U128(root.vault.0.saturating_sub(t.bond_locked.0)),
             "min_tenor": t.args.min_tenor,
@@ -1531,6 +1536,7 @@ impl Contract {
         st.earned = U128(st.earned.0 + q.charge);
         st.exposure = U128(st.exposure.0 + q.exposure);
         self.stakes.insert(t.guarantor.clone(), st);
+        self.add_seller_exposure(&t.guarantor, &cr.seller, q.exposure);
         t.bond_locked = U128(t.bond_locked.0 + q.bond);
         self.terms.insert(cr.root.0, t);
         cr.bond_locked = U128(q.bond);
@@ -1599,6 +1605,11 @@ impl Contract {
         }
         if st.amount.0.saturating_add(charge).saturating_sub(st.exposure.0) < exposure {
             failures.push("GUARANTOR_CAPACITY".to_string());
+        }
+        // 串通的賣方最多領走質押的這個比例。分母是收這筆費用之前的質押，比較保守
+        let to_seller = self.seller_exposure_of(&t.guarantor, &cr.seller) + exposure;
+        if t.args.seller_cap_bps > 0 && to_seller.saturating_mul(10_000) > st.amount.0.saturating_mul(t.args.seller_cap_bps as u128) {
+            failures.push("SELLER_CONCENTRATION".to_string());
         }
         Quote { fee, periods, charge, bond, exposure, failures }
     }
@@ -1878,6 +1889,7 @@ impl Contract {
         require!(st.amount.0 >= left, "GUARANTOR_SHORT");
         st.amount = U128(st.amount.0 - left);
         self.stakes.insert(t.guarantor.clone(), st);
+        self.sub_seller_exposure(&t.guarantor, &cr.seller, cr.exposure.0);
         self.pay_seller(&cr);
         t.outstanding = U128(t.outstanding.0 - cr.amount.0);
         t.bond_locked = U128(t.bond_locked.0 - cr.bond_locked.0);
@@ -2027,6 +2039,7 @@ impl Contract {
             let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
             st.exposure = U128(st.exposure.0 - cut);
             self.stakes.insert(t.guarantor.clone(), st);
+            self.sub_seller_exposure(&t.guarantor, &cr.seller, cut);
         }
         if t.args.fee_payer == FeePayer::Seller {
             cr.fee = U128(guarantee_fee(final_amount, t.args.premium_bps, cr.fee_periods as u128));
@@ -2035,6 +2048,26 @@ impl Contract {
         cr.amount = U128(final_amount);
         cr.bond_locked = U128(bond);
         cr.exposure = U128(exposure);
+    }
+
+    fn seller_exposure_of(&self, guarantor: &AccountId, seller: &AccountId) -> u128 {
+        self.seller_exposure.get(&(guarantor.clone(), seller.clone())).copied().unwrap_or(0)
+    }
+
+    fn add_seller_exposure(&mut self, guarantor: &AccountId, seller: &AccountId, amount: u128) {
+        if amount > 0 {
+            let cur = self.seller_exposure_of(guarantor, seller);
+            self.seller_exposure.insert((guarantor.clone(), seller.clone()), cur + amount);
+        }
+    }
+
+    fn sub_seller_exposure(&mut self, guarantor: &AccountId, seller: &AccountId, amount: u128) {
+        let left = self.seller_exposure_of(guarantor, seller) - amount;
+        if left == 0 {
+            self.seller_exposure.remove(&(guarantor.clone(), seller.clone()));
+        } else {
+            self.seller_exposure.insert((guarantor.clone(), seller.clone()), left);
+        }
     }
 
     fn credit_seller(&mut self, seller: &AccountId, amount: u128) {
@@ -2068,6 +2101,7 @@ impl Contract {
             let mut st = self.stakes.get(&t.guarantor).cloned().unwrap_or_default();
             st.exposure = U128(st.exposure.0 - cr.exposure.0);
             self.stakes.insert(t.guarantor.clone(), st);
+            self.sub_seller_exposure(&t.guarantor, &cr.seller, cr.exposure.0);
         }
         self.terms.insert(cr.root.0, t);
         cr.status = status;
@@ -2175,7 +2209,7 @@ mod tests {
         assert_eq!(w.vault_total, 5);
 
         // 公司還欠錢：撤銷中轉帳失敗的錢留在根格，不退給公司
-        let args = CreditArgs { limit: U128(1), bond_bps: 0, premium_bps: 0, min_tenor: U64(0), max_tenor: U64(1), terms_hash: String::new(), terms_sig: String::new(), entity_tag: String::new(), arbiter: writ.clone(), fee_payer: FeePayer::Buyer };
+        let args = CreditArgs { limit: U128(1), bond_bps: 0, premium_bps: 0, min_tenor: U64(0), max_tenor: U64(1), terms_hash: String::new(), terms_sig: String::new(), entity_tag: String::new(), arbiter: writ.clone(), fee_payer: FeePayer::Buyer, seller_cap_bps: 0 };
         w.terms.insert(1, CreditTerms { args, guarantor: writ.clone(), terms_ecr_commit: String::new(), outstanding: U128(0), bond_locked: U128(0), open_debts: 1 });
         ctx(vec![PromiseResult::Failed]);
         assert!(matches!(w.on_transfer(U64(1), U128(5), "00".repeat(32), funder.clone(), 1, 0, Err(PromiseError::Failed)), Verdict::Rejected { .. }));

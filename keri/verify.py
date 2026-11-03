@@ -128,7 +128,7 @@ def verify_chain():
             le_pk=hby.kevers[ecr.issuer].verfers[0].raw.hex(),
             agent_near_pk="ed25519:" + b58(ak.verfers[0].raw),
             w0=a["paywordRoot"], n=a["paywordLength"], unit=a["unitYocto"], daily=a["dailyLinks"],
-            credit=dict(limit=a["creditLimitYocto"], bond_bps=a["bondBps"], premium_bps=a.get("premiumBps", 0), fee_payer=a.get("feePayer", "Buyer"), min_tenor=str(a["minTenorSecs"]), max_tenor=str(a["maxTenorSecs"]),
+            credit=dict(limit=a["creditLimitYocto"], bond_bps=a["bondBps"], premium_bps=a.get("premiumBps", 0), fee_payer=a.get("feePayer", "Buyer"), seller_cap_bps=a.get("sellerCapBps", 0), min_tenor=str(a["minTenorSecs"]), max_tenor=str(a["maxTenorSecs"]),
                         terms_hash=a["termsHash"], arbiter=a["arbiter"]) if a.get("creditLimitYocto") else None,
             max_links=a["maxLinksPerPayment"], max_strikes=a["maxStrikes"], le_aid=ecr.issuer,
             scope=a["counterparties"], funder=a["settlementRail"], asset=a.get("settlementAsset"),
@@ -139,7 +139,7 @@ def verify_chain():
 def credit_line(c):
     if not c:
         return "none"
-    return f"{c['limit']},{c['bond_bps']},{c['premium_bps']},{c['min_tenor']},{c['max_tenor']},{c['terms_hash']},{c['terms_sig']},{c['entity_tag']},{c['arbiter']},{c['fee_payer']}"
+    return f"{c['limit']},{c['bond_bps']},{c['premium_bps']},{c['min_tenor']},{c['max_tenor']},{c['terms_hash']},{c['terms_sig']},{c['entity_tag']},{c['arbiter']},{c['fee_payer']},{c['seller_cap_bps']}"
 
 
 def attestation_message(r, lei_commit, ecr_commit, verifier, contract, attested_at, credit=None):
