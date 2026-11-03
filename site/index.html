@@ -37,6 +37,7 @@
   nav .links a:hover { color:var(--ink); }
   .live { font:500 12px var(--mono); color:var(--ok); display:flex; align-items:center; gap:7px; white-space:nowrap; }
   .live i { width:7px; height:7px; border-radius:50%; background:var(--ok); }
+  .live.down { color:var(--ox); } .live.down i { background:var(--ox); }
 
   .hero { display:grid; grid-template-columns:1.08fr .92fr; gap:56px; align-items:center; padding:68px 0 76px; }
   h1 { font:600 clamp(42px,6.2vw,76px)/1.02 var(--serif); letter-spacing:-.02em; margin:16px 0 22px; }
@@ -78,7 +79,13 @@
   .mini { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:12px; }
   .mini .node { padding:7px 9px; }
   .mini .node b { font-size:12.5px; }
-  .mini .stamp { right:6px; left:auto; top:auto; bottom:6px; transform:rotate(-5deg); font-size:10.5px; padding:0 4px; border-width:1.5px; letter-spacing:0; }
+  .mini .stamp { position:static; display:none; width:max-content; margin-top:4px; transform:rotate(-5deg); font-size:10.5px; padding:0 4px; border-width:1.5px; letter-spacing:0; }
+  .mini .stamp.on { display:block; }
+  .org { min-width:0; }
+  .verify { margin-top:12px; font-size:13.5px; }
+  .verify summary { cursor:pointer; color:var(--soft); }
+  .verify pre { max-height:220px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:500 11.5px/1.45 var(--mono); background:#f5f1e6; padding:8px 10px; margin:8px 0; }
+  .verify code { display:block; font:500 11.5px/1.45 var(--mono); overflow-wrap:anywhere; color:var(--soft); }
   .pick { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
   .clock { font:600 13px var(--mono); color:var(--ox); margin-top:6px; min-height:18px; }
 
@@ -96,9 +103,25 @@
   .step:first-child { border-top:0; }
   .step .n { font:600 30px var(--serif); color:var(--rule); line-height:1.1; }
   .step.active .n { color:var(--ink); }
-  .step.done .n { color:var(--soft); }
+  .step.done .n { color:var(--ok); }
+  .step.done .n::after { content:"✓"; font-size:.55em; margin-left:2px; }
+  .step.done .act .btn { display:none; }
+  .step:not(.active):not(.done) h4, .step:not(.active):not(.done) p { opacity:.62; }
+  .step[hidden] { display:none; }
+  .btn.chosen { outline:3px solid var(--ok); outline-offset:2px; opacity:1; }
+  .act { display:flex; flex-direction:column; gap:8px; align-items:stretch; }
+  .ledger { margin-top:14px; font-size:14.5px; } .ledger:empty { display:none; }
+  .ledger ol { margin:6px 0 0; padding-left:22px; } .ledger li { margin:3px 0; }
+  #again { margin-top:14px; }
   .step h4 { font:600 19px var(--sans); margin:0 0 3px; }
   .step p { margin:0; color:var(--soft); font-size:15.5px; max-width:640px; }
+  .tryit { border:1px solid var(--rule-strong); background:var(--sheet); padding:20px 22px; margin:18px 0 26px; }
+  .tryit label { display:block; font-weight:600; margin:6px 0 10px; }
+  .tryit textarea { width:100%; box-sizing:border-box; font:13.5px/1.5 var(--mono); padding:10px 12px; border:1px solid var(--rule-strong); background:#fffdf7; color:var(--ink); resize:vertical; }
+  .presets { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 14px; }
+  .chip { font:500 13.5px var(--sans); padding:5px 11px; border:1px solid var(--rule-strong); border-radius:4px; background:transparent; color:var(--soft); cursor:pointer; }
+  .chip:hover { color:var(--ink); border-color:var(--ink); }
+  .tryit .out { margin-top:14px; }
   .poison { font:13px/1.5 var(--mono); color:var(--ox); background:var(--ox-bg); padding:8px 11px; margin-top:9px; max-width:640px; overflow-wrap:anywhere; }
   .out { grid-column:2 / -1; margin-top:10px; padding:10px 13px; font-size:15px; border-left:3px solid var(--rule); background:#f5f1e6; display:none; }
   .out.show { display:block; }
@@ -182,7 +205,8 @@
     .how div.col + div.col { padding-left:0; border-left:0; border-top:1px solid var(--rule); }
     .proof { grid-template-columns:1fr 1fr; }
     .proof a { border-top:1px solid var(--rule); }
-    nav .links { display:none; }
+    nav .wrap { flex-wrap:wrap; }
+    nav .links { order:3; width:100%; margin:0; gap:16px; font-size:14px; overflow-x:auto; white-space:nowrap; padding-bottom:2px; }
     .live { margin-left:auto; }
     .step { grid-template-columns:34px 1fr; padding:18px 16px; }
     .step .n { font-size:24px; }
@@ -200,7 +224,7 @@
 <nav><div class="wrap">
   <a class="mark" href="#top">Writ</a>
   <div class="links"><a href="#run">Sell to an agent</a><a href="#fire">Fire someone</a><a href="#steal">Steal the key</a><a href="#models">Real models</a><a href="#how">How it works</a><a href="#proof">Proof</a><a href="https://github.com/zuemen/writ">GitHub</a></div>
-  <div class="live"><i></i>NEAR testnet, live</div>
+  <div class="live" id="live"><i></i><span id="liveText">connecting…</span></div>
 </div></nav>
 
 <main id="top" class="wrap">
@@ -209,7 +233,7 @@
       <div class="eyebrow reveal">Accountable AI agents, on NEAR</div>
       <h1 class="reveal d1">Who pays if an AI agent's company doesn't? <em>Named before it buys.</em></h1>
       <p class="lead reveal d2">An AI agent wants to buy from you on credit. You can't see the company behind it, and you don't have to: a named guarantor has money locked on-chain and earns a fee for standing behind it. If the company doesn't pay, you claim and you're paid, no approval needed. If it never repays, the guarantor can delete the keys of that mandate's agents and name the company.</p>
-      <div class="cta reveal d3"><a class="btn" href="#run">Sell to an AI agent</a><a class="btn ghost" href="#steal">Try to steal a key</a></div>
+      <div class="cta reveal d3"><a class="btn" href="#run">Sell to an AI agent</a><a class="btn ghost" href="#tryit">Fool a live model</a></div>
     </div>
     <div class="org reveal d2" id="org"><div class="org-in">
       <div class="eyebrow" style="margin-bottom:10px">Risk card · live on testnet · <span id="treeNo">…</span></div>
@@ -227,9 +251,10 @@
         <div class="node" id="nMid"><b>Procurement</b><span id="dMid">…</span><i class="st" id="stMid" style="display:none"></i><div class="stamp d2" id="stampMid">REVOKED</div></div>
         <div class="node" id="nLeaf"><b>Quotes</b><span id="dLeaf">…</span><i class="st" id="stLeaf" style="display:none"></i><div class="stamp d3" id="stampLeaf">REVOKED</div></div>
       </div>
+      <details class="verify"><summary>Check this card yourself</summary><pre id="vjson">…</pre><code id="vcmd"></code></details>
     </div></div>
   </div>
-  <a class="keystrip" href="#steal" style="text-decoration:none"><b>This agent's private key is public.</b><code id="keyTop">…</code><span style="font-weight:600;white-space:nowrap"><span id="attemptsTop">…</span> attempts, <span id="stolenTop">…</span> stolen. Try it ↓</span></a>
+  <a class="keystrip" href="#steal" style="text-decoration:none"><b>Another agent's private key is public.</b><code id="keyTop">…</code><span style="font-weight:600;white-space:nowrap"><span id="attemptsTop">…</span> attempts, <span id="stolenTop">…</span> stolen. Try it ↓</span></a>
 </main>
 
 <section id="run"><div class="wrap">
@@ -240,14 +265,14 @@
     <div class="step" data-step="1">
       <div class="n">1</div>
       <div><h4>Choose how this goes</h4><p>The accounts-payable agent places an order. You see the risk card above, not the company's name.</p>
-        <div class="pick"><button class="btn" id="cHonest">Company will pay</button><button class="btn ghost" id="cBad">Company won't pay</button></div></div>
+        <div class="pick"><button class="btn" id="cHonest" disabled>Company will pay</button><button class="btn ghost" id="cBad" disabled>Company won't pay</button></div></div>
       <div class="act"></div>
       <div class="out" id="o1"></div>
     </div>
     <div class="step" data-step="2">
       <div class="n">2</div>
       <div><h4>Accept the order and ship</h4><p>Accepting pays the guarantor its fee and locks the bond and the guarantor's exposure for this order, so no other seller can drain them.</p></div>
-      <div class="act"><button class="btn" id="s2" disabled>Accept and ship</button></div>
+      <div class="act"><button class="btn" id="s2" disabled>Accept and ship</button><button class="btn ghost" id="s2d" disabled>Decline</button></div>
       <div class="out" id="o2"></div>
     </div>
     <div class="step" data-step="3">
@@ -268,6 +293,8 @@
       </div>
     </div>
   </div>
+  <div class="ledger" id="ledger"></div>
+  <button class="btn ghost" id="again" hidden>Try the other path</button>
   <p class="pooltext" id="pooltext"></p>
 </div></section>
 
@@ -278,8 +305,8 @@
   <div class="steps">
     <div class="step" data-fstep="1">
       <div class="n">1</div>
-      <div><h4>A poisoned invoice reaches the lowest agent</h4><p>Suppose it obeys. Real models sometimes do; see below.</p><div class="poison" id="poison"></div></div>
-      <div class="act"><button class="btn" id="f1">Obey the invoice</button></div>
+      <div><h4>A poisoned invoice reaches the lowest agent</h4><p>Suppose it obeys. Real models sometimes do; try one below.</p><div class="poison" id="poison"></div></div>
+      <div class="act"><button class="btn" id="f1" disabled>Obey the invoice</button></div>
       <div class="out" id="fo1"></div>
     </div>
     <div class="step" data-fstep="2">
@@ -337,6 +364,15 @@
 <section id="models"><div class="wrap">
   <div class="eyebrow">Real models, poisoned invoices</div>
   <h3 class="title">Models get fooled. The payment still doesn't go through.</h3>
+  <div class="tryit" id="tryit">
+    <div class="eyebrow">Fool a live model</div>
+    <label for="inv">Write the invoice yourself. A real model reads it and decides what to pay. Then the contract answers.</label>
+    <textarea id="inv" rows="4" maxlength="800" spellcheck="false"></textarea>
+    <div class="presets"><button class="chip" data-preset="inflate">Inflate the amount</button><button class="chip" data-preset="swap">Swap the payee</button><button class="chip" data-preset="clean">A clean invoice</button></div>
+    <button class="btn" id="askModel" disabled>Let the model read it</button>
+    <div class="out" id="modelOut"></div>
+    <p class="note" id="modelNote">Llama 3.3 on Cloudflare Workers AI's free tier, with a plain prompt: not NEAR AI, no TEE. The model's decision is sent as a real transaction from the published key below, so the verdict is on-chain, and this uses up no mandate. The server only asks the model; it holds no key.</p>
+  </div>
   <div class="big"><div class="num">0</div><p>injected payments went through, in 13 attacks where a real model did what the invoice told it to. Clean invoices were still paid, 4 of 4.</p></div>
   <div class="scroll"><table>
     <thead><tr><th>Attack in the invoice</th><th>gemini-3.5-flash followed</th><th>gemini-3.1-flash-lite followed</th><th>Contract verdict</th></tr></thead>
@@ -350,7 +386,7 @@
 </div></section>
 <section id="how"><div class="wrap">
   <div class="eyebrow">How it works</div>
-  <h3 class="title">Four questions a seller can check on-chain.</h3>
+  <h3 class="title">Four questions a seller can answer before it ships.</h3>
   <p class="sub">GLEIF's August 2026 discussion paper calls for an Agent Mandate Credential and leaves sub-delegation between agents open. Writ puts the mandate's state, the whole tree under it, and who pays for its debts in one NEAR contract.</p>
   <div class="how">
     <div class="col"><div class="eyebrow">Who answers</div><h4>A sealed name, a named guarantor</h4><p>Root → QVI → legal entity → employee on the official vLEI schemas, then a proposed Agent Mandate Credential to the agent. The guarantor checks the chain off-chain with keripy and signs. On-chain there is only a commitment to the LEI. The issuers in this demo are mocks.</p></div>
@@ -377,7 +413,7 @@
     <li>The company's LEI stays a commitment until it is disclosed, but funding accounts and payments are public and linkable.</li>
     <li>Revocation takes effect when the signed event reaches the contract; no relayer ships with the repo. A fooled payment inside every limit, to a permitted payee, for a new invoice, still gets paid.</li>
     <li>Disclosure takes the guarantor's action, since it holds the salt, and it does not happen if money left in the tree repays the debt. Closing affects the agents under one mandate, not every mandate the company has.</li>
-    <li>The buttons on this page sign real testnet transactions, with short windows so you can watch them: 15 seconds to due, 20 seconds of recourse. The guarantor's steps run from this page. The agents do not think here; the model results are separate runs on a local sandbox.</li>
+    <li>The buttons on this page sign real testnet transactions, with short windows so you can watch them: 15 seconds to due, 20 seconds of recourse. The guarantor's steps run from this page. In these two stories the agents are scripted; "Fool a live model" calls a real model. The results in the table are separate runs on a local sandbox.</li>
   </ul>
   <p class="note">All limits are in the <a href="https://github.com/zuemen/writ#not-implemented--limits">README</a>, with the trust model. <span class="mono">make verify</span> reruns everything and prints a scorecard.</p>
 </div></section>

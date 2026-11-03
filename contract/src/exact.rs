@@ -527,6 +527,67 @@ mod exact {
         assert_eq!((c.vault.0, c.unclaimed.0), (0, 3), "what is left becomes refundable");
     }
 
+    fn open_inv(cx: &mut Cx, id: u64, inv: &str) -> Verdict {
+        let (p, k, due) = (link(cx, id, 1), key(cx, id), cx.now + 500 * NS);
+        let inv = inv.to_string();
+        cx.run("open", &writ(), Some(&k), 0, |w| w.open_credit(p, 1, acc("s1.near"), inv, U64(due))).expect("open_credit must not panic")
+    }
+    fn paid(cx: &Cx, r: u64, inv: &str) -> bool { let inv = inv.to_string(); cx.peek(|w| w.invoice_paid(U64(r), inv)) }
+
+    #[test]
+    fn an_invoice_counts_as_paid_only_when_money_moved() {
+        let inv = "aa".repeat(32);
+        // 開單、接受：還沒付
+        let (mut cx, r) = world(opt());
+        let k = opened(open_inv(&mut cx, r, &inv));
+        assert!(!paid(&cx, r, &inv), "an open order is not a payment");
+        accept(&mut cx, k);
+        assert!(!paid(&cx, r, &inv));
+        assert_eq!(why(&open_inv(&mut cx, r, &inv)), "DUPLICATE", "but it cannot be ordered twice");
+        // 結清：付了，也不能再開
+        assert!(settle(&mut cx, r, k));
+        assert!(paid(&cx, r, &inv));
+        assert_eq!(why(&open_inv(&mut cx, r, &inv)), "DUPLICATE");
+
+        // 取消：沒人收到錢，發票放回去
+        let (mut cx, r) = world(opt());
+        let k = opened(open_inv(&mut cx, r, &inv));
+        cx.run("x", &acc("funder.near"), None, 0, |w| w.cancel_open(U64(k))).unwrap();
+        assert!(!paid(&cx, r, &inv));
+        opened(open_inv(&mut cx, r, &inv));
+
+        // 違約：賣方拿到錢了
+        let (mut cx, r) = world(opt());
+        let k = opened(open_inv(&mut cx, r, &inv));
+        accept(&mut cx, k); deliver(&mut cx, k);
+        cx.now = cred(&cx, k).due_at.0 + 51 * NS;
+        cx.run("c", &acc("s1.near"), None, 0, |w| w.claim_default(U64(k))).unwrap();
+        assert!(paid(&cx, r, &inv), "the seller was paid");
+        assert_eq!(why(&open_inv(&mut cx, r, &inv)), "DUPLICATE");
+
+        // 爭議判給公司：沒人收到錢
+        let (mut cx, r) = world(opt());
+        let k = opened(open_inv(&mut cx, r, &inv));
+        accept(&mut cx, k);
+        cx.run("d", &acc("funder.near"), None, U, |w| w.dispute(U64(k), "cd".repeat(32))).unwrap();
+        cx.run("r", &acc("arb.near"), None, 0, |w| w.resolve_dispute(U64(k), false)).unwrap();
+        assert!(!paid(&cx, r, &inv));
+    }
+
+    #[test]
+    fn the_revoked_event_says_whether_money_was_returned() {
+        let (mut cx, r) = world(opt());
+        let v = cell(&cx, r).vault.0;
+        cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        assert!(get_logs().iter().any(|l| l.contains("revoked") && l.contains(&format!("\"refund\":\"{}\"", v)) && l.contains("\"retained\":\"0\"")));
+
+        let (mut cx, r) = world(opt());
+        opened(open(&mut cx, r, 1));
+        let v = cell(&cx, r).vault.0;
+        cx.run("revoke", &acc("funder.near"), None, 0, |w| w.revoke(U64(r), "x".into())).unwrap();
+        assert!(get_logs().iter().any(|l| l.contains("revoked") && l.contains("\"refund\":\"0\"") && l.contains(&format!("\"retained\":\"{}\"", v))));
+    }
+
     #[test]
     fn retained_money_is_released_only_after_the_last_order() {
         let (mut cx, r, a, b) = two_bonded(10 * U);

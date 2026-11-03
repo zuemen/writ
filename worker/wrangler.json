@@ -1,0 +1,7 @@
+{
+  "name": "writ-near",
+  "main": "index.js",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "../.demo-testnet/site", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "ai": { "binding": "AI" }
+}

@@ -97,7 +97,7 @@
 | B14 | boundaries: j == cap pays, unpaid invoice not on record, maxStrikes 0 never trips, solvency counts storage | all exact | all exact | 0 |
 | B15 | NEAR refund fails because the funder account is gone; it is kept, and claimable after the account returns | refund recovered | refund recovered | 0 |
 | B16 | agent hires a sub-agent with a narrower mandate; it pays inside it | Paid, parent's links spent | Paid, parent's links spent | 0 |
-| B17 | one revocation closes a full tree of 16 agents in one transaction | 16 keys deleted | 16 keys deleted, 17 Tgas | 0 |
+| B17 | one revocation closes a full tree of 16 agents in one transaction | 16 keys deleted | 16 keys deleted, 18 Tgas | 0 |
 | B18 | HR revokes one employee's ECR; the agent, its sub-agent and sub-sub-agent all lose their keys | 3 keys deleted by one signed event | 3 keys deleted by one signed event | 0 |
 | B19 | agent buys on credit, seller delivers, company pays on time | paid, identity sealed | paid, identity sealed | 0 |
 | B20 | default covered by the company's own vault: seller paid, on the record, identity sealed | paid, sealed | paid, sealed | 0 |

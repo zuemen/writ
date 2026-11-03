@@ -1,5 +1,5 @@
-# cargo mutants：只突變合約本體；測試以 WRIT_REBUILD=1 從突變後的原始碼重建 wasm 再跑攻擊台
+# cargo mutants：只突變合約本體；測試以 WRIT_REBUILD=1 從突變後的原始碼重建 wasm 再跑全部測試：先跑快的單元測試與 fuzz，再跑攻擊台
 examine_globs = ["src/lib.rs"]
 exclude_re = ["attestation_preview", "Contract::owner"]
 test_tool = "cargo"
-additional_cargo_test_args = ["--test", "bench", "--", "--test-threads=2"]
+additional_cargo_test_args = ["--", "--test-threads=2"]

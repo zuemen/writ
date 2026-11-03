@@ -77,6 +77,7 @@ enum StorageKey {
     Claimable,
     Entities,
     UsedKeys,
+    PendingInvoices,
 }
 
 /// 格的狀態。Revoked / Tripped 之後鑰匙已不在合約帳號上。
@@ -324,6 +325,7 @@ pub struct Contract {
     unseal_delay_ns: u64,
     used_amcs: LookupMap<String, u64>, // 一張 AMC 只能開一格；撤銷後不能用同一張 attestation 復活
     paid_invoices: LookupSet<Vec<u8>>, // cell id ‖ 發票雜湊：同一張發票不能付兩次
+    pending_invoices: LookupSet<Vec<u8>>, // 賒帳開單到付清之間：發票已占用，但錢還沒動
     used_keys: LookupSet<PublicKey>, // 鑰匙一生只用一次：解僱、撤銷、tripwire 之後都不能再被雇用或開格
     credits: LookupMap<u64, Credit>,
     terms: LookupMap<u64, CreditTerms>,
@@ -396,6 +398,7 @@ impl Contract {
             unseal_delay_ns: unseal_delay_secs.unwrap_or(120) * 1_000_000_000,
             used_amcs: LookupMap::new(StorageKey::UsedAmcs),
             paid_invoices: LookupSet::new(StorageKey::PaidInvoices),
+            pending_invoices: LookupSet::new(StorageKey::PendingInvoices),
             used_keys: LookupSet::new(StorageKey::UsedKeys),
             credits: LookupMap::new(StorageKey::Credits),
             terms: LookupMap::new(StorageKey::Terms),
@@ -953,6 +956,8 @@ impl Contract {
         let (asset, funder) = (c.asset.clone(), c.funder.clone());
         let mut refund = 0u128;
         let mut keys: Vec<PublicKey> = vec![];
+        // 公司還欠錢時金庫留在根格，事件要照實說沒有退款
+        let holds = self.terms.get(&c.root).map(|t| t.outstanding.0 > 0 || t.open_debts > 0).unwrap_or(false);
         let mut stack: Vec<(u64, Cell, Status)> = vec![(id, c, status)];
         while let Some((cid, mut cell, st)) = stack.pop() {
             if cell.status == Status::Active {
@@ -964,7 +969,7 @@ impl Contract {
             cell.status = st.clone();
             self.key_to_cell.remove(&cell.agent_pk);
             self.stats.revoked += 1;
-            event("revoked", serde_json::json!({"cell": cid.to_string(), "status": st, "refund": part.to_string()}));
+            event("revoked", serde_json::json!({"cell": cid.to_string(), "status": st, "refund": if holds { 0 } else { part }.to_string(), "retained": if holds { part } else { 0 }.to_string()}));
             for k in cell.children.iter() {
                 if let Some(ch) = self.cells.get(k).cloned() {
                     if ch.status == Status::Active || matches!(ch.status, Status::Tripped) {
@@ -1181,7 +1186,7 @@ impl Contract {
 
     pub fn invoice_paid(&self, cell: U64, invoice_hash: String) -> bool {
         let root = self.cells.get(&cell.0).map(|c| c.root).unwrap_or(cell.0);
-        Self::invoice_key(root, &invoice_hash).is_some_and(|k| self.paid_invoices.contains(&k))
+        Self::invoice_key(root, &invoice_hash).is_some_and(|k| self.paid_invoices.contains(&k) && !self.pending_invoices.contains(&k))
     }
 
     pub fn get_cell(&self, cell: U64) -> Option<Cell> {
@@ -1381,7 +1386,9 @@ impl Contract {
         }
         let mut t = terms.unwrap();
         t.outstanding = U128(t.outstanding.0 + amount);
-        self.paid_invoices.insert(invoice_key.unwrap());
+        let ik = invoice_key.unwrap();
+        self.paid_invoices.insert(ik.clone());
+        self.pending_invoices.insert(ik);
         c.w_cur = preimage.to_lowercase();
         c.idx += j;
         c.day_used += j;
@@ -1654,6 +1661,7 @@ impl Contract {
         cr.debt = U128(left);
         cr.recourse_until = U64(now + self.windows.recourse.0 * 1_000_000_000);
         cr.status = CreditStatus::Defaulted;
+        self.close_invoice(&cr);
         if left > 0 {
             t.open_debts += 1;
         }
@@ -1801,7 +1809,18 @@ impl Contract {
         }
         self.terms.insert(cr.root.0, t);
         cr.status = status;
+        self.close_invoice(cr);
         self.release_retained(cr.root.0);
+    }
+
+    /// 賒帳單結束：不再是待付。取消的單沒有人收到錢，發票放回去可以重開或付款。
+    fn close_invoice(&mut self, cr: &Credit) {
+        if let Some(k) = Self::invoice_key(cr.root.0, &cr.invoice_hash) {
+            self.pending_invoices.remove(&k);
+            if cr.status == CreditStatus::Cancelled {
+                self.paid_invoices.remove(&k);
+            }
+        }
     }
 
     fn finish_settled(&mut self, cr: &mut Credit) {
