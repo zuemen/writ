@@ -60,7 +60,7 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 
 | What | Result | Where |
 |---|---|---|
-| Attack bench, CI run [41626045777](https://github.com/zuemen/writ/actions/runs/41626045777) | 125 attacks blocked, each ending in the expected refusal; 105 unit, exact-value and fuzz tests; 97 sandbox tests | [`docs/bench.md`](docs/bench.md) |
+| Attack bench, CI run [41626045777](https://github.com/zuemen/writ/actions/runs/41626045777) | 125 attacks blocked, each ending in the expected refusal; 105 unit, exact-value and fuzz tests; 103 sandbox tests | [`docs/bench.md`](docs/bench.md) |
 | Cover story, same run | `COVER_RESULT\|PASS`, in NEAR and in a token | [`app/src/cover-demo.ts`](app/src/cover-demo.ts) |
 | Forged credentials, same run | 36 forged or stale chains refused by the off-chain verifier | [`keri/test_forgeries.py`](keri/test_forgeries.py) |
 | Mutation testing | {MUTANTS} | [`docs/TESTING.md`](docs/TESTING.md#mutation-testing) |
