@@ -40,7 +40,7 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with
 | # | Do | See |
 |---|---|---|
 | 1 | `make setup` | contract builds and is shrunk with wasm-opt (≈ 300 KB); size and `sha256sum` of `contract/res/writ.wasm` printed |
-| 2 | `make test` | `test result: ok. 59 passed` and the table in [`docs/bench.md`](docs/bench.md): **78 attacks, 78 blocked** (the attacker's balance is measured at the end of each test) |
+| 2 | `make test` | `test result: ok. 33 passed` (unit, exact values, fuzz), then `test result: ok. 59 passed` and the table in [`docs/bench.md`](docs/bench.md): **78 attacks, 78 blocked** (the attacker's balance is measured at the end of each test) |
 | 3 | `make credit-demo` | the whole credit story with real KERI signatures: risk card, paid on time and sealed, unpaid and the guarantor pays, frozen, recourse over, keys deleted, a false company refused, the real one named; ends in `CREDIT_RESULT\|PASS` |
 | 4 | `make demo` | a fresh local sandbox starts (port 3030 must be free); the 8-step story prints (about 1 min, includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
 | 5 | `make ui` → open http://localhost:8787 | three views (HR / agent / merchant). Click **Verify chain & open mandate**, **Agent pays**, **Agent follows the invoice**, **Officer leaves → HR revokes ECR**, **Agent pays** — each row in *Chain log* shows a tx hash or the protocol error |
@@ -305,7 +305,9 @@ Rejection reasons: `EXPIRED`, `SCOPE`, `INVOICE`, `DUPLICATE`, `PER_TX`, `LIMIT`
 
 ## Mutation testing
 
-`cargo mutants` (config in `contract/.cargo/mutants.toml`; `WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source) runs in shards from `.github/workflows/mutants.yml`. On an earlier version of the contract, before the credit module, it produced 154 testable mutants: 142 caught on the first pass; those 12 misses became tests B14 and B15 and some fixes. Re-run: **151 caught, 3 missed.** The three are boundary mutants we consider equivalent: `>` vs `>=` where the excess refund is zero (`register`), at one exact nanosecond of expiry (`spend`), and where a zero refund changes nothing (`close`). Earlier survivors became attacks A23–A25 and tests B05, B06.
+`cargo mutants` runs on the contract from `.github/workflows/mutants.yml` (`WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source). **Of 562 testable mutants, 558 are caught and 4 are not**, added up from three runs on the same `lib.rs`; [`contract/mutants-baseline/README.md`](contract/mutants-baseline/README.md) has the run IDs.
+
+The first run was worse than we expected: the attack bench alone caught 423 and missed 139, many of them in the credit money paths, because the bench checks who gets refused and rarely the exact amount. So `contract/src/exact.rs` now checks every money path to the yoctoNEAR and every deadline to the nanosecond. Those tests found no bug in the contract. The four left are `>` vs `>=` where the amount is zero or equality cannot happen. We read them by hand and believe they change no balance, though three can change the gas burnt. A review agent read them as well; it did not run them.
 
 ## Security review notes
 
@@ -323,7 +325,7 @@ Code reviews after the first bench, done with AI review agents, found problems t
 - money kept in a closed tree stayed stuck after the company repaid, a bug introduced by an earlier fix (`A71`);
 - the guarantor or the company could be the seller and manufacture its own default (`A77`).
 
-`contract/src/fuzz.rs` also drives random call sequences with random failed callbacks and checks the books after every step. CI runs it on each push.
+`contract/src/fuzz.rs` also drives random call sequences with random failed callbacks and checks the books after every step. CI runs it and the exact-value tests on each push.
 
 ## Not implemented / limits
 
@@ -332,6 +334,8 @@ Code reviews after the first bench, done with AI review agents, found problems t
 - **No real guarantor exists yet.** The demo guarantor is a test account and the 2% fee is a placeholder. Who would underwrite agents, and at what price, is untested. The fee is not refunded if an accepted order is later cancelled.
 - **Disclosure takes the guarantor.** Only it holds the salt, so a guarantor that stays quiet reveals nothing, and a debt repaid from money left in the tree reveals nothing. Closing covers one mandate's tree, not every mandate the company has.
 - **The terms are a placeholder.** `terms_hash` commits to demo text no lawyer has reviewed. Whether an on-chain default and disclosure have legal effect depends on a real agreement and a jurisdiction.
+- **`invoice_paid` means the invoice id has been used, not that money moved.** It turns true when credit is opened and stays true after a cancel, and paying that invoice later returns `DUPLICATE` with a strike. A seller should read the credit's status instead. A new order needs a new invoice id.
+- **The `revoked` event reports the cell's share as `refund` even when the money is kept in the root for a debt.** Balances are right; an indexer should read `get_cell`, not this field.
 - **Credit is in NEAR only.** USDC works for `spend`, not for credit.
 - **The guarantor's stake is the real limit.** A guarantor's exposure across cells cannot exceed its stake while orders are open, but it can request an unstake in advance; the risk card shows `guarantor_unstake_at` so a seller can see it.
 - **The delivery proof is a hash.** The contract cannot tell a real delivery from a false one; a dispute handles that, and the arbiter is one account named in the mandate.
@@ -356,7 +360,7 @@ Code reviews after the first bench, done with AI review agents, found problems t
 ## Repository layout
 
 ```
-contract/        Rust contract (near-sdk 5.30), src/fuzz.rs (invariants), tests/bench.rs (attack bench), ft-mock/ (test NEP-141 token)
+contract/        Rust contract (near-sdk 5.30), src/fuzz.rs (invariants), src/exact.rs (exact values), tests/bench.rs (attack bench), ft-mock/ (test NEP-141 token)
 keri/            issuer.py (mock vLEI ecosystem), verify.py (verifier), test_forgeries.py, common.py (schemas)
 app/             TypeScript: setup, demo, local UI server, live LLM agent, agent SDK (src/), page (web/)
 site/            Public site: static page, signs testnet transactions in the browser
