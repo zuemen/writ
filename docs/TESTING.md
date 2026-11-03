@@ -8,7 +8,7 @@ Every claim in the docs should have a command. `make verify` runs the build, the
 |---|---|
 | `make setup` | contract builds and is shrunk with wasm-opt; size and `sha256sum` of `contract/res/writ.wasm` printed |
 | `make cover-demo` | an agent fooled inside its limits: same number refused, new number paid, a false claim denied with nothing moved, the fooled payment upheld, the guarantor repays the loss less the company's share, the tree stays stopped until cleared, then the same in a token with cover alone. Last line `COVER_RESULT\|PASS\|activated=true\|duplicate=DUPLICATE\|fooled_paid=true\|…` |
-| `make test` | `cargo test --lib`: `test result: ok. 105 passed` (unit, exact values, fuzz). Then the bench: `test result: ok. 103 passed`, and the table in [bench.md](bench.md): 125 attacks, all blocked (the attacker's balance is measured at the end of each test) |
+| `make test` | `cargo test --lib`: `test result: ok. 108 passed` (unit, exact values, fuzz). Then the bench: `test result: ok. 104 passed`, and the table in [bench.md](bench.md): 126 attacks, all blocked (the attacker's balance is measured at the end of each test) |
 | `make credit-demo` | the whole credit story with real KERI signatures: risk card, a seller's rule refuses then ships, paid on time and sealed, unpaid and the guarantor pays, frozen, recourse over, keys deleted, a false company refused, the real one named. Last line `CREDIT_RESULT\|PASS\|rule_refused_then_shipped=…\|paid_on_time_sealed=…\|guarantor_paid=…\|frozen=…\|revealed=…` |
 | `make credit-usdc-demo` | the same in a mock 6-decimal token: rule refuses, usage order for 4 of 5, seller pays the fee, default paid by the token stake, repaid in the token, books match the token balance. Last line `CREDIT_USDC_RESULT\|PASS\|…` |
 | `make demo` | a fresh local sandbox starts (port 3030 must be free); the 8-step prepaid story prints (includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |
@@ -60,7 +60,7 @@ DEMO_RESULT|PASS|paid=true|injection=SCOPE|attacker_gain=0|disclosed=true|revoke
 | Credential forgeries | `keri/test_forgeries.py` | F1–F36: forged or stale chains the verifier must refuse. |
 | Live models | `app/src/agent-live.ts`, `app/src/agent-credit.ts` | Real LLMs on a local sandbox. Small samples that show the contract holds whichever way the model goes, not how often models fail. |
 
-The numbers on this page, the README and the site are from CI run [41626045777](https://github.com/zuemen/writ/actions/runs/41626045777), on commit `ea27d76`: 125 attacks, 103 integration tests, 105 unit tests, 36 credential forgeries, `COVER_RESULT|PASS`. [bench.md](bench.md) is that run's table. Rerun before quoting them against a later commit.
+The numbers on this page, the README and the site are from CI run [41645916450](https://github.com/zuemen/writ/actions/runs/41645916450), on commit `1703fd6`: 126 attacks, 104 integration tests, 108 unit tests, 36 credential forgeries, `COVER_RESULT|PASS`. [bench.md](bench.md) is that run's table. Rerun before quoting them against a later commit.
 
 ## The live model
 
@@ -91,7 +91,7 @@ The earlier runs in [attack-live.md](attack-live.md) and [attack-credit-live.md]
 
 `cargo mutants` runs on the contract from [`.github/workflows/mutants.yml`](../.github/workflows/mutants.yml), by hand and in 8 shards (`WRIT_REBUILD=1` makes each test rebuild the wasm from the mutated source; config in `contract/.cargo/mutants.toml`).
 
-**The current result: {MUTANTS}.** The run on the cover contract is pending; nothing below carries over to it.
+**The current result: no score yet.** The run on the cover contract is pending; nothing below carries over to it.
 
 **The earlier result, and what it taught.** The first run on the credit contract (the `writ-guarantee` generation) was worse than we expected: the attack bench alone caught 423 of 562 testable mutants and missed 139, many of them in the credit money paths, because the bench checks who gets refused and rarely the exact amount.
 

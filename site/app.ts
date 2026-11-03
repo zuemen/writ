@@ -226,7 +226,7 @@ async function renderCard() {
   if (card.legal_entity !== "sealed") $("rcCompany").innerHTML = `<span class="named">${esc(cfg.company)}, LEI ${esc(card.legal_entity)}</span>`;
   else $("rcCompany").innerHTML = `<span class="sealed">${"&nbsp;".repeat(20)}</span> sealed`;
   $("rcGuarantor").textContent = short(card.guarantor, 34);
-  $("rcStake").textContent = `${nearStr(card.guarantor_stake)} staked, ${nearStr(card.guarantor_exposure)} on open orders`;
+  $("rcStake").textContent = `${nearStr(card.guarantor_stake)} staked, ${nearStr(card.guarantor_exposure)} locked on cover and open orders`;
   $("rcLimit").textContent = `${nearStr(card.credit_limit)}, ${nearStr(card.outstanding)} outstanding`;
   $("rcBond").textContent = `${card.bond_bps / 100}% of each order`;
   $("rcFee").textContent = `${card.premium_bps / 100}% per 30 days, paid by the ${card.fee_payer === "Seller" ? "seller" : "buyer"}`;
@@ -726,7 +726,7 @@ function paintCover() {
   const left = rootCell.n - rootCell.idx;
   $("liveStat").textContent = `This agent: ${left} of ${rootCell.n} budget links left, ${rootCell.rejects} payments refused. Its links ship with this page: anyone can spend them, only to the seller in the mandate, at most 3 at a time. The server only asks the model; it holds no key.`;
 }
-const EVIDENCE = "https://github.com/zuemen/writ/actions/runs/41626045777";
+const EVIDENCE = "https://github.com/zuemen/writ/actions/runs/41645916450";
 function setState(html: string) {
   const el = $("fState");
   el.innerHTML = html;
@@ -1133,6 +1133,7 @@ async function rule(invoiceHash: string, rec: any, uphold: boolean) {
 }
 async function clearAgent() {
   const inResult = !!document.getElementById("clearAgent");
+  const setOut = (html: string) => { const e = document.getElementById("clearOut"); if (e) e.innerHTML = html; }; // the visitor may have moved on to the next invoice while this signs
   const b = btn(inResult ? "clearAgent" : "clearBanner");
   b.disabled = true;
   b.textContent = "Signing…";
@@ -1140,13 +1141,13 @@ async function clearAgent() {
   b.textContent = "Company clears the agent";
   if (o.kind !== "paid" && o.verdict !== "NOTHING_TO_CLEAR") {
     b.disabled = false;
-    if (inResult) $("clearOut").innerHTML = failOut(o);
+    if (inResult) setOut(failOut(o));
     else $("fState").insertAdjacentHTML("beforeend", failOut(o));
     return;
   }
   if (inResult) {
     b.remove();
-    $("clearOut").innerHTML = `<div class="out show good"><b>Cleared.</b> ${txLink(o.hash)}<div>The company says it dealt with its agent. That is a record, not a control. The next visitor can play.</div></div>`;
+    setOut(`<div class="out show good"><b>Cleared.</b> ${txLink(o.hash)}<div>The company says it dealt with its agent. That is a record, not a control. The next visitor can play.</div></div>`);
   }
   await refreshCover().catch(() => setLive(false));
 }

@@ -12,7 +12,7 @@ import { py } from "./keri.js";
 
 // https://developers.circle.com/stablecoins/usdc-contract-addresses (NEAR testnet)
 const USDC = "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af";
-const UNIT = 100_000n; // 0.1 USDC (6 decimals)
+const UNIT = BigInt(process.env.WRIT_USDC_UNIT ?? "100000"); // 0.1 USDC by default (6 decimals)
 const a = A();
 const acme = as(a.acme.id, a.acme.sk);
 const usdc = (id: string) => view(USDC, "ft_balance_of", { account_id: id }) as Promise<string>;

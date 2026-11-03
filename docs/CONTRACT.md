@@ -1,6 +1,6 @@
 # Contract reference
 
-Source: `contract/src/lib.rs` (near-sdk 5.30). Deployed at `writ-net30.testnet`. Errors are in [ERRORS.md](ERRORS.md), events in [EVENTS.md](EVENTS.md), a walk-through in [INTEGRATE.md](INTEGRATE.md).
+Source: `contract/src/lib.rs` (near-sdk 5.30). Deployed at `writ-cover.testnet`. Errors are in [ERRORS.md](ERRORS.md), events in [EVENTS.md](EVENTS.md), a walk-through in [INTEGRATE.md](INTEGRATE.md).
 
 **API "cell" = mandate.** Every `cell` parameter is a mandate id. Also: "funder" is the company's funding account; "verifier" is a whitelisted account that signs attestations, and a verifier with stake and credit terms is a guarantor; "credit" is an order on credit.
 

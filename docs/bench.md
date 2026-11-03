@@ -1,4 +1,4 @@
-**125 attacks, 125 blocked as expected, attacker gain 0 yoctoNEAR.**
+**126 attacks, 126 blocked as expected, attacker gain 0 yoctoNEAR.**
 
 | id | attack / scenario | expected | observed | attacker gain (yocto) |
 |---|---|---|---|---|
@@ -40,6 +40,7 @@
 | A123 | a listed verifier guarantees its own company and inflates its record | COVER_GUARANTOR | COVER_GUARANTOR | 0 |
 | A124 | the mandate's scope lets the agent pay the contract itself, stranding the money | COVER_SCOPE | COVER_SCOPE | 0 |
 | A125 | someone with the arbiter's key upholds a loss of one yocto: it pays nothing and burns the claim | BAD_LOSS | BAD_LOSS | 0 |
+| A126 | guarantor names itself as signer, to revoke by KEL and skip the fee it owes | COVER_ACTIVE | COVER_ACTIVE | 0 |
 | A13 | funder widens the scope after the verifier signed | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
 | A14 | attacker replays someone else's attestation | BAD_ATTESTATION | BAD_ATTESTATION | 0 |
 | A15 | forged KERI revocation event | BAD_KEL_SIGNATURE | BAD_KEL_SIGNATURE | 0 |

@@ -1,7 +1,7 @@
 /** Turns the demo's timeline into docs/testnet.md (each step with a testnet explorer link). */
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
-import { DEMO, ROOT, readJson } from "./near.js";
+import { DEMO, ROOT, provider, readJson } from "./near.js";
 const t = readJson(join(DEMO, "timeline.json"));
 const a = readJson(join(DEMO, "accounts.json"));
 // Keys on the contract account: there should be no full-access key, only the agent's function-call key (after revocation not even that one)
