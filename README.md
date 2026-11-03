@@ -7,7 +7,6 @@ Writ lets a seller give net-30 terms to an AI agent's order without trusting the
 Trust isn't proving an AI won't fail. It's knowing who pays when it does.
 
 **Demo:** <https://writ-near.112306007.workers.dev> signs testnet transactions in your browser.
-**Video:** {VIDEO}
 
 ## How credit works
 
@@ -53,7 +52,7 @@ Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with
 | # | Do | See |
 |---|---|---|
 | 1 | `make setup` | contract builds; size and `sha256sum` of `contract/res/writ.wasm` printed |
-| 2 | `make test` | `test result: ok. {UNIT} passed`, then `test result: ok. {INTEGRATION} passed` and [`docs/bench.md`](docs/bench.md): {ATTACKS} attacks, all blocked |
+| 2 | `make test` | `test result: ok. 75 passed`, then `test result: ok. 80 passed` and [`docs/bench.md`](docs/bench.md): 96 attacks, all blocked |
 | 3 | `make credit-demo` | the credit story with real KERI signatures: rule refuses then ships, paid and sealed, unpaid and the guarantor pays, frozen, keys deleted, a false company refused, the real one named; ends in `CREDIT_RESULT\|PASS` |
 | 4 | `make credit-usdc-demo` | the same in a mock 6-decimal stablecoin on a local sandbox, seller pays the fee; ends in `CREDIT_USDC_RESULT\|PASS` |
 | 5 | `make demo` | a local sandbox starts (port 3030 must be free) and the prepaid story runs; last line starts `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0`; exit code 0 |
@@ -67,9 +66,9 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 
 | What | Result | Where |
 |---|---|---|
-| Attack bench | {ATTACKS} attacks blocked, attacker's balance measured at the end of each test; {UNIT} unit, exact-value and fuzz tests; {INTEGRATION} sandbox tests | [`docs/bench.md`](docs/bench.md) |
+| Attack bench | 96 attacks blocked, attacker's balance measured at the end of each test; 75 unit, exact-value and fuzz tests; 80 sandbox tests | [`docs/bench.md`](docs/bench.md) |
 | Mutation testing | {MUTANTS}, and why the bench alone was not enough | [`docs/TESTING.md`](docs/TESTING.md#mutation-testing) |
-| Live on NEAR testnet | contract [`{CONTRACT}`](https://testnet.nearblocks.io/address/{CONTRACT}), no full-access key; every step of both stories with its transaction; one payment in Circle's testnet USDC | [`docs/testnet-credit.md`](docs/testnet-credit.md), [`docs/testnet.md`](docs/testnet.md), [`docs/testnet-usdc.md`](docs/testnet-usdc.md) |
+| Live on NEAR testnet | contract [`writ-net30.testnet`](https://testnet.nearblocks.io/address/writ-net30.testnet), no full-access key; every step of both stories with its transaction; one payment in Circle's testnet USDC | [`docs/testnet-credit.md`](docs/testnet-credit.md), [`docs/testnet.md`](docs/testnet.md), [`docs/testnet-usdc.md`](docs/testnet-usdc.md) |
 | Real models get fooled; the money doesn't move | two Gemini models followed injections in 13 of 20 payment attacks and 8 of 12 credit-order attacks; none of those went through. Small samples on a local sandbox, not a benchmark | [`docs/attack-live.md`](docs/attack-live.md), [`docs/attack-credit-live.md`](docs/attack-credit-live.md) |
 | Forged credentials | 14 forged or stale chains refused by the off-chain verifier | [`keri/test_forgeries.py`](keri/test_forgeries.py) |
 

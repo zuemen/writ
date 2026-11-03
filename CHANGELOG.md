@@ -2,7 +2,7 @@
 
 The contract cannot be upgraded, so each change to it is a new deployment on a new testnet account. Newest first. Taken from the git log.
 
-## {CONTRACT} (next)
+## writ-net30.testnet (current)
 
 Commits `1bf20c8` to `95875b3`; CI for the stablecoin story in `41991ac`. Attestation format `writ:attest:v6`. Source metadata version `0.2.0`.
 

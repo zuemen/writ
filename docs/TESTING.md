@@ -7,7 +7,7 @@ Every claim in the docs should have a command. `make verify` runs the build, the
 | Do | See |
 |---|---|
 | `make setup` | contract builds and is shrunk with wasm-opt; size and `sha256sum` of `contract/res/writ.wasm` printed |
-| `make test` | `cargo test --lib`: `test result: ok. {UNIT} passed` (unit, exact values, fuzz). Then the bench: `test result: ok. {INTEGRATION} passed`, and the table in [bench.md](bench.md): {ATTACKS} attacks, all blocked (the attacker's balance is measured at the end of each test) |
+| `make test` | `cargo test --lib`: `test result: ok. 75 passed` (unit, exact values, fuzz). Then the bench: `test result: ok. 80 passed`, and the table in [bench.md](bench.md): 96 attacks, all blocked (the attacker's balance is measured at the end of each test) |
 | `make credit-demo` | the whole credit story with real KERI signatures: risk card, a seller's rule refuses then ships, paid on time and sealed, unpaid and the guarantor pays, frozen, recourse over, keys deleted, a false company refused, the real one named. Last line `CREDIT_RESULT\|PASS\|rule_refused_then_shipped=…\|paid_on_time_sealed=…\|guarantor_paid=…\|frozen=…\|revealed=…` |
 | `make credit-usdc-demo` | the same in a mock 6-decimal token: rule refuses, usage order for 4 of 5, seller pays the fee, default paid by the token stake, repaid in the token, books match the token balance. Last line `CREDIT_USDC_RESULT\|PASS\|…` |
 | `make demo` | a fresh local sandbox starts (port 3030 must be free); the 8-step prepaid story prints (includes a 10 s disclosure waiting period); last line `DEMO_RESULT\|PASS\|paid=true\|injection=SCOPE\|attacker_gain=0\|disclosed=true\|revoked=MANDATE REVOKED`; exit code 0 |

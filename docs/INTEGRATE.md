@@ -1,6 +1,6 @@
 # Integrate
 
-For a seller first, then a company and its agents, then a guarantor. Nobody uses this in production yet: it runs on testnet at `{CONTRACT}`, and this guide has not been timed with an outside developer.
+For a seller first, then a company and its agents, then a guarantor. Nobody uses this in production yet: it runs on testnet at `writ-net30.testnet`, and this guide has not been timed with an outside developer.
 
 The commands use [NEAR CLI](https://github.com/near/near-cli-rs). Numbers and amounts in the JSON are examples. `U64` and `U128` values are strings; amounts are in the order's asset (yoctoNEAR, 1 NEAR = 10^24, or the token's smallest unit). Terms are in [ARCHITECTURE.md](ARCHITECTURE.md#terms); every method is in [CONTRACT.md](CONTRACT.md), every error in [ERRORS.md](ERRORS.md).
 
@@ -11,13 +11,13 @@ You sell to an AI agent you have never met. You set a rule, check each order aga
 ### 1. Read a risk card (nothing from this repo needed)
 
 ```
-near contract call-function as-read-only {CONTRACT} risk_card json-args '{"cell":"<id>"}' network-config testnet now
+near contract call-function as-read-only writ-net30.testnet risk_card json-args '{"cell":"<id>"}' network-config testnet now
 ```
 
 `<id>` is the mandate id the agent gives you, or the `cell` in its order. The site shows one. If you have only `curl`, this is the same call for mandate 25; the result is an array of bytes holding JSON:
 
 ```
-curl -s https://test.rpc.fastnear.com -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":"1","method":"query","params":{"request_type":"call_function","finality":"final","account_id":"{CONTRACT}","method_name":"risk_card","args_base64":"eyJjZWxsIjoiMjUifQ=="}}'
+curl -s https://test.rpc.fastnear.com -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":"1","method":"query","params":{"request_type":"call_function","finality":"final","account_id":"writ-net30.testnet","method_name":"risk_card","args_base64":"eyJjZWxsIjoiMjUifQ=="}}'
 ```
 
 What to read:
@@ -50,7 +50,7 @@ The rule is optional. Without one, only the contract's own checks apply, and not
 Watch for the `credit_opened` event ([EVENTS.md](EVENTS.md)), or take the credit id from the agent.
 
 ```
-near contract call-function as-read-only {CONTRACT} check_order json-args '{"credit":"7"}' network-config testnet now
+near contract call-function as-read-only writ-net30.testnet check_order json-args '{"credit":"7"}' network-config testnet now
 ```
 
 ```json
@@ -70,7 +70,7 @@ The `order` above is abridged. `would_accept` means `accept_credit` would succee
 ```
 
 ```
-near contract call-function as-transaction {CONTRACT} accept_credit json-args '{"credit":"7"}' prepaid-gas '100.0 Tgas' attached-deposit '0 NEAR' sign-as seller.testnet network-config testnet sign-with-keychain send
+near contract call-function as-transaction writ-net30.testnet accept_credit json-args '{"credit":"7"}' prepaid-gas '100.0 Tgas' attached-deposit '0 NEAR' sign-as seller.testnet network-config testnet sign-with-keychain send
 ```
 
 The contract locks the bond and the guarantor's exposure. It panics `POLICY:<reason>` if your stored rule fails, and otherwise on the first failure `check_order` would report. A rule passed to `check_order` has no effect here. A buyer-paid fee moves now and is not refunded.
@@ -185,7 +185,7 @@ The guarantor signs; the company must submit from the account named in the signa
 Attach more than 0.35 NEAR + 0.001 NEAR × `n`. In a NEAR mandate the rest becomes the vault. For a token mandate add `"asset":"usdc.testnet"` both at the top and in `credit`; the NEAR above the fee becomes `near_reserve`, which pays 0.007 NEAR storage per order and hire fees. Then fund with `ft_transfer_call` on the token, 1 yocto attached:
 
 ```json
-{"receiver_id":"{CONTRACT}","amount":"5000000","msg":"fund:25"}
+{"receiver_id":"writ-net30.testnet","amount":"5000000","msg":"fund:25"}
 ```
 
 To add a seller later you need a new attestation and a new mandate: the scope cannot change.
@@ -243,7 +243,7 @@ You check the company's credential chain off-chain, then sign the attestation in
 ### Watch your book: `guarantor_book`
 
 ```
-near contract call-function as-read-only {CONTRACT} guarantor_book json-args '{"account":"guarantor.testnet"}' network-config testnet now
+near contract call-function as-read-only writ-net30.testnet guarantor_book json-args '{"account":"guarantor.testnet"}' network-config testnet now
 ```
 
 Returns `stake`, `exposure`, `utilisation_bps`, `earned`, `claims_paid`, `recovered`, `net_loss`, `loss_ratio_bps` (null before any fee) and `top_sellers` (at most 5). Add `"asset":"usdc.testnet"` for a token book. `top_sellers` is drawn from a list of at most 8, so it is not complete.
