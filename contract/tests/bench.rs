@@ -3065,11 +3065,13 @@ async fn b42_cover_alone_works_from_activation_to_withdrawal_in_near() -> anyhow
     let card: Value = cw.w.writ.view("risk_card").args_json(json!({"cell": cw.root()})).await?.json()?;
     assert!(card.is_null(), "no credit, no credit card");
     let p: Value = cw.w.writ.view("present").args_json(json!({"cell": cw.root()})).await?.json()?;
-    assert_eq!((p["cover"].clone(), p["credit"].clone()), (json!(true), json!(false)));
+    assert_eq!((p["cover"].clone(), p["credit"].clone()), (json!(false), json!(false)), "offered: no money behind it yet");
     let v0: u128 = cw.cell_state().await["vault"].as_str().unwrap().parse()?;
     cw.activate().await.unwrap();
     let premium = 50 * UNIT * 200 / 10_000;
     assert_eq!(cw.cell_state().await["vault"].as_str().unwrap().parse::<u128>()?, v0 - premium);
+    let p: Value = cw.w.writ.view("present").args_json(json!({"cell": cw.root()})).await?.json()?;
+    assert_eq!(p["cover"], true);
     let st = cw.stake().await;
     assert_eq!((st["earned"].clone(), st["exposure"].clone()), (json!(premium.to_string()), json!((50 * UNIT).to_string())));
     cw.paid(2, 2, "INV-1").await;
