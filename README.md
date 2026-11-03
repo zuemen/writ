@@ -75,14 +75,16 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 - **Nobody has data on how often agents get fooled**, so we can't give a price. We can say what you'd have to believe: with a $60,000 limit, and every input here an assumption, a guarantor needs $9,013–16,693 a year if one $5,000 payment is fooled each year. A company paying that itself gets back $0.24–0.44 per $1, so our first guess at who pays is the vendor of the agent. [Worked example](docs/ECONOMICS.md#what-you-would-have-to-believe).
 - The demo's 2% per 30 days is about 24% of the limit a year. It is a placeholder, not a price. [`docs/ECONOMICS.md`](docs/ECONOMICS.md)
 
-## Limits
+## Today, and what would change it
 
-- **The arbiter is a person you must trust.** Bought by the company, it costs the guarantor up to the limit; the limit protects only the guarantor. Bought by the guarantor, it can deny claims and end the company's cover after a denial.
-- **Moral hazard is capped, not stopped.** A company that fools its own agent with a seller it controls can take the loss minus its share, up to the limit, if the arbiter upholds.
-- **Seller refunds are invisible**, and nothing adds up a company's mandates into a total.
-- **A guarantor can revoke right after activating and keep the fee for the periods already started, up to two even after a few seconds.** Later periods go back to the company, as far as its free stake reaches. Its lock isn't released early. The fee is charged up front, can come close to the limit on a long mandate, and the guarantor chooses when to activate, within the first half of the term.
-- **The demo's windows are short:** the arbiter has 60 seconds and a payment can be claimed for 10 minutes. The 14 days in the docs is the contract's default.
-- **A fooled payment inside every limit still gets paid.** Cover repays it afterwards, if the arbiter upholds; it doesn't stop it.
+| | Today | What would change it (none of this is built) |
+|---|---|---|
+| Arbiter | **A person you must trust.** Bought by the company, it costs the guarantor up to the limit; the limit protects only the guarantor. Bought by the guarantor, it can deny claims and end the company's cover. | An arbiter with its own money at risk, or a way to appeal |
+| Moral hazard | **Capped, not stopped.** A company that fools its own agent with a seller it controls can take the loss minus its share, up to the limit, if the arbiter upholds. | Underwriting the company; on-chain, the share and the limit are the only brakes |
+| Refunds, totals | **Seller refunds are invisible**, and nothing adds up a company's mandates into a total. | A signed refund statement on the record; a total per company |
+| Early revoke | **A guarantor can revoke right after activating and keep the fee for the periods already started, up to two even after a few seconds.** Later periods go back to the company, as far as its free stake reaches. Its lock isn't released early. The fee is charged up front, can come close to the limit on a long mandate, and the guarantor chooses when to activate, within the first half of the term. | Charging the fee period by period |
+| Demo windows | **Short:** the arbiter has 60 seconds and a payment can be claimed for 10 minutes. The 14 days in the docs is the contract's default. | A real mandate uses the defaults |
+| Fooled payments | **A fooled payment inside every limit still gets paid.** Cover repays it afterwards, if the arbiter upholds; it doesn't stop it. | Better models and firewalls lower how often; cover only decides who pays |
 
 Testnet only. No real guarantor, no real customers, not audited, no actuarial basis. Offering this for real money may be regulated insurance or guarantee business depending on the jurisdiction; no lawyer has reviewed it. A guarantor would need its own licence or legal opinion. Writ is software.
 
