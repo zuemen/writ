@@ -56,7 +56,9 @@ Read the last column first. A company paying this itself gets back less than it 
 
 ### Who would pay, if not the company
 
-Our first guess is the vendor of the agent, standing behind its own product to win a customer. It knows the agent, and it can fix what gets fooled, which a financial guarantor can't. Nobody has been asked, and nobody has agreed. The nearest public example we found is different in kind: [ElevenLabs](https://elevenlabs.io/blog/aiuc-announcement) insuring its own voice agents through an insurer, so that "risks associated with using AI, like an AI agent providing incorrect information to a customer, can now be insured against". That shows a vendor wanting this; it doesn't show one locking money. Merchants point the same way: "93% of merchants believe that AI or agent providers should bear the financial loss when an agent makes an incorrect purchase" ([Forkast](https://forkast.news/the-agentic-commerce-liability-gap-who-pays-when-the-agent-buys-wrong/), citing PYMNTS Intelligence, September 2026; we haven't read the PYMNTS report). That is sellers talking about incorrect purchases, not vendors agreeing to pay.
+Our first guess is the vendor of the agent, standing behind its own product to win a customer. It knows the agent, and it can fix what gets fooled, which a financial guarantor can't. That holds for failures of the agent, not for every loss: a thief with a real seller's payout keys billing a real order would fool a clerk too, so it isn't the vendor's to carry. A crime policy or a separate guarantor might take that, and the terms have to say. Nobody has been asked, and nobody has agreed. The nearest public example we found is different in kind: [ElevenLabs](https://elevenlabs.io/blog/aiuc-announcement) insuring its own voice agents through an insurer, so that "risks associated with using AI, like an AI agent providing incorrect information to a customer, can now be insured against". That shows a vendor wanting this; it doesn't show one locking money. Merchants point the same way: "93% of merchants believe that AI or agent providers should bear the financial loss when an agent makes an incorrect purchase" ([Forkast](https://forkast.news/the-agentic-commerce-liability-gap-who-pays-when-the-agent-buys-wrong/), citing PYMNTS Intelligence, September 2026; we haven't read the PYMNTS report). That is sellers talking about incorrect purchases, not vendors agreeing to pay.
+
+A vendor backing its own agent would charge no fee: this is a sales cost, and the contract allows a premium of zero (read in the code, not run). A separate guarantor would charge one. Why lock money instead of signing a warranty? A small vendor's promise is worth what its balance sheet is; a locked stake can be read before signing. And it answers the "engineering problem" objection below: a vendor that pays for what its agent misses has a reason to build the checks.
 
 On the example above, for one customer, before any running cost: locked money $2,760–8,520 a year, plus $4,000 repaid if one payment is fooled, so $6,760–12,520. Ten such customers lock $600,000. The vendor should do this only if the cover wins sales worth more than that. Whether it does is untested.
 
@@ -88,7 +90,7 @@ We read public threads on 2026-11-04. Nobody here was asked about Writ, and none
 | [Hacker News commenter](https://news.ycombinator.com/item?id=45419709), who hasn't lost money | "So who do you call when it drains your account and orders 50 tons of wood, or falls for prompt injection and pays a scammer?" Then: "there's no way in hell I'm touching it for at least 5-10 years." | The question Writ answers, asked by someone refusing to use an agent. A fear, not a loss. |
 | [Shopify merchant](https://www.reddit.com/r/shopify/comments/1q6nyvg/watch_out_for_amazon_buy_for_me_chargeback_fraud/) | "So far we are at a 28% chargeback rate for orders originating with Amazon" on "a dozen or so orders", with exposure "under $10K". | Real money, on a seller, from an agent's orders. But Amazon's agent wasn't fooled, the sample is tiny, and this merchant blocked those orders. Nobody asked for a guarantee. |
 
-Where this leaves us: we agree with the first row. Refuse what a rule can catch, and match invoices to orders. What's left is what gets past those too, such as stolen seller keys with no goods receipt or call to catch them, which the demo's fake note isn't. A bill like that may also take longer than 3 days to notice, which would raise the limit in the example above. We have no answer yet to the second row, and the third may be right.
+Where this leaves us: we agree with the first row. Refuse what a rule can catch, and match invoices to orders. What's left is what gets past those too. The demo's fake note isn't that, since an order match stops it; it shows what a model does with no such check, and why a vendor on the hook would add one. We have no answer yet to the second row, and the third may be right.
 
 So people do ask who pays. We found nobody saying their agent was fooled and nobody covered it, nobody asking to buy a guarantee, and no seller asking to give agents credit. This is a search, not a survey.
 
@@ -125,7 +127,7 @@ At 60% of stake in use. The top of the range overlaps B2B BNPL.
 
 | Loss rate p | L | F at c=4.6% | F at c=14.2% | Fee on $10,000 |
 |---|---|---|---|---|
-| 0.089% | 0.07% | 0.93% | 2.66% | $93–266 |
+| 0.089% | 0.07% | 0.92% | 2.65% | $92–265 |
 | 1% | 0.80% | 1.90% | 3.63% | $190–363 |
 | 2% | 1.60% | 2.96% | 4.69% | $296–469 |
 | 6% | 4.80% | 7.23% | 8.96% | $723–896 |

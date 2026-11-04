@@ -8,16 +8,16 @@ Trust isn't proving an AI won't fail. It's knowing who pays when it does.
 
 **Demo:** <https://writ-near.112306007.workers.dev> Fool a real model, then rule on the claim yourself. Your browser signs testnet transactions.
 
-A live model paid a re-billed invoice with a fake controller note 10 of 10 times, and the same invoice without the note 0 of 10 (small sample, [how to re-run it](docs/TESTING.md)). The same invoice [sent on chain](docs/testnet-cover.md) passes every check. Matching invoices to the ledger would stop that one, so build it first.
+A live model paid a re-billed invoice with a fake controller note 10 of 10 times, and a version without the note 0 of 10 (small sample, at low temperature so the runs are close to repeats, [how to re-run it](docs/TESTING.md)). The same invoice [sent on chain](docs/testnet-cover.md) passes every check. Matching invoices to the ledger would stop that one. That's the point of asking the vendor to back its agent: with money at stake, it has a reason to build that check, and cover pays for what it misses. We found no public case of an agent losing money this way.
 
-The harder case: a thief holding a real seller's payout keys bills a real open order for the right amount. No invoice check catches that. A model pays it (10 of 10 on a clean invoice, with no thief in the test; a rule script would too), an order match passes it, and so does the contract. A goods receipt or a call to the seller might stop it. Cover is for what gets past those. Whether the buyer or the seller carries that loss depends on their contract, and no lawyer has looked at it. We found no public case of it happening to an agent.
+Cover isn't for everything. A thief with a real seller's payout keys billing a real order is no agent's failure: a clerk would pay it too, so a vendor shouldn't carry it. A crime policy or a separate guarantor might, and the mandate's terms have to say.
 
 | Previous NEAR hackathons judged | Where to check it |
 |---|---|
 | Technical implementation | `make verify` reruns the build, the bench, the main stories and the credential checks ([from a clean checkout](https://github.com/zuemen/writ/actions/runs/41722437748)). [126 attacks](docs/bench.md), exact-value tests, a fuzz of the books, [8 real transactions through the live site](docs/testnet-cover.md) |
 | Design | [The demo](https://writ-near.112306007.workers.dev): the visitor is the arbiter, and the checks, the stake and the claim are on screen |
 | Impact | Unproven: no customer yet. [What you'd have to believe](docs/ECONOMICS.md#what-you-would-have-to-believe), and [what people say in public, pushback included](docs/ECONOMICS.md#what-people-say-in-public) |
-| Originality | It doesn't try to stop the fooled payment. It settles who repays it, before the agent spends |
+| Originality | It doesn't try to stop the fooled payment. It names who repays it, before the agent spends |
 | Sustainability | MIT. Writ takes no fee today; a business would need a share of the fee or tools sold to guarantors. [Who might pay](docs/ECONOMICS.md#who-would-pay-if-not-the-company) |
 
 ## How cover works
@@ -74,17 +74,17 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 
 | What | Result | Where |
 |---|---|---|
-| Attack bench, CI run [41704113063](https://github.com/zuemen/writ/actions/runs/41704113063) | 126 attacks blocked, each ending in the expected refusal; 111 unit, exact-value and fuzz tests; 104 sandbox tests | [`docs/bench.md`](docs/bench.md) |
+| Attack bench, CI run [41704113063](https://github.com/zuemen/writ/actions/runs/41704113063) | 126 attacks blocked, each ending in the expected outcome; 111 unit, exact-value and fuzz tests; 104 sandbox tests | [`docs/bench.md`](docs/bench.md) |
 | Cover story, same run | `COVER_RESULT\|PASS`, in NEAR and in a token | [`app/src/cover-demo.ts`](app/src/cover-demo.ts) |
 | Forged credentials, same run | 36 forged or stale chains refused by the off-chain verifier | [`keri/test_forgeries.py`](keri/test_forgeries.py) |
-| Mutation testing | 853 of 863 testable mutants caught, on the deployed `lib.rs`. The 10 left are explained | [`docs/TESTING.md`](docs/TESTING.md#mutation-testing) |
+| Mutation testing | 853 of 863 testable mutants caught over two runs, on the deployed `lib.rs`. The 10 left are explained | [`docs/TESTING.md`](docs/TESTING.md#mutation-testing) |
 | The live model | Llama 3.3, 10 runs each: paid a plain re-bill of a paid order 0 of 10, the same bill with a fake controller note 10 of 10, a fake ledger sync 3 of 10 and then 9 of 10 on a second run, and refused every mismatch (0 of 30). A small sample | [`docs/TESTING.md`](docs/TESTING.md#the-live-model) |
 | On NEAR testnet | contract `writ-cover.testnet`, no full-access key, [code hash rebuilt in CI](https://github.com/zuemen/writ/actions/runs/41726000412). Cover run through the live site: fooled payment, claim, uphold, deny | [`docs/testnet-cover.md`](docs/testnet-cover.md), [`docs/testnet.md`](docs/testnet.md) |
 
 ## Economics
 
 - The cost floor is the locked money: 4.6–14.2% of the limit a year (both ends are assumptions, see [`docs/ECONOMICS.md`](docs/ECONOMICS.md)), before any claim or running cost. Fully locked money is why this is expensive.
-- **Nobody has data on how often agents get fooled**, so we can't give a price. We can say what you'd have to believe: with a $60,000 limit, and every input here an assumption, a guarantor needs $9,013–16,693 a year if one $5,000 payment is fooled each year ($6,760–12,520 before running costs). A company paying that itself gets back $0.24–0.44 per $1, so our first guess at who pays is the vendor of the agent. [Worked example](docs/ECONOMICS.md#what-you-would-have-to-believe).
+- **Nobody has data on how often agents get fooled**, so we can't give a price. We can say what you'd have to believe: with a $60,000 limit, and every input here an assumption, a guarantor needs $9,013–16,693 a year if one $5,000 payment is fooled each year ($6,760–12,520 before running costs, for a vendor charging no fee). A company paying that itself gets back $0.24–0.44 per $1, so our first guess at who pays is the vendor of the agent. [Worked example](docs/ECONOMICS.md#what-you-would-have-to-believe).
 - The demo's 2% per 30 days is about 24% of the limit a year. It is a placeholder, not a price. [`docs/ECONOMICS.md`](docs/ECONOMICS.md)
 
 ## Today, and what would change it
@@ -92,11 +92,11 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 | | Today | What would change it |
 |---|---|---|
 | Arbiter | **A person you must trust.** Bought by the company, it costs the guarantor up to the limit; the limit protects only the guarantor. Bought by the guarantor, it can deny claims and end the company's cover. | A council instead of one person works today: [a Sputnik DAO upheld and denied a claim on testnet](docs/testnet-dao-arbiter.md), with demo accounts voting. An arbiter with its own money at risk, or a way to appeal, isn't built |
-| Moral hazard | **Capped, not stopped.** A company that fools its own agent with a seller it controls, or a seller that falsely says it was hacked, can take the loss minus the company's share, up to the limit, if the arbiter upholds. | Underwriting the company; on-chain, the share and the limit are the only brakes. Not built |
+| Moral hazard | **Capped, not stopped.** A company that fools its own agent with a seller it controls, can take the loss minus the company's share, up to the limit, if the arbiter upholds. | Underwriting the company; on-chain, the share and the limit are the only brakes. Not built |
 | Refunds, totals | **Seller refunds are invisible**, and nothing adds up a company's mandates into a total. | A signed refund statement on the record; a total per company. Not built |
 | Early revoke | **A guarantor can revoke right after activating and keep the fee for the periods already started, up to two even after a few seconds.** Later periods go back to the company, as far as its free stake reaches. Its lock isn't released early. The fee is charged up front, can come close to the limit on a long mandate, and the guarantor chooses when to activate, within the first half of the term. | Charging the fee period by period. Not built |
 | Contract owner | **Can take a guarantor's free stake** by overwriting its key and signing a mandate in its name (found by reading the code in review, not run). The owner is a demo account. | A timelock or the guarantor's own signature, which means a new deployment. |
-| Claim standard | **Undefined.** "Fooled" here means the agent paid a bill that turned out false, even if it followed every rule. The demo's terms stop there. | A real mandate's terms have to say what counts and what evidence the arbiter needs. |
+| Claim standard | **A proposal, untested:** the agent paid a bill its own ledger or terms should have refused, because text it read changed its decision. The arbiter sees the invoice, the hash the agent reported and the ledger. The demo's terms go no further. | Real terms, written with a lawyer and tested on a first dispute. |
 | Demo windows | **Short:** the arbiter has 60 seconds and a payment can be claimed for 10 minutes. The 14 days in the docs is the contract's default. | A real mandate uses the defaults |
 | Fooled payments | **A fooled payment inside every limit still gets paid.** Cover repays it afterwards, if the arbiter upholds; it doesn't stop it. | Better models and firewalls lower how often; cover only decides who pays |
 
@@ -118,7 +118,7 @@ All limits, with the threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md
 
 ## Baseline disclosure
 
-All code in this repository was written during the hackathon window (from 2026-11-01). Libraries and services: near-sdk-rs, near-contract-standards, hex, near-workspaces, near-api-js, keripy (WebOfTrust), binaryen, cargo-mutants, and Llama 3.3 on Cloudflare Workers AI. No code from the author's earlier projects is included. The author has worked on the same theme before, on other chains and systems (agent-passport, mandate-layer, agent-tab, mcp-vlei, evidence-at-source); those are the ideas Writ grew from, not its code. The code was written with AI coding agents (Claude Code); the author directed the design and reviewed the results.
+All code in this repository was written during the hackathon window (from 2026-11-01). Libraries and services: near-sdk-rs, near-contract-standards, hex, near-workspaces, near-api-js, keripy (WebOfTrust), tokio, anyhow, rand, serde_json, tsx, typescript, binaryen, cargo-mutants, and Llama 3.3 on Cloudflare Workers AI. No code from the author's earlier projects is included. The author has worked on the same theme before, on other chains and systems (agent-passport, mandate-layer, zuemen/agent-tab, which is unrelated to any other project of that name here, mcp-vlei, evidence-at-source); those are the ideas Writ grew from, not its code. The code was written with AI coding agents (Claude Code); the author directed the design and reviewed the results.
 
 ## License
 
