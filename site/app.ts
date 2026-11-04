@@ -692,6 +692,7 @@ document.querySelectorAll<HTMLButtonElement>("button[data-preset]").forEach((b) 
   setPreset(b.dataset.preset!);
   if (!busy) unstage("sDecision", "sChecks");
 }));
+
 invBox.addEventListener("input", () => document.querySelectorAll<HTMLButtonElement>("button[data-preset]").forEach((b) => b.setAttribute("aria-pressed", "false")));
 setPreset("fooled");
 
@@ -1231,3 +1232,45 @@ const openMore = () => {
 };
 addEventListener("hashchange", openMore);
 openMore();
+
+// The side panel says who you are now and what to press next. It reads the page, so it can't disagree with it.
+function renderGuide() {
+  const el = (id: string) => document.getElementById(id) as HTMLButtonElement | null;
+  const shown = (id: string) => !$(id).hidden;
+  const ask = btn("askModel");
+  let step = 1;
+  let role = "You’re the accounts team";
+  let text = preset === "fooled" ? "Keep the invoice with the fake controller note, then press “Let the model read it”." : "Press “Let the model read it” to see what it does with this invoice.";
+  let next: HTMLElement | null = ask;
+  if (ask.textContent === "The model is reading…") {
+    step = 2; role = "The model is deciding"; text = "It reads the invoice against the ledger. Wait a few seconds."; next = null;
+  } else if (ask.textContent === "Signing what it decided…") {
+    step = 3; role = "The contract is checking"; text = "The payment is on its way to NEAR. Wait a few seconds."; next = null;
+  } else if (shown("sResult")) {
+    step = 6;
+    if (el("clearAgent") && !el("clearAgent")!.disabled) {
+      role = "You’re the company"; text = "The stake repaid you. Press “Company clears the agent” so it can pay again."; next = el("clearAgent");
+    } else {
+      const denied = /^Denied/.test($("sResult").innerText.trim());
+      role = denied ? "That’s the whole loop" : "The agent can pay again";
+      text = denied ? "A denied claim moves nothing and the agent resumes. Try “Swap the payee” to see a refusal, or write your own invoice." : "Now pick “Real purchase”, let the model pay it, claim anyway and press Deny.";
+      next = null;
+    }
+  } else if (shown("sArb") && el("uphold")) {
+    step = 5; role = "You’re the arbiter"; text = "The contract can’t tell if the agent was fooled. Read the evidence and press Uphold or Deny before the clock runs out."; next = el("uphold")!.disabled ? null : el("uphold");
+  } else if (el("fileClaim")) {
+    step = 4; role = "You’re the company"; text = "The money left. Press “File a claim”: every agent under this mandate stops until someone rules."; next = el("fileClaim")!.disabled ? null : el("fileClaim");
+  } else if (shown("sChecks") && $("sChecks").querySelector(".verdict.no")) {
+    step = 3; role = "Refused"; text = "It broke a rule the contract reads, so no money moved. Now pick “With a fake controller note”, which breaks none."; next = null;
+  } else if (shown("sDecision") && !shown("sChecks")) {
+    step = 2; role = "No payment"; text = "The model didn’t pay, so no money moved. Pick “With a fake controller note”, or try this one again."; next = ask;
+  }
+  $("gRole").textContent = role;
+  $("gText").textContent = text;
+  $("gSteps").querySelectorAll("li").forEach((li, i) => { li.className = i + 1 < step ? "done" : i + 1 === step ? "now" : ""; });
+  document.querySelectorAll(".nextUp").forEach((n) => { if (n !== next) n.classList.remove("nextUp"); });
+  if (next && !(next as HTMLButtonElement).disabled) next.classList.add("nextUp");
+}
+document.querySelectorAll("button[data-preset]").forEach((b) => b.addEventListener("click", () => renderGuide()));
+new MutationObserver(() => renderGuide()).observe(document.querySelector(".app-main")!, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "disabled"] });
+renderGuide();
