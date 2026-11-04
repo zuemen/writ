@@ -74,6 +74,22 @@ What each would do on Writ is our reading of the rules, not a test.
 
 The gap matters: public cases show agents do get talked out of money, but they fall in the half an allowlist stops. Whether the other half is common enough to pay for is what nobody knows yet.
 
+### What people say in public
+
+We read public threads on 2026-11-04. Nobody here was asked about Writ, and none of them describes the exact loss cover is for. The pushback is the stronger half, so it comes first.
+
+| Who | What they said | What it means here |
+|---|---|---|
+| [Commenter on r/AI_Agents](https://www.reddit.com/r/AI_Agents/comments/1v5hwzn/) testing payment insurance, replying | ["Most of these are engineering problems, not insurance problems."](https://www.reddit.com/r/AI_Agents/comments/1v5hwzn/_/ozjkoz6/) | Double payments, wrong payees and overspending don't need cover. Writ agrees: the contract refuses those. |
+| Same reply, on who rules | "adjudication is manual and adversarial, which is exactly where insurance economics break." It was about a service that wasn't delivered. | Writ's arbiter is exactly this, and its pay isn't in our model. We have no answer yet. |
+| Works on agent wallets, says so, and is biased | ["it should only cover the thin residual left after enforcement, the genuinely ambiguous \"valid payment, bad judgment\" cases."](https://www.reddit.com/r/AI_Agents/comments/1v5hwzn/_/p0t2wji/) | That residual is Writ's whole market. It may be too thin to pay for. |
+| Same thread | ["Same as a human employee. You eat it and learn to manage better."](https://www.reddit.com/r/AI_Agents/comments/1v5hwzn/_/ozj013n/) Another: ["cost-prohibitive, if any insurance company were willing to offer that policy at all."](https://www.reddit.com/r/AI_Agents/comments/1v5hwzn/_/ozqbh6q/) | The default answer today is to absorb it. |
+| [Hacker News commenter](https://news.ycombinator.com/item?id=48753301) | "spend a limited amount of money (this is on me to cover)" | Some people want only a limit, and accept the loss. |
+| [Hacker News commenter](https://news.ycombinator.com/item?id=45419709), who hasn't lost money | "So who do you call when it drains your account and orders 50 tons of wood, or falls for prompt injection and pays a scammer?" Then: "there's no way in hell I'm touching it for at least 5-10 years." | The question Writ answers, asked by someone refusing to use an agent. A fear, not a loss. |
+| [Shopify merchant](https://www.reddit.com/r/shopify/comments/1q6nyvg/watch_out_for_amazon_buy_for_me_chargeback_fraud/) | "So far we are at a 28% chargeback rate for orders originating with Amazon" on "a dozen or so orders", with exposure "under $10K". | Real money, on a seller, from an agent's orders. But Amazon's agent wasn't fooled, the sample is tiny, and this merchant blocked those orders. Nobody asked for a guarantee. |
+
+So people do ask who pays. We found nobody saying their agent was fooled and nobody covered it, nobody asking to buy a guarantee, and no seller asking to give agents credit. This is a search, not a survey.
+
 ## Second use: net-30 for sellers
 
 The same stake can back orders on credit. No source gives a default rate for AI-agent buyers either. The rest of this page is that model. `exposure` counts orders and locked cover together, so one dollar can't back both.

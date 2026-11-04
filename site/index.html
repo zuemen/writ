@@ -249,7 +249,7 @@
   .fold[open] > summary { margin-bottom:12px; }
 
   /* proof */
-  .proof { display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--rule-strong); background:var(--sheet); }
+  .proof { display:grid; grid-template-columns:repeat(5,1fr); border:1px solid var(--rule-strong); background:var(--sheet); }
   .proof a { display:block; padding:18px; text-decoration:none; border-left:1px solid var(--rule); min-width:0; }
   .proof a:first-child { border-left:0; }
   .proof a:hover { background:#efe9da; }
@@ -290,7 +290,8 @@
     .how { grid-template-columns:1fr; }
     .how div.col + div.col { padding-left:0; border-left:0; border-top:1px solid var(--rule); }
     .proof { grid-template-columns:1fr 1fr; }
-    .proof a:nth-child(3) { border-left:0; }
+    .proof a:nth-child(3), .proof a:nth-child(5) { border-left:0; }
+    .proof a:nth-child(5) { grid-column:1 / -1; }
     .proof a:nth-child(n+3) { border-top:1px solid var(--rule); }
     nav .wrap { height:auto; flex-wrap:wrap; padding-top:10px; padding-bottom:8px; row-gap:6px; }
     nav .links { order:3; width:100%; margin:0; gap:6px 18px; flex-wrap:wrap; }
@@ -464,7 +465,7 @@
 
 <section id="today"><div class="wrap">
   <h2 class="title">If your agent is fooled today, who pays?</h2>
-  <p class="sub">What we could find, and where Writ loses. Nobody has been interviewed yet. Agents can be talked into paying: an X user <a href="https://incidentdatabase.ai/cite/1556/">reportedly got Grok and Bankrbot to transfer tokens then valued at about $200,000</a>; linked funds were later returned or converted, and a payee list would have refused it. People get fooled the same way: US businesses reported <a href="https://www.ic3.gov/AnnualReport/Reports/2025_IC3Report.pdf">$3.05 billion lost to email compromise in 2025</a>. We haven’t found a public case of an agent losing money to a seller it was allowed to pay, which is the case cover is for.</p>
+  <p class="sub">What we could find, and where Writ loses. Nobody has been interviewed yet. Agents can be talked into paying: an X user <a href="https://incidentdatabase.ai/cite/1556/">reportedly got Grok and Bankrbot to transfer tokens then valued at about $200,000</a>; linked funds were later returned or converted, and a payee list would have refused it. People get fooled the same way: US businesses reported <a href="https://www.ic3.gov/AnnualReport/Reports/2025_IC3Report.pdf">$3.05 billion lost to email compromise in 2025</a>. We haven’t found a public case of an agent losing money to a seller it was allowed to pay, which is the case cover is for. Public comment leans against us: <a href="https://www.reddit.com/r/AI_Agents/comments/1v5hwzn/_/ozjkoz6/">“Most of these are engineering problems, not insurance problems,”</a> and what’s left may be a <a href="https://www.reddit.com/r/AI_Agents/comments/1v5hwzn/_/p0t2wji/">“thin residual.”</a> Someone else asks our question, but as a reason not to use agents at all: <a href="https://news.ycombinator.com/item?id=45419709">“who do you call when it… falls for prompt injection and pays a scammer?”</a> <a href="https://github.com/zuemen/writ/blob/main/docs/ECONOMICS.md#what-people-say-in-public">All of it, with sources.</a></p>
   <div class="scroll"><table class="cmp">
     <thead><tr><th>Today</th><th>Who pays</th><th>Where it beats Writ</th><th>Where Writ beats it</th></tr></thead>
     <tbody>

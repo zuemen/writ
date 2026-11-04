@@ -14,7 +14,7 @@ A live model paid a re-billed invoice with a fake controller note 10 of 10 times
 |---|---|
 | Technical implementation | `make verify` reruns everything ([from a clean checkout](https://github.com/zuemen/writ/actions/runs/41722437748)). [126 attacks](docs/bench.md), exact-value tests, a fuzz of the books, [8 real transactions through the live site](docs/testnet-cover.md) |
 | Design | [The demo](https://writ-near.112306007.workers.dev): the visitor is the arbiter, and the checks, the stake and the claim are on screen |
-| Impact | Unproven. No guarantor or customer yet, and nobody has been asked. We found no public case of the loss cover is for. [What you'd have to believe](docs/ECONOMICS.md#what-you-would-have-to-believe) |
+| Impact | Unproven. No guarantor or customer yet, and nobody has been asked. We found no public case of the loss cover is for, and [public comment leans against paying for this](docs/ECONOMICS.md#what-people-say-in-public). [What you'd have to believe](docs/ECONOMICS.md#what-you-would-have-to-believe) |
 | Originality | It doesn't try to stop the fooled payment. It settles who repays it, before the agent spends |
 | Sustainability | MIT. Writ takes no fee today; a business would need a share of the fee or tools sold to guarantors. [Who might pay](docs/ECONOMICS.md#who-would-pay-if-not-the-company) |
 
