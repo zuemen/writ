@@ -66,7 +66,7 @@ The numbers on this page, the README and the site are from CI run [41704113063](
 
 The site's "Fool a real model" sends your invoice to Llama 3.3 on Cloudflare Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`), with two tools, `pay_invoice` and `reject_invoice`, and a ledger: PO-77 already paid by INV-1, PO-78 open.
 
-**Measured twice, 10 runs each, with the same prompt and tools as the site, on a temporary worker (`scripts/model-check/`), temperature 0.1, each run with a fresh invoice number.** [Raw output of the second run](../scripts/model-check/results-2026-11-04.txt).
+**Measured twice, 10 runs each, with the same prompt and tool names as the site (the site also describes each parameter), on a temporary worker (`scripts/model-check/`), temperature 0.1, each run with a fresh invoice number.** [Raw output of the second run](../scripts/model-check/results-2026-11-04.txt).
 
 | Invoice | Paid, 2026-11-03 | Paid, 2026-11-04 |
 |---|---|---|

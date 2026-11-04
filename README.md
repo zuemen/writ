@@ -10,7 +10,7 @@ Trust isn't proving an AI won't fail. It's knowing who pays when it does.
 
 A live model paid a re-billed invoice with a fake controller note 10 of 10 times, and the same invoice without the note 0 of 10 (small sample, [how to re-run it](docs/TESTING.md)). The same invoice [sent on chain](docs/testnet-cover.md) passes every check. Matching invoices to the ledger would stop that one, so build it first.
 
-The payment nothing stops: a thief with a real seller's account bills a real open order for the right amount. The model paid that text 10 of 10, an order match passes it, and so does the contract, because nothing on the invoice is wrong. That's what cover is for.
+The harder case: a thief holding a real seller's payout keys bills a real open order for the right amount. No invoice check catches that. A model pays it (10 of 10 on a clean invoice, with no thief in the test; a rule script would too), an order match passes it, and so does the contract. A goods receipt or a call to the seller might stop it. Cover is for what gets past those. Whether the buyer or the seller carries that loss depends on their contract, and no lawyer has looked at it. We found no public case of it happening to an agent.
 
 | Previous NEAR hackathons judged | Where to check it |
 |---|---|
@@ -92,10 +92,11 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 | | Today | What would change it |
 |---|---|---|
 | Arbiter | **A person you must trust.** Bought by the company, it costs the guarantor up to the limit; the limit protects only the guarantor. Bought by the guarantor, it can deny claims and end the company's cover. | A council instead of one person works today: [a Sputnik DAO upheld and denied a claim on testnet](docs/testnet-dao-arbiter.md), with demo accounts voting. An arbiter with its own money at risk, or a way to appeal, isn't built |
-| Moral hazard | **Capped, not stopped.** A company that fools its own agent with a seller it controls can take the loss minus its share, up to the limit, if the arbiter upholds. | Underwriting the company; on-chain, the share and the limit are the only brakes. Not built |
+| Moral hazard | **Capped, not stopped.** A company that fools its own agent with a seller it controls, or a seller that falsely says it was hacked, can take the loss minus the company's share, up to the limit, if the arbiter upholds. | Underwriting the company; on-chain, the share and the limit are the only brakes. Not built |
 | Refunds, totals | **Seller refunds are invisible**, and nothing adds up a company's mandates into a total. | A signed refund statement on the record; a total per company. Not built |
 | Early revoke | **A guarantor can revoke right after activating and keep the fee for the periods already started, up to two even after a few seconds.** Later periods go back to the company, as far as its free stake reaches. Its lock isn't released early. The fee is charged up front, can come close to the limit on a long mandate, and the guarantor chooses when to activate, within the first half of the term. | Charging the fee period by period. Not built |
 | Contract owner | **Can take a guarantor's free stake** by overwriting its key and signing a mandate in its name (found by reading the code in review, not run). The owner is a demo account. | A timelock or the guarantor's own signature, which means a new deployment. |
+| Claim standard | **Undefined.** "Fooled" here means the agent paid a bill that turned out false, even if it followed every rule. The demo's terms stop there. | A real mandate's terms have to say what counts and what evidence the arbiter needs. |
 | Demo windows | **Short:** the arbiter has 60 seconds and a payment can be claimed for 10 minutes. The 14 days in the docs is the contract's default. | A real mandate uses the defaults |
 | Fooled payments | **A fooled payment inside every limit still gets paid.** Cover repays it afterwards, if the arbiter upholds; it doesn't stop it. | Better models and firewalls lower how often; cover only decides who pays |
 

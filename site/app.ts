@@ -674,7 +674,7 @@ let presetText = "";
 const PRESETWHY: Record<string, string> = {
   rebill: "A bill already paid, under a new number, with a story. The model refused this 10 of 10.",
   fooled: "Add a fake note from the controller and the model pays 10 of 10. Matching the invoice to the ledger would stop this one, since PO-77 is already paid. Build that first.",
-  stolen: "A thief with the seller’s account bills the real open order, for the right amount, before the seller does. The text is the same as the real purchase, which is the point: the model, an order match and the contract all pass it. We can’t steal a real account in a demo, so this one you take on trust.",
+  stolen: "A thief holding the seller’s payout keys bills the real open order, for the right amount, before the seller does. The text is a real purchase’s, so the model pays it, as it did 10 of 10 on a clean invoice with no thief in the test; a rule script would too. No invoice check can catch this. A goods receipt or a call to the seller might. We can’t steal a real account in a demo, so you take this one on trust.",
   real: "A genuine purchase. Claim on it anyway and see what a false claim gets.",
   swap: "Breaks a rule the contract reads, so it’s refused whatever the model does.",
   inflate: "Breaks a rule the contract reads, so it’s refused whatever the model does.",
@@ -989,8 +989,8 @@ btn("askModel").addEventListener("click", async () => {
 // ---------------- 3: file a claim ----------------
 function showFile() {
   const k = run?.kind;
-  const head = k === "fooled" ? "The model was fooled, and every check passed." : k === "stolen" ? "Paid, and nothing could have refused it." : "Paid. Now say you were fooled.";
-  const body = k === "fooled" ? "A spending limit lets this through, though an order match wouldn’t. So who pays?" : k === "stolen" ? "Nothing on the invoice is wrong, so only someone looking outside it can tell. So who pays?" : "The company can claim on any recorded payment. Whether it was really fooled is someone else’s call.";
+  const head = k === "fooled" ? "The model was fooled, and every check passed." : k === "stolen" ? "Paid, and no invoice check could have refused it." : "Paid. Now say you were fooled.";
+  const body = k === "fooled" ? "A spending limit lets this through, though an order match wouldn’t. So who pays?" : k === "stolen" ? "Nothing on the invoice is wrong. Only something outside it, a goods receipt or the seller, can tell. So who pays?" : "The company can claim on any recorded payment. Whether it was really fooled is someone else’s call.";
   stage("sClaim", `<h3>${head}</h3>
     <p>${body} File a claim with the company’s restricted key: it can file, clear and close a claim, and nothing else.</p>
     <div class="row"><button class="btn danger" id="fileClaim">File a claim</button></div>`);
@@ -1056,7 +1056,7 @@ async function showArbiter(invoiceHash: string) {
       <dt>Payment</dt><dd>${rec ? `${usd(rec.amount)} to <span class="mono">${esc(rec.to)}</span>` : "reading…"}${mine?.tx ? ` ${txLink(mine.tx)}` : ""}</dd>
       <dt>Hash on the payment</dt><dd><span class="hashmono">${esc(rec?.context_hash ?? "")}</span><br>${match}</dd>
       <dt>Did the seller refund?</dt><dd>The contract can’t see this. In a real claim the company states it in writing, and the terms make it repay if that’s false. In this demo the seller hasn’t refunded.</dd>
-      <dt>Was INV-1 already paid?</dt><dd><span class="mono">invoice_paid</span> says <b>${inv1Paid === null ? "unknown" : inv1Paid ? "yes" : "no"}</b>.${inv1Tx}</dd>
+      ${mine?.kind === "stolen" ? `<dt>What the seller says</dt><dd>In this story the real seller states in writing that it never sent this invoice. That statement is the evidence, and nothing on-chain backs it. A seller who lies here turns a real purchase into a claim.</dd>` : mine?.kind === "real" ? `<dt>What the seller says</dt><dd>In this story the real seller confirms it sent this invoice.</dd>` : `<dt>Was INV-1 already paid?</dt><dd><span class="mono">invoice_paid</span> says <b>${inv1Paid === null ? "unknown" : inv1Paid ? "yes" : "no"}</b>.${inv1Tx}</dd>`}
     </dl>
     <div class="row"><button class="btn danger" id="uphold">Uphold: the agent was fooled</button><button class="btn ghost" id="deny">Deny: it was a real purchase</button></div>
     <div class="clock" id="arbClock"></div><div id="arbOut"></div>`);
