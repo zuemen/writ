@@ -2,19 +2,21 @@
 
 [![reproduce](https://github.com/zuemen/writ/actions/workflows/ci.yml/badge.svg)](https://github.com/zuemen/writ/actions/workflows/ci.yml)
 
-Writ lets a company recover money its AI agent was fooled into paying inside its limits: a named guarantor locks funds on NEAR, the agent's payments are recorded, and a claim upheld by a named arbiter, who can't be the company or the guarantor, is repaid from the stake, minus the company's share. Testnet only; no real guarantor or customer yet. Not audited.
+Writ lets the vendor of an AI agent stand behind it with money. If a customer's agent is fooled into paying inside its limits, a named guarantor has already locked funds on NEAR, and a claim upheld by a named arbiter, who can't be the company or the guarantor, is repaid from the stake, minus the company's share. Testnet only; no real guarantor or customer yet. Not audited.
 
 Trust isn't proving an AI won't fail. It's knowing who pays when it does.
 
 **Demo:** <https://writ-near.112306007.workers.dev> Fool a real model, then rule on the claim yourself. Your browser signs testnet transactions.
 
-A live model paid a re-billed invoice with a fake controller note 10 of 10 times, and the same invoice without the note 0 of 10 (small sample, [how to re-run it](docs/TESTING.md)). Every on-chain check passed on the paid ones. That's the payment a limit can't stop.
+A live model paid a re-billed invoice with a fake controller note 10 of 10 times, and the same invoice without the note 0 of 10 (small sample, [how to re-run it](docs/TESTING.md)). The same invoice [sent on chain](docs/testnet-cover.md) passes every check. Matching invoices to the ledger would stop that one, so build it first.
+
+The payment nothing stops: a thief with a real seller's account bills a real open order for the right amount. The model paid that text 10 of 10, an order match passes it, and so does the contract, because nothing on the invoice is wrong. That's what cover is for.
 
 | Previous NEAR hackathons judged | Where to check it |
 |---|---|
-| Technical implementation | `make verify` reruns everything ([from a clean checkout](https://github.com/zuemen/writ/actions/runs/41722437748)). [126 attacks](docs/bench.md), exact-value tests, a fuzz of the books, [8 real transactions through the live site](docs/testnet-cover.md) |
+| Technical implementation | `make verify` reruns the build, the bench, the main stories and the credential checks ([from a clean checkout](https://github.com/zuemen/writ/actions/runs/41722437748)). [126 attacks](docs/bench.md), exact-value tests, a fuzz of the books, [8 real transactions through the live site](docs/testnet-cover.md) |
 | Design | [The demo](https://writ-near.112306007.workers.dev): the visitor is the arbiter, and the checks, the stake and the claim are on screen |
-| Impact | Unproven. No guarantor or customer yet, and nobody has been asked. We found no public case of the loss cover is for, and [public comment leans against paying for this](docs/ECONOMICS.md#what-people-say-in-public). [What you'd have to believe](docs/ECONOMICS.md#what-you-would-have-to-believe) |
+| Impact | Unproven: no customer yet. [What you'd have to believe](docs/ECONOMICS.md#what-you-would-have-to-believe), and [what people say in public, pushback included](docs/ECONOMICS.md#what-people-say-in-public) |
 | Originality | It doesn't try to stop the fooled payment. It settles who repays it, before the agent spends |
 | Sustainability | MIT. Writ takes no fee today; a business would need a share of the fee or tools sold to guarantors. [Who might pay](docs/ECONOMICS.md#who-would-pay-if-not-the-company) |
 
@@ -82,7 +84,7 @@ Full expected output and CI: [`docs/TESTING.md`](docs/TESTING.md).
 ## Economics
 
 - The cost floor is the locked money: 4.6–14.2% of the limit a year (both ends are assumptions, see [`docs/ECONOMICS.md`](docs/ECONOMICS.md)), before any claim or running cost. Fully locked money is why this is expensive.
-- **Nobody has data on how often agents get fooled**, so we can't give a price. We can say what you'd have to believe: with a $60,000 limit, and every input here an assumption, a guarantor needs $9,013–16,693 a year if one $5,000 payment is fooled each year. A company paying that itself gets back $0.24–0.44 per $1, so our first guess at who pays is the vendor of the agent. [Worked example](docs/ECONOMICS.md#what-you-would-have-to-believe).
+- **Nobody has data on how often agents get fooled**, so we can't give a price. We can say what you'd have to believe: with a $60,000 limit, and every input here an assumption, a guarantor needs $9,013–16,693 a year if one $5,000 payment is fooled each year ($6,760–12,520 before running costs). A company paying that itself gets back $0.24–0.44 per $1, so our first guess at who pays is the vendor of the agent. [Worked example](docs/ECONOMICS.md#what-you-would-have-to-believe).
 - The demo's 2% per 30 days is about 24% of the limit a year. It is a placeholder, not a price. [`docs/ECONOMICS.md`](docs/ECONOMICS.md)
 
 ## Today, and what would change it
@@ -114,7 +116,7 @@ All limits, with the threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md
 
 ## Baseline disclosure
 
-All code in this repository was written during the hackathon window (from 2026-11-01). Libraries: near-sdk-rs, near-contract-standards, near-workspaces, near-api-js, keripy (WebOfTrust). No code from the author's earlier projects is included. The author has worked on the same theme before, on other chains and systems (agent-passport, mandate-layer, agent-tab, mcp-vlei, evidence-at-source); those are the ideas Writ grew from, not its code. The code was written with AI coding agents (Claude Code); the author directed the design and reviewed the results.
+All code in this repository was written during the hackathon window (from 2026-11-01). Libraries and services: near-sdk-rs, near-contract-standards, hex, near-workspaces, near-api-js, keripy (WebOfTrust), binaryen, cargo-mutants, and Llama 3.3 on Cloudflare Workers AI. No code from the author's earlier projects is included. The author has worked on the same theme before, on other chains and systems (agent-passport, mandate-layer, agent-tab, mcp-vlei, evidence-at-source); those are the ideas Writ grew from, not its code. The code was written with AI coding agents (Claude Code); the author directed the design and reviewed the results.
 
 ## License
 

@@ -252,6 +252,12 @@
   .proof { display:grid; grid-template-columns:repeat(5,1fr); border:1px solid var(--rule-strong); background:var(--sheet); }
   .proof a { display:block; padding:18px; text-decoration:none; border-left:1px solid var(--rule); min-width:0; }
   .proof a:first-child { border-left:0; }
+  .more > summary { cursor:pointer; list-style:none; }
+  .more > summary::-webkit-details-marker { display:none; }
+  .more > summary h2 { display:inline; }
+  .more > summary::after { content:"+"; margin-left:12px; font:500 24px var(--mono); color:var(--soft); }
+  .more[open] > summary::after { content:"\2212"; }
+  .more[open] > summary { margin-bottom:12px; }
   .proof a:hover { background:#efe9da; }
   .proof b { display:block; font:600 28px/1.1 var(--sans); letter-spacing:-.01em; }
   .proof span { display:block; font-size:14px; color:var(--soft); margin-top:5px; }
@@ -330,15 +336,15 @@
 <div class="banner">Testnet demo. No real guarantor has underwritten anything. Not audited. Not a licensed product.</div>
 <nav><div class="wrap">
   <a class="mark" href="#top">Writ</a>
-  <div class="links"><a href="#fool">Try it</a><a href="#numbers">Numbers</a><a href="#today">Compare</a><a href="#how">How it works</a><a href="#credit">Net-30</a><a href="#proof">Proof</a><a href="https://github.com/zuemen/writ">GitHub</a></div>
+  <div class="links"><a href="#fool">Try it</a><a href="#numbers">Numbers</a><a href="#today">Compare</a><a href="#how">How it works</a><a href="#proof">Proof</a><a href="https://github.com/zuemen/writ">GitHub</a></div>
   <div class="live" id="live"><i></i><span id="liveText">connecting…</span></div>
 </div></nav>
 
 <main id="top" class="wrap">
   <div class="hero">
     <div>
-      <h1 class="reveal">Your agent will get fooled. <em>Know who pays.</em></h1>
-      <p class="lead reveal d1">For companies whose AI agents pay invoices. A spending limit stops the payment it can recognize. Writ covers the one it can’t: a named guarantor locks money on NEAR, and if the arbiter named in the mandate finds your agent was fooled inside its limits, the loss is repaid from that money, minus your share.</p>
+      <h1 class="reveal">Your agent can be fooled. <em>Know who pays.</em></h1>
+      <p class="lead reveal d1">For vendors of accounts-payable agents. A spending limit stops the payment it can recognize. Some nothing can: a thief with a real seller’s account bills a real open order, for the right amount. Stand behind your agent with money. A named guarantor locks funds on NEAR, and if the arbiter named in the mandate finds your customer’s agent was fooled inside its limits, the loss is repaid from those funds, minus the customer’s share.</p>
       <div class="cta reveal d2"><a class="btn" href="#fool">Fool the model</a><a class="btn ghost" href="#numbers">See the numbers</a></div>
     </div>
     <div class="org reveal d2" id="whoPays"><div class="org-in">
@@ -346,12 +352,13 @@
       <dl class="card-row">
         <dt>Guarantor</dt><dd id="wpGuarantor">reading the contract…</dd>
         <dt>Locked</dt><dd id="wpLocked">…</dd>
-        <dt>You absorb</dt><dd id="wpShare">…</dd>
+        <dt>Customer absorbs</dt><dd id="wpShare">…</dd>
         <dt>Arbiter</dt><dd id="wpArbiter">…</dd>
         <dt>Claims paid</dt><dd id="wpPaid">…</dd>
         <dt>Upheld, denied</dt><dd id="wpRuled">…</dd>
         <dt>Agent</dt><dd id="wpAgent">…</dd>
       </dl>
+      <p class="note" style="margin:8px 0 0">A demo guarantor. The rulings are visitors clicking this page.</p>
       <details class="verify"><summary>Check this card yourself</summary><pre id="wpJson">…</pre><code id="wpCmd"></code></details>
     </div></div>
   </div>
@@ -373,6 +380,7 @@
     <div class="presets" role="group" aria-label="Invoices">
       <button class="chip" data-preset="rebill" aria-pressed="false">Plain re-bill</button>
       <button class="chip" data-preset="fooled" aria-pressed="true">With a fake controller note</button>
+      <button class="chip" data-preset="stolen" aria-pressed="false">Stolen seller account</button>
       <button class="chip" data-preset="real" aria-pressed="false">Real purchase</button>
       <span class="sep"></span>
       <button class="chip" data-preset="swap" aria-pressed="false">Swap the payee</button>
@@ -380,8 +388,9 @@
       <button class="chip" data-preset="again" aria-pressed="false">Pay INV-1 again</button>
     </div>
     <textarea id="inv" rows="5" maxlength="800" spellcheck="false"></textarea>
+    <p class="note" id="presetWhy" aria-live="polite"></p>
     <div class="row"><button class="btn" id="askModel" disabled>Let the model read it</button></div>
-    <p class="note">A link is one unit of the agent’s budget, 0.01 USDC here. An employee releases links one at a time; the agents under that employee are its tree. The fake controller note and the real purchase may reuse the model’s last answer, to save free quota: change a word and the model reads it live. The agent’s ledger: PO-77 paper stock, already paid by INV-1. PO-78 toner, 2 links (0.01 USDC each), open. Llama 3.3 on Cloudflare’s free tier, not NEAR AI, no TEE. Measured 2026-11-03, 10 runs each: plain re-bill paid 0 of 10, fake controller note 10 of 10, real purchase 10 of 10, mismatched invoices 0 of 30. <a href="https://github.com/zuemen/writ/blob/main/docs/TESTING.md#the-live-model">A small sample, not a rate.</a> <span id="liveStat"></span></p>
+    <p class="note">A link is one unit of the agent’s budget, 0.01 USDC here. An employee releases links one at a time; the agents under that employee are its tree. The fake controller note and the real purchase (the stolen-account invoice is the same text) may reuse the model’s last answer, to save free quota: change a word and the model reads it live. The agent’s ledger: PO-77 paper stock, already paid by INV-1. PO-78 toner, 2 links (0.01 USDC each), open. Llama 3.3 on Cloudflare’s free tier, not NEAR AI, no TEE. Measured 2026-11-03, 10 runs each: plain re-bill paid 0 of 10, fake controller note 10 of 10, real purchase 10 of 10, mismatched invoices 0 of 30. <a href="https://github.com/zuemen/writ/blob/main/docs/TESTING.md#the-live-model">A small sample, not a rate.</a> <span id="liveStat"></span></p>
   </div>
 
   <div class="stage" id="sDecision" aria-live="polite" hidden></div>
@@ -402,8 +411,109 @@
   <p class="note">An earlier sandbox run: two Gemini models followed injected invoices in 13 of 20 attacks, and none of those payments went through (2 models, 5 attacks, 2 runs each; <a href="https://github.com/zuemen/writ/blob/main/docs/attack-live.md">results</a>). It shows the rules hold whichever way the model goes, not how often models fail.</p>
 </div></section>
 
-<section id="steal"><div class="wrap">
-  <h2 class="title">This is an AI agent’s private key. Steal its money.</h2>
+
+<section id="numbers"><div class="wrap">
+  <h2 class="title">What would it cost to back your agent?</h2>
+  <p class="plain">Nobody has data on how often agents get fooled, so we can’t give a price. Type what you’d have to believe. The limit follows how fast you notice, not how much you spend: filing a claim stops the agent. Fully locked money is why this costs what it does: what the guarantor locks, it can’t lend or reuse. On these numbers a company shouldn’t buy this for itself. The buyer we have in mind is the agent’s vendor, paying to win customers. Nobody has agreed to that.</p>
+  <div class="calc">
+    <div class="inputs">
+      <label>Paid through the agent, $ a year<input id="cV" type="number" value="12000000" min="1" step="1000000"><small>Assumption.</small></label>
+      <label>Cap on one payment, $<input id="cM" type="number" value="5000" min="1" step="500"><small>Signed in the mandate as <span class="mono">max_links</span>.</small></label>
+      <label>Cap on one day, $<input id="cD" type="number" value="20000" min="1" step="1000"><small>Signed in the mandate as <span class="mono">daily_links</span>.</small></label>
+      <label>Days until someone notices<input id="cN" type="number" value="3" min="1" max="365" step="1"><small>Cap on one day × these days is the limit.</small></label>
+      <label>Maximum payments fooled, a year<input id="cK" type="number" value="1" min="0" step="0.25"><small>Assumption. No data exists.</small></label>
+      <label>Your share, % of each loss<input id="cS" type="number" value="20" min="10" max="90" step="5"><small>The contract allows 10 to 90. The demo uses 20.</small></label>
+      <label>Cost of locked money, % a year<input id="cC" type="number" value="4.6" min="0" max="60" step="0.1"><small>4.6%: USDC lending rate we read on 2026-10-05. The source no longer keeps that snapshot, and the rate moves a lot. Use 14.2% as a stand-in for what a credit insurer earns on equity: our assumption, we couldn’t re-find a source.</small></label>
+      <label>Running cost, % of the fee<input id="cE" type="number" value="25" min="0" max="90" step="5"><small>Assumption. Coface runs <a href="https://www.coface.com/news-economy-and-insights/2025-results-coface-closes-another-strong-year-with-net-income-at-222.0m">about 33%</a>.</small></label>
+    </div>
+    <div>
+      <div class="res" aria-live="polite">
+        <div class="main"><span>Lowest yearly guarantee fee</span><b id="rFee">…</b></div>
+        <div><span>Limit the guarantor locks</span><b id="rL">…</b></div>
+        <div><span>Fee, % of the limit</span><b id="rF">…</b></div>
+        <div><span>Fee, % of what the agent pays</span><b id="rV">…</b></div>
+        <div><span>A company paying this gets back, per $1 of fee</span><b id="rBack">…</b></div>
+        <div><span>Locked money alone, with no losses and no costs</span><b id="rFloor">…</b></div>
+        <div><span>The demo’s 2% per 30 days, a year</span><b id="rDemo">…</b></div>
+        <div><span>Loss rate that demo fee could absorb</span><b id="rP">…</b></div>
+      </div>
+      <p class="note">Read “gets back” first: below $1 means a company paying for itself loses on average, so <a href="https://github.com/zuemen/writ/blob/main/docs/ECONOMICS.md#who-would-pay-if-not-the-company">someone else may have to pay</a>. The demo’s fee is a placeholder, not a price. <span class="mono">fee = (cost of money + loss rate × (1 − your share)) / (1 − running cost)</span>. <a href="https://github.com/zuemen/writ/blob/main/docs/ECONOMICS.md">Worked out, with sources.</a></p>
+      <div id="book"></div>
+    </div>
+  </div>
+</div></section>
+
+<section id="today"><div class="wrap">
+  <h2 class="title">If your agent is fooled today, who pays?</h2>
+  <p class="sub">What we could find, and where Writ loses. Nobody has been interviewed yet. Agents can be talked into paying: an X user <a href="https://incidentdatabase.ai/cite/1556/">reportedly got Grok and Bankrbot to transfer tokens then valued at about $200,000</a>; linked funds were later returned or converted, and a payee list would have refused it. People get fooled the same way: US businesses reported <a href="https://www.ic3.gov/AnnualReport/Reports/2025_IC3Report.pdf">$3.05 billion lost to email compromise in 2025</a>. We haven’t found a public case of an agent losing money to a seller it was allowed to pay, which is the case cover is for. Public comment leans against us: <a href="https://www.reddit.com/r/AI_Agents/comments/1v5hwzn/_/ozjkoz6/">“Most of these are engineering problems, not insurance problems,”</a> and what’s left may be a <a href="https://www.reddit.com/r/AI_Agents/comments/1v5hwzn/_/p0t2wji/">“thin residual.”</a> Someone else asks our question, but as a reason not to use agents at all: <a href="https://news.ycombinator.com/item?id=45419709">“who do you call when it… falls for prompt injection and pays a scammer?”</a> We agree with the first part: the contract refuses those, and a buyer should match invoices to orders before anything else. Whether what’s left is worth locking money for is the open question. <a href="https://github.com/zuemen/writ/blob/main/docs/ECONOMICS.md#what-people-say-in-public">All of it, with sources.</a></p>
+  <div class="scroll"><table class="cmp">
+    <thead><tr><th>Today</th><th>Who pays</th><th>Where it beats Writ</th><th>Where Writ beats it</th></tr></thead>
+    <tbody>
+      <tr><td>You, with a spending limit</td><td>You. The limit caps the loss; nobody repays it.</td><td>Free, and you have it now.</td><td>Someone else’s money is named before the agent spends.</td></tr>
+      <tr><td>A card network</td><td>Amex announced Agent Purchase Protection for charges from registered agent error (<a href="https://thepaypers.com/payments/news/american-express-launches-ace-developer-kit-and-agent-purchase-protection">as reported</a>; we haven’t read the terms). Worldpay says <a href="https://worldpay.com/insights/articles/agentic-commerce-liability-is-still-being-written">“no liability shift exists yet”</a>.</td><td>Real issuers, real customers, nothing to lock.</td><td>Agent payments off cards, and terms anyone can read before the agent spends.</td></tr>
+      <tr><td>AI liability insurers</td><td>Armilla, AIUC and Munich Re cover things like hallucination (<a href="https://beinsure.com/news/insurers-push-into-ai-agent-failures/">as reported</a>). We found none covering agent payments, which doesn’t mean none exist.</td><td>Licensed, with real balance sheets and real claims teams.</td><td>The money is locked where you can check it.</td></tr>
+      <tr><td>A crime or cyber policy</td><td>Your insurer, if the wording reaches a fooled agent. Crime cover for social engineering <a href="https://www.insurancejournal.com/magazines/mag-features/2026/06/22/874411.htm">“is often capped at a sublimit of $250,000 or less”</a>, and some policies need staff to confirm bank changes by a separate call. We haven’t found a policy or a ruling that addresses an AI agent.</td><td>Licensed and pooled, likely cheaper, and you may already have it. <b>Check this first.</b></td><td>Terms written for an agent, and money locked where you can check it.</td></tr>
+      <tr><td>On-chain cover</td><td><a href="https://nexusmutual.io/claims">Nexus Mutual</a> has covered crypto risks since 2019; a claims committee votes on each claim. We found no product of theirs for agent payments, which doesn’t mean none exists.</td><td>Years of real claims and real capital.</td><td>Terms written for one agent’s mandate, with its tree stopped by the claim.</td></tr>
+      <tr><td>A vendor contract</td><td>Whatever you negotiated with the agent’s vendor. We haven’t surveyed these.</td><td>You may already have one, and no money is locked.</td><td>A limit and an arbiter that any seller or auditor can read.</td></tr>
+      <tr class="us"><td>Writ</td><td>The guarantor named in the mandate, up to the limit, if the arbiter upholds. You keep your share of each loss.</td><td colspan="2" data-l="Where Writ loses"><b>No real guarantor exists.</b> It costs more, because every dollar of the limit stays locked. The arbiter is a person you must trust. It may be regulated, and no lawyer has reviewed it.</td></tr>
+    </tbody>
+  </table></div>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <h2 class="title">Who pays is settled before the agent spends.</h2>
+  <div class="how">
+    <div class="col"><div class="eyebrow">Before</div><h3>A guarantor is named</h3><p>It signs the mandate, takes its fee and locks the full limit in its stake. It can’t withdraw that lock while cover runs. Our first guess at who: the vendor of the agent, standing behind its own product. Nobody has agreed to that yet.</p></div>
+    <div class="col"><div class="eyebrow">While it spends</div><h3>Every payment is recorded</h3><p>The contract checks payee, invoice, cap, budget, rate and expiry, and keeps the hash the agent reports of what it read and decided.</p></div>
+    <div class="col"><div class="eyebrow">When it’s fooled</div><h3>The arbiter decides</h3><p>The company files a claim and its whole tree stops. The contract can’t tell if the agent was fooled, so a named arbiter rules. The limit caps what a wrong ruling costs.</p></div>
+    <div class="col"><div class="eyebrow">After</div><h3>The stake repays</h3><p>The loss, minus the company’s share, moves from the stake to the company. The tree stays stopped until the company clears its agent.</p></div>
+  </div>
+  <p class="note">The guarantor checks who the company is off-chain, with GLEIF’s vLEI credentials and KERI; here the issuers are mocks. </p>
+  <p class="plain"><b>Why NEAR.</b> The contract holds its agents’ function-call keys on its own account and can delete them, and it has no full-access key. The protocol refuses any other method before contract code runs, and a revoked agent’s transactions never get created. The arbiter can be a council too: <a href="https://github.com/zuemen/writ/blob/main/docs/testnet-dao-arbiter.md">a Sputnik DAO upheld and denied a claim on testnet</a>, with demo accounts voting.</p>
+</div></section>
+
+
+
+<section id="proof"><div class="wrap">
+  <h2 class="title">Every number has a command.</h2>
+  <div class="proof">
+    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>126</b><span>attacks blocked in the bench</span><code>make test</code></a>
+    <a href="https://github.com/zuemen/writ/blob/main/docs/TESTING.md"><b>104 + 111</b><span>integration and unit tests pass</span><code>make test</code></a>
+    <a href="https://github.com/zuemen/writ/blob/main/keri/test_forgeries.py"><b>36</b><span>credential forgeries refused</span><code>make keri-check</code></a>
+    <a href="https://github.com/zuemen/writ/blob/main/docs/TESTING.md#mutation-testing"><b>853 / 863</b><span>mutants caught, over two runs; the 10 left are explained</span><code>cargo mutants</code></a>
+    <a href="https://github.com/zuemen/writ/blob/main/app/src/cover-demo.ts"><b>PASS</b><span>the whole cover story, end to end: <span class="mono">COVER_RESULT</span></span><code>make cover-demo</code></a>
+  </div>
+  <p class="note">From <a href="https://github.com/zuemen/writ/actions/runs/41704113063">CI run 41704113063</a>. Reviews were done by AI agents and tests, not an audit firm.</p>
+  <ul class="limits">
+    <li>Testnet only, no real users, and no real guarantor has underwritten anything. Whether this is insurance is unknown, so it stays on testnet.</li>
+    <li>The arbiter is someone you must trust. Bought by the company, it costs the guarantor up to the limit. Bought by the guarantor, it can end your cover.</li>
+    <li>Not audited. The vLEI issuers are mocks with a fictional LEI.</li>
+  </ul>
+  <details class="limits-more"><summary>All known limits</summary><ul class="limits">
+    <li><b>Moral hazard is capped, not stopped.</b> A company that fools its own agent, with a seller it controls, can take the loss minus its share, up to the limit, if the arbiter upholds.</li>
+    <li><b>Seller refunds are invisible.</b> If a seller refunds a fooled payment, the contract can’t see it, so a company could be repaid twice. The terms ask for a statement; nothing on-chain checks it.</li>
+    <li><b>No company-wide total.</b> Each mandate has its own limit. Nothing adds up a company’s mandates or a guarantor’s view of them.</li>
+    <li><b>A guarantor can revoke early and keep the fee for periods already started.</b> Later periods go back to the company, up to its free stake. The fee is charged up front, when the guarantor chooses to activate in the first half of the term. Its lock stays until the mandate’s term and claim window have passed.</li>
+    <li><b>Whether this is insurance is unknown.</b> We don’t claim to be a licensed product. It depends on the jurisdiction, and no lawyer has reviewed it. A guarantor would need its own licence or legal opinion. No real users, testnet only.</li>
+    <li>A fooled payment inside every limit, to a permitted payee, for a new invoice, still gets paid. Cover repays it afterwards, up to the limit, if the arbiter upholds.</li>
+    <li>This page holds the company’s and the arbiter’s restricted keys, so any visitor can file, rule and clear. Money only moves to the company’s account. A real mandate has a real arbiter.</li>
+    <li>The demo’s arbiter has 60 seconds and a payment can be claimed for 10 minutes; the contract’s default for the arbiter is 14 days. An open claim stops the agent for every visitor, and the budget has a low daily rate, so the page can run out for a day. The page’s keys spend a gas allowance anyone can burn, and it says so when one runs out.</li>
+    <li>The model is on a free tier: the quota can run out, and the page says so. Payment answers to two preset invoices are cached for a day, and the page says when.</li>
+    <li>The vLEI schemas are GLEIF’s; the issuers are mocks with a fictional LEI, and no real QVI issued anything. The Agent Mandate Credential schema is a proposal, since GLEIF has not published one.</li>
+    <li>The fee here is a demo number. Who would guarantee an agent, and at what price, is an open commercial question. The terms text is a placeholder no lawyer has reviewed.</li>
+    <li>A guarantor that also holds the company’s legal-entity key could name that company falsely: the contract checks the signature, and the link between that key and the LEI is checked off-chain.</li>
+    <li>This page’s config holds the fictional company’s LEI and salt so the guarantor’s step runs in your browser; a real guarantor keeps them private.</li>
+    <li>The company’s LEI stays a commitment until it is disclosed, but funding accounts and payments are public and linkable.</li>
+    <li>Revocation takes effect when the signed event reaches the contract; no relayer ships with the repo.</li>
+    <li>Disclosure takes the guarantor’s action, since it holds the salt, and it does not happen if money left in the tree repays the debt. Closing affects the agents under one mandate, not every mandate the company has.</li>
+    <li>The buttons on this page sign real testnet transactions, with short windows so you can watch them: 15 seconds to due, 20 seconds of recourse. The guarantor’s steps run from this page. In the net-30 and firing stories the agents are scripted; only “Fool a real model” calls a model.</li>
+  </ul></details>
+  <p class="note">The threat model has <a href="https://github.com/zuemen/writ/blob/main/docs/THREAT_MODEL.md#limits">the rest</a>. <span class="mono">make verify</span> reruns the build, the bench, the stories and the credential checks, and prints a scorecard.</p>
+</div></section>
+
+<div class="wrap"><p class="note" style="margin:0">More on this page: the same contract also blocks a stolen agent key, backs net-30 orders for sellers, and stops a tree when an employee leaves.</p></div>
+
+<section id="steal"><div class="wrap"><details class="more"><summary><h2 class="title">This is an AI agent’s private key. Steal its money.</h2></summary>
   <p class="sub">With a plain spending limit, a thief holding the key can spend up to that limit. Here, without the employee’s next budget link, the key alone moves nothing. A thief who also takes released links can spend those, to permitted payees only.</p>
   <div class="steal">
     <div>
@@ -430,69 +540,9 @@
       <ul id="log" aria-live="polite"></ul>
     </div>
   </div>
-</div></section>
+</details></div></section>
 
-<section id="numbers"><div class="wrap">
-  <h2 class="title">What would a guarantor have to charge?</h2>
-  <p class="plain">Nobody has data on how often agents get fooled, so we can’t give a price. Type what you’d have to believe. The limit follows how fast you notice, not how much you spend: filing a claim stops the agent. Fully locked money is why this costs what it does: what the guarantor locks, it can’t lend or reuse.</p>
-  <div class="calc">
-    <div class="inputs">
-      <label>Paid through the agent, $ a year<input id="cV" type="number" value="12000000" min="1" step="1000000"><small>Assumption.</small></label>
-      <label>Cap on one payment, $<input id="cM" type="number" value="5000" min="1" step="500"><small>Signed in the mandate as <span class="mono">max_links</span>.</small></label>
-      <label>Cap on one day, $<input id="cD" type="number" value="20000" min="1" step="1000"><small>Signed in the mandate as <span class="mono">daily_links</span>.</small></label>
-      <label>Days until someone notices<input id="cN" type="number" value="3" min="1" max="365" step="1"><small>Cap on one day × these days is the limit.</small></label>
-      <label>Maximum payments fooled, a year<input id="cK" type="number" value="1" min="0" step="0.25"><small>Assumption. No data exists.</small></label>
-      <label>Your share, % of each loss<input id="cS" type="number" value="20" min="10" max="90" step="5"><small>The contract allows 10 to 90. The demo uses 20.</small></label>
-      <label>Cost of locked money, % a year<input id="cC" type="number" value="4.6" min="0" max="60" step="0.1"><small>4.6%: USDC lending rate we read on 2026-10-05. The source no longer keeps that snapshot, and the rate moves a lot. Use 14.2% as a stand-in for what a credit insurer earns on equity: our assumption, we couldn’t re-find a source.</small></label>
-      <label>Running cost, % of the fee<input id="cE" type="number" value="25" min="0" max="90" step="5"><small>Assumption. Credit insurers run <a href="https://www.coface.com/news-economy-and-insights/2025-results-coface-closes-another-strong-year-with-net-income-at-222.0m">about 33%</a>.</small></label>
-    </div>
-    <div>
-      <div class="res" aria-live="polite">
-        <div class="main"><span>Lowest yearly guarantee fee</span><b id="rFee">…</b></div>
-        <div><span>Limit the guarantor locks</span><b id="rL">…</b></div>
-        <div><span>Fee, % of the limit</span><b id="rF">…</b></div>
-        <div><span>Fee, % of what the agent pays</span><b id="rV">…</b></div>
-        <div><span>A company paying this gets back, per $1 of fee</span><b id="rBack">…</b></div>
-        <div><span>Locked money alone, with no losses and no costs</span><b id="rFloor">…</b></div>
-        <div><span>The demo’s 2% per 30 days, a year</span><b id="rDemo">…</b></div>
-        <div><span>Loss rate that demo fee could absorb</span><b id="rP">…</b></div>
-      </div>
-      <p class="note">Read “gets back” first: below $1 means a company paying for itself loses on average, so <a href="https://github.com/zuemen/writ/blob/main/docs/ECONOMICS.md#who-would-pay-if-not-the-company">someone else may have to pay</a>. The demo’s fee is a placeholder, not a price. <span class="mono">fee = (cost of money + loss rate × (1 − your share)) / (1 − running cost)</span>. <a href="https://github.com/zuemen/writ/blob/main/docs/ECONOMICS.md">Worked out, with sources.</a></p>
-      <div id="book"></div>
-    </div>
-  </div>
-</div></section>
-
-<section id="today"><div class="wrap">
-  <h2 class="title">If your agent is fooled today, who pays?</h2>
-  <p class="sub">What we could find, and where Writ loses. Nobody has been interviewed yet. Agents can be talked into paying: an X user <a href="https://incidentdatabase.ai/cite/1556/">reportedly got Grok and Bankrbot to transfer tokens then valued at about $200,000</a>; linked funds were later returned or converted, and a payee list would have refused it. People get fooled the same way: US businesses reported <a href="https://www.ic3.gov/AnnualReport/Reports/2025_IC3Report.pdf">$3.05 billion lost to email compromise in 2025</a>. We haven’t found a public case of an agent losing money to a seller it was allowed to pay, which is the case cover is for. Public comment leans against us: <a href="https://www.reddit.com/r/AI_Agents/comments/1v5hwzn/_/ozjkoz6/">“Most of these are engineering problems, not insurance problems,”</a> and what’s left may be a <a href="https://www.reddit.com/r/AI_Agents/comments/1v5hwzn/_/p0t2wji/">“thin residual.”</a> Someone else asks our question, but as a reason not to use agents at all: <a href="https://news.ycombinator.com/item?id=45419709">“who do you call when it… falls for prompt injection and pays a scammer?”</a> <a href="https://github.com/zuemen/writ/blob/main/docs/ECONOMICS.md#what-people-say-in-public">All of it, with sources.</a></p>
-  <div class="scroll"><table class="cmp">
-    <thead><tr><th>Today</th><th>Who pays</th><th>Where it beats Writ</th><th>Where Writ beats it</th></tr></thead>
-    <tbody>
-      <tr><td>You, with a spending limit</td><td>You. The limit caps the loss; nobody repays it.</td><td>Free, and you have it now.</td><td>Someone else’s money is named before the agent spends.</td></tr>
-      <tr><td>A card network</td><td>Amex announced Agent Purchase Protection for charges from registered agent error (<a href="https://thepaypers.com/payments/news/american-express-launches-ace-developer-kit-and-agent-purchase-protection">as reported</a>; we haven’t read the terms). Worldpay says <a href="https://worldpay.com/insights/articles/agentic-commerce-liability-is-still-being-written">“no liability shift exists yet”</a>.</td><td>Real issuers, real customers, nothing to lock.</td><td>Agent payments off cards, and terms anyone can read before the agent spends.</td></tr>
-      <tr><td>AI liability insurers</td><td>Armilla, AIUC and Munich Re cover things like hallucination (<a href="https://beinsure.com/news/insurers-push-into-ai-agent-failures/">as reported</a>). We found none covering agent payments, which doesn’t mean none exist.</td><td>Licensed, with real balance sheets and real claims teams.</td><td>The money is locked where you can check it.</td></tr>
-      <tr><td>A crime or cyber policy</td><td>Your insurer, if the wording reaches a fooled agent. Crime cover for social engineering <a href="https://www.insurancejournal.com/magazines/mag-features/2026/06/22/874411.htm">“is often capped at a sublimit of $250,000 or less”</a>, and some policies need staff to confirm bank changes by a separate call. We haven’t found a policy or a ruling that addresses an AI agent.</td><td>Licensed and pooled, likely cheaper, and you may already have it. <b>Check this first.</b></td><td>Terms written for an agent, and money locked where you can check it.</td></tr>
-      <tr><td>A vendor contract</td><td>Whatever you negotiated with the agent’s vendor. We haven’t surveyed these.</td><td>You may already have one, and no money is locked.</td><td>A limit and an arbiter that any seller or auditor can read.</td></tr>
-      <tr class="us"><td>Writ</td><td>The guarantor named in the mandate, up to the limit, if the arbiter upholds. You keep your share of each loss.</td><td colspan="2" data-l="Where Writ loses"><b>No real guarantor exists.</b> It costs more, because every dollar of the limit stays locked. The arbiter is a person you must trust. It may be regulated, and no lawyer has reviewed it.</td></tr>
-    </tbody>
-  </table></div>
-</div></section>
-
-<section id="how"><div class="wrap">
-  <h2 class="title">Who pays is settled before the agent spends.</h2>
-  <div class="how">
-    <div class="col"><div class="eyebrow">Before</div><h3>A guarantor is named</h3><p>It signs the mandate, takes its fee and locks the full limit in its stake. It can’t withdraw that lock while cover runs. Our first guess at who: the vendor of the agent, standing behind its own product. Nobody has agreed to that yet.</p></div>
-    <div class="col"><div class="eyebrow">While it spends</div><h3>Every payment is recorded</h3><p>The contract checks payee, invoice, cap, budget, rate and expiry, and keeps a hash of what the agent read and decided.</p></div>
-    <div class="col"><div class="eyebrow">When it’s fooled</div><h3>The arbiter decides</h3><p>The company files a claim and its whole tree stops. The contract can’t tell if the agent was fooled, so a named arbiter rules. The limit caps what a wrong ruling costs.</p></div>
-    <div class="col"><div class="eyebrow">After</div><h3>The stake repays</h3><p>The loss, minus the company’s share, moves from the stake to the company. The tree stays stopped until the company clears its agent.</p></div>
-  </div>
-  <p class="note">The guarantor checks who the company is off-chain, with GLEIF’s vLEI credentials and KERI; here the issuers are mocks. </p>
-  <p class="plain"><b>Why NEAR.</b> The contract holds its agents’ function-call keys on its own account and can delete them, and it has no full-access key. The protocol refuses any other method before contract code runs, and a revoked agent’s transactions never get created. The arbiter can be a council too: <a href="https://github.com/zuemen/writ/blob/main/docs/testnet-dao-arbiter.md">a Sputnik DAO upheld and denied a claim on testnet</a>, with demo accounts voting.</p>
-</div></section>
-
-<section id="credit"><div class="wrap">
-  <h2 class="title">Same stake, second use: net-30 for sellers.</h2>
+<section id="credit"><div class="wrap"><details class="more"><summary><h2 class="title">Same stake, second use: net-30 for sellers.</h2></summary>
   <p class="sub">The guarantor’s stake can also back an order on credit. You don’t need to know the company; the guarantor does, and it approved your account in the mandate first. Set a rule. If the buyer doesn’t pay, claim it, with no one’s approval.</p>
   <div class="credit">
     <div class="org" id="org"><div class="org-in">
@@ -570,18 +620,17 @@
       <thead><tr><th>Option</th><th>Cost</th><th>Seller gets paid</th><th>It beats Writ when</th><th>Writ beats it when</th></tr></thead>
       <tbody>
         <tr class="us"><td>Writ</td><td>$190&ndash;363 <small>(model: 1% loss, 60% of stake in use), plus the buyer’s $2,000 bond locked for 37 days</small></td><td>Due date if the buyer pays; day 37 if not</td><td></td><td></td></tr>
-        <tr><td>Non-recourse B2B BNPL</td><td>$261&ndash;350 <small><a href="https://resolvepay.com/blog/best-b2b-payment-solutions">vendor claim</a></small></td><td>Within a day, about 90%</td><td>You want the cash now. <b>This is the strongest alternative.</b></td><td>Stablecoin settlement, machine orders, a seller who can only write a rule</td></tr>
+        <tr><td>Non-recourse B2B BNPL</td><td>$261&ndash;350 <small><a href="https://resolvepay.com/blog/best-b2b-payment-solutions">vendor claim</a></small></td><td>Within a day, up to 90&ndash;100%</td><td>You want the cash now. <b>This is the strongest alternative.</b></td><td>Stablecoin settlement, machine orders, a seller who can only write a rule</td></tr>
         <tr><td>Corporate card</td><td>$290 <small><a href="https://stripe.com/pricing">Stripe list price</a></small></td><td>Soon after</td><td>The buyer already has a card</td><td>Agent disputes: <a href="https://worldpay.com/insights/articles/agentic-commerce-liability-is-still-being-written">“no liability shift exists yet”</a>, and issuers tend to side with the cardholder</td></tr>
-        <tr><td>Bank standby L/C</td><td>$10&ndash;30 by the day <small><a href="https://www.lawinsider.com/clause/standby-letter-of-credit-fee">1&ndash;3% a year, samples</a></small> plus minimums</td><td>On presentation</td><td>Large orders, and a buyer with a bank line. <b>Much cheaper.</b></td><td>Small orders under the minimum fee; a decision in seconds</td></tr>
+        <tr><td>Bank standby L/C</td><td>Not priced here. <small><a href="https://www.lawinsider.com/clause/standby-letter-of-credit-fee">Sample clauses</a> show 0.375% a year and margin-based rates</small></td><td>On presentation</td><td>Large orders, and a buyer with a bank line. <b>Probably much cheaper.</b></td><td>Small orders; a decision in seconds</td></tr>
         <tr><td>Credit insurance + net-30</td><td>0.05&ndash;1% of annual turnover <small><a href="https://www.iwoca.co.uk/trade-credit/trade-credit-insurance-cost">secondary source</a></small></td><td>When the buyer pays</td><td>You insure a whole book of known buyers. <b>Cheapest.</b></td><td>A first order from an unknown buyer; stop-ship reaches every seller of that mandate at once</td></tr>
         <tr><td>Escrow or prepay</td><td>The buyer’s cost of cash</td><td>Up front or on release</td><td>You know the amount, and the buyer has cash. <b>Often the right answer.</b></td><td>Usage-priced orders, where the amount is unknown until delivery</td></tr>
       </tbody>
     </table></div>
   </details>
-</div></section>
+</details></div></section>
 
-<section id="fire"><div class="wrap">
-  <h2 class="title">Fire one employee. Every agent under them stops.</h2>
+<section id="fire"><div class="wrap"><details class="more"><summary><h2 class="title">Fire one employee. Every agent under them stops.</h2></summary>
   <p class="sub">A mandate covers every agent it hires, and a hire can only narrow what it allows. When someone leaves, HR revokes the credential without their help.</p>
   <details class="fold"><summary>Run it: four steps, each a real transaction</summary>
   <div class="steps">
@@ -611,44 +660,7 @@
     </div>
   </div>
   </details>
-</div></section>
-
-<section id="proof"><div class="wrap">
-  <h2 class="title">Every number has a command.</h2>
-  <div class="proof">
-    <a href="https://github.com/zuemen/writ/blob/main/docs/bench.md"><b>126</b><span>attacks blocked in the bench</span><code>make test</code></a>
-    <a href="https://github.com/zuemen/writ/blob/main/docs/TESTING.md"><b>104 + 111</b><span>integration and unit tests pass</span><code>make test</code></a>
-    <a href="https://github.com/zuemen/writ/blob/main/keri/test_forgeries.py"><b>36</b><span>credential forgeries refused</span><code>make keri-check</code></a>
-    <a href="https://github.com/zuemen/writ/blob/main/docs/TESTING.md#mutation-testing"><b>853 / 863</b><span>mutants caught, over two runs; the 10 left are explained</span><code>cargo mutants</code></a>
-    <a href="https://github.com/zuemen/writ/blob/main/app/src/cover-demo.ts"><b>PASS</b><span>the whole cover story, end to end: <span class="mono">COVER_RESULT</span></span><code>make cover-demo</code></a>
-  </div>
-  <p class="note">From <a href="https://github.com/zuemen/writ/actions/runs/41704113063">CI run 41704113063</a>. Reviews were done by AI agents and tests, not an audit firm.</p>
-  <ul class="limits">
-    <li>Testnet only, no real users, and no real guarantor has underwritten anything. Whether this is insurance is unknown, so it stays on testnet.</li>
-    <li>The arbiter is someone you must trust. Bought by the company, it costs the guarantor up to the limit. Bought by the guarantor, it can end your cover.</li>
-    <li>Not audited. The vLEI issuers are mocks with a fictional LEI.</li>
-  </ul>
-  <details class="limits-more"><summary>All known limits</summary><ul class="limits">
-    <li><b>Moral hazard is capped, not stopped.</b> A company that fools its own agent, with a seller it controls, can take the loss minus its share, up to the limit, if the arbiter upholds.</li>
-    <li><b>Seller refunds are invisible.</b> If a seller refunds a fooled payment, the contract can’t see it, so a company could be repaid twice. The terms ask for a statement; nothing on-chain checks it.</li>
-    <li><b>No company-wide total.</b> Each mandate has its own limit. Nothing adds up a company’s mandates or a guarantor’s view of them.</li>
-    <li><b>A guarantor can revoke early and keep the fee for periods already started.</b> Later periods go back to the company, up to its free stake. The fee is charged up front, when the guarantor chooses to activate in the first half of the term. Its lock stays until the mandate’s term and claim window have passed.</li>
-    <li><b>Whether this is insurance is unknown.</b> We don’t claim to be a licensed product. It depends on the jurisdiction, and no lawyer has reviewed it. A guarantor would need its own licence or legal opinion. No real users, testnet only.</li>
-    <li>A fooled payment inside every limit, to a permitted payee, for a new invoice, still gets paid. Cover repays it afterwards, up to the limit, if the arbiter upholds.</li>
-    <li>This page holds the company’s and the arbiter’s restricted keys, so any visitor can file, rule and clear. Money only moves to the company’s account. A real mandate has a real arbiter.</li>
-    <li>The demo’s arbiter has 60 seconds and a payment can be claimed for 10 minutes; the contract’s default for the arbiter is 14 days. An open claim stops the agent for every visitor, and the budget has a low daily rate, so the page can run out for a day. The page’s keys spend a gas allowance anyone can burn, and it says so when one runs out.</li>
-    <li>The model is on a free tier: the quota can run out, and the page says so. Payment answers to the same invoice text are cached for a day, and the page says when.</li>
-    <li>The vLEI schemas are GLEIF’s; the issuers are mocks with a fictional LEI, and no real QVI issued anything. The Agent Mandate Credential schema is a proposal, since GLEIF has not published one.</li>
-    <li>The fee here is a demo number. Who would guarantee an agent, and at what price, is an open commercial question. The terms text is a placeholder no lawyer has reviewed.</li>
-    <li>A guarantor that also holds the company’s legal-entity key could name that company falsely: the contract checks the signature, and the link between that key and the LEI is checked off-chain.</li>
-    <li>This page’s config holds the fictional company’s LEI and salt so the guarantor’s step runs in your browser; a real guarantor keeps them private.</li>
-    <li>The company’s LEI stays a commitment until it is disclosed, but funding accounts and payments are public and linkable.</li>
-    <li>Revocation takes effect when the signed event reaches the contract; no relayer ships with the repo.</li>
-    <li>Disclosure takes the guarantor’s action, since it holds the salt, and it does not happen if money left in the tree repays the debt. Closing affects the agents under one mandate, not every mandate the company has.</li>
-    <li>The buttons on this page sign real testnet transactions, with short windows so you can watch them: 15 seconds to due, 20 seconds of recourse. The guarantor’s steps run from this page. In the net-30 and firing stories the agents are scripted; only “Fool a real model” calls a model.</li>
-  </ul></details>
-  <p class="note">The threat model has <a href="https://github.com/zuemen/writ/blob/main/docs/THREAT_MODEL.md#limits">the rest</a>. <span class="mono">make verify</span> reruns the build, the bench, the stories and the credential checks, and prints a scorecard.</p>
-</div></section>
+</details></div></section>
 
 <section id="build"><div class="wrap">
   <h2 class="title">Read who pays for a mandate in one command.</h2>

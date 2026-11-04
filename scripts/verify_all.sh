@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# make verify: one command reproduces every claim and prints a scorecard. For machine first-pass review and for those who want to check themselves.
+# make verify: one command reruns the build, the bench, the main stories and the credential checks, and prints a scorecard. docs/TESTING.md lists what it leaves out. For machine first-pass review and for those who want to check themselves.
 # Touches only the local sandbox; at the end reads the public testnet state once (read-only, signs no transaction).
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

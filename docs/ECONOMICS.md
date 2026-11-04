@@ -17,7 +17,7 @@ F = (c + p × (1 − s)) / (1 − e)      lowest yearly fee that does not lose m
 | c | cost of locked money | 4.6% to 14.2% a year | USDC lending rate we read on 2026-10-05 (the source no longer keeps that snapshot, and the rate moves a lot); 14.2% is our assumption for what a credit insurer earns on equity; we couldn't re-find a source for it |
 | p | loss rate, share of the limit lost to fooled payments a year | scenario | assumption; **no data exists** |
 | s | the company's share of each loss | 20% | the demo's terms; the contract allows 10% to 90% |
-| e | running cost, share of the fee | 25% | assumption; credit insurers run 32.8% ([Coface FY2025](https://www.coface.com/news-economy-and-insights/2025-results-coface-closes-another-strong-year-with-net-income-at-222.0m)) |
+| e | running cost, share of the fee | 25% | assumption; Coface runs 32.8% ([FY2025](https://www.coface.com/news-economy-and-insights/2025-results-coface-closes-another-strong-year-with-net-income-at-222.0m)) |
 
 | Loss rate p (assumption) | F at c=4.6% | F at c=14.2% | Fee on a $100,000 limit |
 |---|---|---|---|
@@ -88,6 +88,8 @@ We read public threads on 2026-11-04. Nobody here was asked about Writ, and none
 | [Hacker News commenter](https://news.ycombinator.com/item?id=45419709), who hasn't lost money | "So who do you call when it drains your account and orders 50 tons of wood, or falls for prompt injection and pays a scammer?" Then: "there's no way in hell I'm touching it for at least 5-10 years." | The question Writ answers, asked by someone refusing to use an agent. A fear, not a loss. |
 | [Shopify merchant](https://www.reddit.com/r/shopify/comments/1q6nyvg/watch_out_for_amazon_buy_for_me_chargeback_fraud/) | "So far we are at a 28% chargeback rate for orders originating with Amazon" on "a dozen or so orders", with exposure "under $10K". | Real money, on a seller, from an agent's orders. But Amazon's agent wasn't fooled, the sample is tiny, and this merchant blocked those orders. Nobody asked for a guarantee. |
 
+Where this leaves us: we agree with the first row. Refuse what a rule can catch, and match invoices to orders. What's left is what a stolen seller account sends, which the demo's fake note isn't. We have no answer yet to the second row, and the third may be right.
+
 So people do ask who pays. We found nobody saying their agent was fooled and nobody covered it, nobody asking to buy a guarantee, and no seller asking to give agents credit. This is a search, not a survey.
 
 ## Second use: net-30 for sellers
@@ -111,11 +113,11 @@ c* = F × 365 / (D × (1 − b))     buyer's cost of cash above which a buyer-pa
 | b | bond, share of the order | 20% | assumption; `bond_bps` in the mandate |
 | D | terms plus inspection | 37 days | assumption; net-30 plus 7 |
 | c | cost of locked money | 4.6% to 14.2% a year | USDC lending rate we read on 2026-10-05 (the source no longer keeps that snapshot, and the rate moves a lot); 14.2% is our assumption for what a credit insurer earns on equity; we couldn't re-find a source for it |
-| e | running cost, share of the fee | 25% | assumption; credit insurers run 32.8% ([Coface FY2025](https://www.coface.com/news-economy-and-insights/2025-results-coface-closes-another-strong-year-with-net-income-at-222.0m)) |
+| e | running cost, share of the fee | 25% | assumption; Coface runs 32.8% ([FY2025](https://www.coface.com/news-economy-and-insights/2025-results-coface-closes-another-strong-year-with-net-income-at-222.0m)) |
 | p | loss rate | scenario | assumption |
 | u | share of stake in use | 60% | assumption |
 
-For scale on p: claims of €3.39B against about €9.25T of supported trade give 0.037% on insured books (derived from [ICISA](https://icisa.org/?p=21395) figures; the two populations may differ, so treat it as a floor). Self-reported bad debt in Western Europe is about 6% ([Atradius survey](https://group.atradius.com/knowledge-and-research/news/what-did-a-year-of-b2b-payment-disruption-teach-us)). The definitions differ. The roughly 160× gap is what screening and policy terms are worth, and nothing tells us where a new book of agent buyers would sit.
+For scale on p: trade credit insurers report claims paid of €3.2B against insured exposure of €3.6T in 2025, about 0.089% (derived from [ICISA](https://icisa.org/?p=21395)). Exposure isn't turnover, so treat it as a rough floor. Self-reported bad debt in Western Europe is about 6% ([Atradius survey](https://group.atradius.com/knowledge-and-research/news/what-did-a-year-of-b2b-payment-disruption-teach-us)). The definitions differ. The roughly 70× gap is what screening and policy terms are worth, and nothing tells us where a new book of agent buyers would sit.
 
 ### A $10,000 order
 
@@ -123,7 +125,7 @@ At 60% of stake in use. The top of the range overlaps B2B BNPL.
 
 | Loss rate p | L | F at c=4.6% | F at c=14.2% | Fee on $10,000 |
 |---|---|---|---|---|
-| 0.037% | 0.03% | 0.87% | 2.60% | $87–260 |
+| 0.089% | 0.07% | 0.93% | 2.66% | $93–266 |
 | 1% | 0.80% | 1.90% | 3.63% | $190–363 |
 | 2% | 1.60% | 2.96% | 4.69% | $296–469 |
 | 6% | 4.80% | 7.23% | 8.96% | $723–896 |
