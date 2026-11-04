@@ -1233,6 +1233,87 @@ const openMore = () => {
 addEventListener("hashchange", openMore);
 openMore();
 
+// ---------------- the flow diagram: the same drawing plays as a tour in the hero and follows the real demo in the side panel ----------------
+type FlowScene = { cap: string; on: string[]; stop?: string[]; move?: [string, string, "doc" | "coin" | "no", string] };
+const FLOW: FlowScene[] = [
+  { cap: "A seller’s invoice reaches Northwind’s agent, with a fake note from its controller.", on: ["seller", "agent"], move: ["seller", "agent", "doc", "Invoice + note"] },
+  { cap: "A real model reads it against the ledger, and decides to pay a bill already paid.", on: ["agent"], move: ["agent", "contract", "doc", "Pay it"] },
+  { cap: "The contract checks payee, invoice number, cap, budget, rate and expiry. All pass, so the money goes.", on: ["contract", "seller"], move: ["contract", "seller", "coin", "Paid"] },
+  { cap: "The company files a claim. The agent, and every agent under it, stops.", on: ["company", "contract"], stop: ["agent"], move: ["company", "contract", "doc", "Claim"] },
+  { cap: "The contract can’t tell if the agent was fooled, so the arbiter named in the mandate rules.", on: ["arbiter", "contract"], stop: ["agent"], move: ["arbiter", "contract", "doc", "Uphold"] },
+  { cap: "The guarantor’s locked stake repays the company, minus the company’s share.", on: ["guarantor", "company"], stop: ["agent"], move: ["guarantor", "company", "coin", "Repaid"] },
+];
+const FLOW_REFUSED: FlowScene = { cap: "", on: ["contract"], move: ["agent", "contract", "no", "Refused"] };
+const FLOW_DENIED: FlowScene = { cap: "", on: ["arbiter", "contract"], move: ["arbiter", "contract", "doc", "Deny"] };
+const FLOW_NAMES: Record<string, string> = { company: "Company", guarantor: "Guarantor’s stake", agent: "AP agent", contract: "Writ contract", seller: "Seller", arbiter: "Arbiter" };
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+function makeFlow(el: HTMLElement, compact: () => boolean) {
+  let scene: FlowScene | null = null;
+  let raf = 0;
+  const layout = () => compact()
+    ? { w: 250, h: 262, nw: 72, nh: 34, fs: 10, pos: { company: [42, 24], guarantor: [208, 24], agent: [42, 131], contract: [125, 131], seller: [208, 131], arbiter: [125, 238] } as Record<string, number[]> }
+    : { w: 560, h: 270, nw: 124, nh: 44, fs: 13, pos: { company: [80, 30], guarantor: [480, 30], agent: [80, 135], contract: [280, 135], seller: [480, 135], arbiter: [280, 240] } as Record<string, number[]> };
+  const curve = (a: string, b: string, L: ReturnType<typeof layout>) => {
+    const [x1, y1] = L.pos[a], [x2, y2] = L.pos[b];
+    return a === "seller" && b === "agent" ? `M${x1} ${y1}Q${(x1 + x2) / 2} ${y1 - L.h * 0.3} ${x2} ${y2}` : `M${x1} ${y1}L${x2} ${y2}`;
+  };
+  const draw = () => {
+    if (!scene) return;
+    cancelAnimationFrame(raf);
+    const L = layout(), s = scene;
+    const edges = [["company", "agent"], ["agent", "contract"], ["contract", "seller"], ["company", "contract"], ["arbiter", "contract"], ["guarantor", "contract"], ["guarantor", "company"]];
+    const nodes = Object.keys(L.pos).map((k) => {
+      const [x, y] = L.pos[k];
+      const c = s.stop?.includes(k) ? "stop" : s.on.includes(k) ? "on" : "";
+      return `<g class="fN ${c}"><rect x="${x - L.nw / 2}" y="${y - L.nh / 2}" width="${L.nw}" height="${L.nh}" rx="9"/><text x="${x}" y="${y}" font-size="${L.fs}">${s.stop?.includes(k) ? "Stopped" : k === "guarantor" && L.w < 300 ? "Guarantor" : FLOW_NAMES[k]}</text></g>`;
+    }).join("");
+    const m = s.move;
+    const hot = m ? `<path class="fE hot" d="${curve(m[0], m[1], L)}"/>` : "";
+    const icon = m ? (m[2] === "coin" ? `<circle r="${L.fs * 0.85}" fill="#067647"/><text y="1" font-size="${L.fs}" fill="#fff" stroke="none" dominant-baseline="middle">$</text>`
+      : m[2] === "no" ? `<circle r="${L.fs * 0.85}" fill="#b42318"/><text y="1" font-size="${L.fs}" fill="#fff" stroke="none" dominant-baseline="middle">✕</text>`
+      : `<rect x="${-L.fs * 0.65}" y="${-L.fs * 0.85}" width="${L.fs * 1.3}" height="${L.fs * 1.7}" rx="2" fill="#fff" stroke="#101828" stroke-width="1.4"/>`) : "";
+    const col = m?.[2] === "coin" ? "#067647" : m?.[2] === "no" ? "#b42318" : "#101828";
+    el.innerHTML = `<svg viewBox="0 0 ${L.w} ${L.h}">${edges.map(([a, b]) => `<path class="fE" d="${curve(a, b, L)}"/>`).join("")}${hot}${nodes}${m ? `<g class="fM" id="mv">${icon}<text class="lbl" y="${-L.fs * 1.4}" font-size="${L.fs}" fill="${col}">${m[3]}</text></g>` : ""}</svg>`;
+    if (!m) return;
+    const path = el.querySelector<SVGPathElement>(".fE.hot")!, mv = el.querySelector<SVGGElement>(".fM")!;
+    const len = path.getTotalLength();
+    const place = (f: number) => { const p = path.getPointAtLength(f * len); mv.setAttribute("transform", `translate(${p.x} ${p.y})`); };
+    if (reducedMotion) return place(0.5);
+    const start = performance.now();
+    const tick = (n: number) => {
+      const c = ((n - start) % 2400) / 2400;
+      const f = Math.min(c / 0.7, 1);
+      place(f * f * (3 - 2 * f));
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+  };
+  addEventListener("resize", draw);
+  return { show(next: FlowScene) { if (next !== scene) { scene = next; draw(); } } };
+}
+const liveFlow = makeFlow($("liveFlow"), () => true);
+(() => {
+  const flow = makeFlow($("tourStage"), () => $("tourStage").clientWidth < 420);
+  const dots = FLOW.map((_, i) => { const d = document.createElement("button"); d.type = "button"; d.setAttribute("aria-label", `Step ${i + 1}`); $("tourDots").append(d); return d; });
+  let at = 0, playing = !reducedMotion, timer = 0;
+  const show = (i: number) => {
+    at = i;
+    flow.show(FLOW[i]);
+    $("tourCap").textContent = `${i + 1}. ${FLOW[i].cap}`;
+    dots.forEach((d, k) => d.setAttribute("aria-current", String(k === i)));
+  };
+  const setPlay = (p: boolean) => {
+    playing = p;
+    btn("tourPlay").textContent = p ? "Pause" : "Play";
+    clearInterval(timer);
+    if (p) timer = window.setInterval(() => show((at + 1) % FLOW.length), 4600);
+  };
+  dots.forEach((d, i) => d.addEventListener("click", () => { setPlay(false); show(i); }));
+  btn("tourPlay").addEventListener("click", () => setPlay(!playing));
+  show(0);
+  setPlay(playing);
+})();
+
 // The side panel says who you are now and what to press next. It reads the page, so it can't disagree with it.
 function renderGuide() {
   const el = (id: string) => document.getElementById(id) as HTMLButtonElement | null;
@@ -1267,10 +1348,14 @@ function renderGuide() {
   }
   $("gRole").textContent = role;
   $("gText").textContent = text;
-  $("gSteps").querySelectorAll("li").forEach((li, i) => { li.className = i + 1 < step ? "done" : i + 1 === step ? "now" : ""; });
+  $("gStep").textContent = `Step ${step} of 6`;
+  const denied = shown("sResult") && /^Denied/.test($("sResult").innerText.trim());
+  const refused = shown("sChecks") && !!$("sChecks").querySelector(".verdict.no");
+  liveFlow.show(denied ? FLOW_DENIED : refused ? FLOW_REFUSED : FLOW[step - 1]);
   document.querySelectorAll(".nextUp").forEach((n) => { if (n !== next) n.classList.remove("nextUp"); });
   if (next && !(next as HTMLButtonElement).disabled) next.classList.add("nextUp");
 }
 document.querySelectorAll("button[data-preset]").forEach((b) => b.addEventListener("click", () => renderGuide()));
+new IntersectionObserver(([e]) => $("guide").classList.toggle("inView", e.isIntersecting)).observe($("fool"));
 new MutationObserver(() => renderGuide()).observe(document.querySelector(".app-main")!, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "disabled"] });
 renderGuide();

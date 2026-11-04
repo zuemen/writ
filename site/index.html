@@ -343,7 +343,7 @@
   .live { font:500 12px var(--sans); border:1px solid var(--rule); border-radius:999px; padding:6px 11px; }
   .wrap { max-width:1200px; }
   .market { background:#fff; border-bottom:1px solid var(--rule); }
-  .hero { grid-template-columns:minmax(0,1fr) 400px; gap:64px; align-items:start; padding:44px 0 48px; }
+  .hero { grid-template-columns:minmax(0,1fr) minmax(0,1.05fr); gap:48px; align-items:start; padding:40px 0 44px; }
   h1 { font:700 clamp(30px,3.4vw,42px)/1.14 var(--sans); letter-spacing:-.025em; margin:0 0 14px; }
   h1 em { font-style:normal; font-weight:700; color:var(--soft); }
   .lead { font-size:16px; line-height:1.6; max-width:62ch; color:#475467; margin:0 0 24px; }
@@ -371,6 +371,32 @@
   .gHead { font:600 12px var(--sans); color:var(--soft); }
   .gRole { font:700 15px/1.3 var(--sans); margin:4px 0 4px; }
   .gText { font-size:14px; line-height:1.5; margin:0 0 12px; color:#344054; }
+  .gStep { font:600 12px var(--sans); color:var(--soft); padding-top:10px; border-top:1px solid var(--rule); }
+  .flowStage svg { display:block; width:100%; height:auto; }
+  .flowLive { margin-top:6px; }
+  .flowCard { background:#fff; border:1px solid var(--rule); border-radius:var(--r); padding:16px 18px; box-shadow:0 1px 2px rgba(16,24,40,.05); min-width:0; }
+  .flowHead { display:flex; justify-content:space-between; gap:12px; align-items:baseline; flex-wrap:wrap; margin-bottom:6px; }
+  .flowHead b { font:600 14px var(--sans); }
+  .flowHead span { font-size:12px; color:var(--soft); }
+  .flowCap { min-height:3em; margin:8px 0 12px; font-size:14px; line-height:1.5; color:#344054; }
+  .flowCtl { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .flowCtl .btn { margin-left:auto; padding:8px 14px; }
+  .tourBtn { font:500 13px var(--sans); padding:7px 12px; border:1px solid var(--rule-strong); border-radius:8px; background:#fff; color:var(--ink); cursor:pointer; }
+  .tourBtn:hover { background:#f2f4f7; }
+  .dots { display:flex; gap:6px; }
+  .dots button { width:9px; height:9px; padding:0; border:0; border-radius:50%; background:var(--rule-strong); cursor:pointer; }
+  .dots button[aria-current="true"] { background:var(--ink); }
+  .howCard { margin-top:12px; max-width:560px; }
+  .fN rect { fill:#fff; stroke:var(--rule-strong); stroke-width:1; transition:fill .25s,stroke .25s; }
+  .fN text { fill:var(--soft); font-family:Inter,system-ui,sans-serif; font-weight:500; text-anchor:middle; dominant-baseline:middle; transition:fill .25s; }
+  .fN.on rect { fill:#f2f4f7; stroke:var(--ink); stroke-width:1.6; }
+  .fN.on text { fill:var(--ink); font-weight:600; }
+  .fN.stop rect { fill:var(--ox-bg); stroke:var(--ox); stroke-width:1.6; }
+  .fN.stop text { fill:var(--ox); font-weight:600; }
+  .fE { fill:none; stroke:var(--rule); stroke-width:1.5; }
+  .fE.hot { stroke:var(--ink); stroke-dasharray:4 4; }
+  .fM text { font-family:Inter,system-ui,sans-serif; font-weight:600; text-anchor:middle; }
+  .fM text.lbl { paint-order:stroke; stroke:#fff; stroke-width:3px; }
   .gSteps { list-style:none; counter-reset:g; margin:0; padding:10px 0 0; border-top:1px solid var(--rule); font-size:13px; color:var(--soft); }
   .gSteps li { counter-increment:g; display:flex; align-items:center; gap:9px; padding:3px 0; }
   .gSteps li::before { content:counter(g); flex:none; width:20px; height:20px; border-radius:50%; background:#f2f4f7; font:600 11px var(--sans); display:grid; place-items:center; }
@@ -475,7 +501,10 @@
     .app-grid { grid-template-columns:minmax(0,1fr); }
     .side { position:static; order:-1; }
     .guide { position:fixed; left:8px; right:8px; bottom:8px; z-index:30; padding:10px 14px; box-shadow:0 8px 24px rgba(16,24,40,.22); }
-    .gHead, .gSteps { display:none; }
+    .gHead, .gStep, .flowLive { display:none; }
+    .guide:not(.inView) { display:none; }
+    .guide.inView { display:block; }
+    .flowCtl .btn { margin-left:0; }
     .gText { margin:0; font-size:13px; }
     body { padding-bottom:120px; }
     .hero { grid-template-columns:1fr; gap:24px; padding:28px 0 32px; }
@@ -511,20 +540,12 @@
       <p class="lead reveal d1">For vendors of accounts-payable agents. A spending limit stops the payment it can recognize. It can’t stop the one your agent is talked into, like a bill it already paid, with a fake note from the controller. Back your agent with money: a named guarantor locks funds on NEAR, and if the arbiter named in the mandate finds the agent was fooled inside its limits, your customer is repaid from those funds, minus its share.</p>
       <div class="cta reveal d2"><a class="btn" href="#fool">Try the demo</a><a class="btn ghost" href="#numbers">See the numbers</a><a class="btn ghost" href="https://github.com/zuemen/writ">GitHub</a></div>
     </div>
-    <div class="org reveal d2" id="whoPays"><div class="org-in">
-      <div class="eyebrow" style="margin-bottom:10px">Who pays · live on testnet · <span id="wpNo">…</span></div>
-      <dl class="card-row">
-        <dt>Guarantor</dt><dd id="wpGuarantor">reading the contract…</dd>
-        <dt>Locked</dt><dd id="wpLocked">…</dd>
-        <dt>Customer absorbs</dt><dd id="wpShare">…</dd>
-        <dt>Arbiter</dt><dd id="wpArbiter">…</dd>
-        <dt>Claims paid</dt><dd id="wpPaid">…</dd>
-        <dt>Upheld, denied</dt><dd id="wpRuled">…</dd>
-        <dt>Agent</dt><dd id="wpAgent">…</dd>
-      </dl>
-      <p class="note" style="margin:8px 0 0">A demo guarantor. The rulings are visitors clicking this page.</p>
-      <details class="verify"><summary>Check this card yourself</summary><pre id="wpJson">…</pre><code id="wpCmd"></code></details>
-    </div></div>
+    <div class="flowCard" id="tour">
+      <div class="flowHead"><b>The whole loop, in 30 seconds</b><span>Animation, no transactions</span></div>
+      <div class="flowStage" id="tourStage" role="img" aria-label="Animated diagram of a claim, from a fake invoice to the stake repaying the company"></div>
+      <p class="flowCap" id="tourCap" aria-live="off"></p>
+      <div class="flowCtl"><button class="tourBtn" id="tourPlay" type="button">Pause</button><div class="dots" id="tourDots"></div><a class="btn" href="#sInvoice">Do it yourself</a></div>
+    </div>
   </div>
 </div></main>
 
@@ -574,14 +595,8 @@
       <div class="gHead">What to do now</div>
       <div class="gRole" id="gRole"></div>
       <p class="gText" id="gText"></p>
-      <ol class="gSteps" id="gSteps">
-        <li>An invoice arrives</li>
-        <li>The model decides</li>
-        <li>The contract checks</li>
-        <li>The company claims</li>
-        <li>The arbiter rules</li>
-        <li>The stake repays</li>
-      </ol>
+      <div class="gStep" id="gStep"></div>
+      <div class="flowStage flowLive" id="liveFlow" aria-hidden="true"></div>
     </div>
     <div class="mirror" aria-label="This mandate, live">
     <div><span>Guarantor’s lock</span><b id="mLocked">…</b></div>
@@ -662,6 +677,20 @@
     <div class="col"><div class="eyebrow">When it’s fooled</div><h3>The arbiter decides</h3><p>The company files a claim and its whole tree stops. The contract can’t tell if the agent was fooled, so a named arbiter rules. The limit caps what a wrong ruling costs.</p></div>
     <div class="col"><div class="eyebrow">After</div><h3>The stake repays</h3><p>The loss, minus the company’s share, moves from the stake to the company. The tree stays stopped until the company clears its agent.</p></div>
   </div>
+  <div class="howCard"><div class="org" id="whoPays"><div class="org-in">
+      <div class="eyebrow" style="margin-bottom:10px">Who pays · live on testnet · <span id="wpNo">…</span></div>
+      <dl class="card-row">
+        <dt>Guarantor</dt><dd id="wpGuarantor">reading the contract…</dd>
+        <dt>Locked</dt><dd id="wpLocked">…</dd>
+        <dt>Customer absorbs</dt><dd id="wpShare">…</dd>
+        <dt>Arbiter</dt><dd id="wpArbiter">…</dd>
+        <dt>Claims paid</dt><dd id="wpPaid">…</dd>
+        <dt>Upheld, denied</dt><dd id="wpRuled">…</dd>
+        <dt>Agent</dt><dd id="wpAgent">…</dd>
+      </dl>
+      <p class="note" style="margin:8px 0 0">A demo guarantor. The rulings are visitors clicking this page.</p>
+      <details class="verify"><summary>Check this card yourself</summary><pre id="wpJson">…</pre><code id="wpCmd"></code></details>
+    </div></div></div>
   <p class="note">The guarantor checks who the company is off-chain, with GLEIF’s vLEI credentials and KERI; here the issuers are mocks. </p>
   <p class="plain"><b>Why NEAR.</b> The contract holds its agents’ function-call keys on its own account and can delete them, and it has no full-access key. The protocol refuses any other method before contract code runs, and a revoked agent’s transactions never get created. The arbiter can be a council too: <a href="https://github.com/zuemen/writ/blob/main/docs/testnet-dao-arbiter.md">a Sputnik DAO upheld and denied a claim on testnet</a>, with demo accounts voting.</p>
 </div></section>
