@@ -610,6 +610,7 @@ function calc() {
   $("rV").textContent = V > 0 ? pct(fee / V) : "n/a";
   $("rBack").textContent = fee > 0 ? `$${(p * L * (1 - s) / fee).toFixed(2)}` : "n/a";
   $("rFee").textContent = usdN(fee);
+  $("rVendor").textContent = usdN(c * L + p * L * (1 - s));
   $("rFloor").textContent = pct(c, 1);
   $("rDemo").textContent = `about ${Math.round(demo * 100)}%`;
   $("rP").textContent = absorb < 0 ? "none" : pct(Math.min(absorb, 1), 1);

@@ -8,7 +8,7 @@ Trust isn't proving an AI won't fail. It's knowing who pays when it does.
 
 **Demo:** <https://writ-near.112306007.workers.dev> Fool a real model, then rule on the claim yourself. Your browser signs testnet transactions.
 
-A live model paid a re-billed invoice with a fake controller note 10 of 10 times, and a version without the note 0 of 10 (small sample, at low temperature so the runs are close to repeats, [how to re-run it](docs/TESTING.md)). The same invoice [sent on chain](docs/testnet-cover.md) passes every check. Matching invoices to the ledger would stop that one. That's the point of asking the vendor to back its agent: with money at stake, it has a reason to build that check, and cover pays for what it misses. We found no public case of an agent losing money this way.
+A live model paid a re-billed invoice with a fake controller note 10 of 10 times, and a version without the note 0 of 10 (small sample, at low temperature so the runs are close to repeats, [how to re-run it](docs/TESTING.md)). The same invoice [sent on chain](docs/testnet-cover.md) passes every check. Matching invoices to the ledger would stop that one. That's the point of asking the vendor to back its agent: with money at stake, it has a reason to build that check, and cover pays for what it misses, if the seller won't refund. We can't yet name a bill that passes a good order match and isn't that kind of theft, which is why this may be a thin market. We found no public case of an agent losing money this way.
 
 Cover isn't for everything. A thief with a real seller's payout keys billing a real order is no agent's failure: a clerk would pay it too, so a vendor shouldn't carry it. A crime policy or a separate guarantor might, and the mandate's terms have to say.
 
@@ -18,7 +18,7 @@ Cover isn't for everything. A thief with a real seller's payout keys billing a r
 | Design | [The demo](https://writ-near.112306007.workers.dev): the visitor is the arbiter, and the checks, the stake and the claim are on screen |
 | Impact | Unproven: no customer yet. [What you'd have to believe](docs/ECONOMICS.md#what-you-would-have-to-believe), and [what people say in public, pushback included](docs/ECONOMICS.md#what-people-say-in-public) |
 | Originality | It doesn't try to stop the fooled payment. It names who repays it, before the agent spends |
-| Sustainability | MIT. Writ takes no fee today; a business would need a share of the fee or tools sold to guarantors. [Who might pay](docs/ECONOMICS.md#who-would-pay-if-not-the-company) |
+| Sustainability | MIT. Writ takes no fee today; a business would need a share of the fee from separate guarantors, or tools sold to vendors and guarantors. [Who might pay](docs/ECONOMICS.md#who-would-pay-if-not-the-company) |
 
 ## How cover works
 
@@ -46,7 +46,7 @@ sequenceDiagram
 
 The contract can't tell whether an agent was fooled. Someone has to decide, and the limit caps what a wrong or bought ruling costs the guarantor. Anything outside the mandate never gets this far: `SCOPE`, `PER_TX` and `DUPLICATE` refuse it. Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**What cover is actually for.** A swapped payee never reaches cover: `SCOPE` refuses it. What's left is money sent to a seller you already approved: a re-bill under a new number, an inflated bill under the cap, a seller account someone took over, or a seller that bills twice and won't refund. If the seller refunds, there is no loss to claim, so this is the case where it doesn't. The terms are meant to transfer your rights against the seller to the guarantor. We haven't found a public case of an agent losing money this way; [the public losses we found](docs/ECONOMICS.md#public-cases) went to a payee an allowlist would have refused.
+**What cover is actually for.** A swapped payee never reaches cover: `SCOPE` refuses it. What's left is money sent to a seller you already approved: a re-bill under a new number, an inflated bill under the cap, or a seller that bills twice and won't refund. The payee is fixed, so an outside attacker gets nothing from these; the seller is who profits, and the claim is for when it won't give the money back. A vendor pays whether it hadn't built the check or the check missed. A seller account someone took over isn't the vendor's to carry, as above. If the seller refunds, there is no loss to claim, so this is the case where it doesn't. The terms are meant to transfer your rights against the seller to the guarantor. We haven't found a public case of an agent losing money this way; [the public losses we found](docs/ECONOMICS.md#public-cases) went to a payee an allowlist would have refused.
 
 **Second use: net-30 for sellers.** The same stake can back an order on credit: a seller sets a rule, ships if a guarantor has locked money for that order, and claims if the buyer doesn't pay. [`docs/INTEGRATE.md`](docs/INTEGRATE.md#second-use-net-30-for-sellers).
 

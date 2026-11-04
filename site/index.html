@@ -432,6 +432,7 @@
         <div><span>Fee, % of the limit</span><b id="rF">…</b></div>
         <div><span>Fee, % of what the agent pays</span><b id="rV">…</b></div>
         <div><span>A company paying this gets back, per $1 of fee</span><b id="rBack">…</b></div>
+        <div><span>Cost to a vendor charging no fee, before running costs</span><b id="rVendor">…</b></div>
         <div><span>Locked money alone, with no losses and no costs</span><b id="rFloor">…</b></div>
         <div><span>The demo’s 2% per 30 days, a year</span><b id="rDemo">…</b></div>
         <div><span>Loss rate that demo fee could absorb</span><b id="rP">…</b></div>
@@ -462,7 +463,7 @@
 <section id="how"><div class="wrap">
   <h2 class="title">Who pays is named before the agent spends.</h2>
   <div class="how">
-    <div class="col"><div class="eyebrow">Before</div><h3>A guarantor is named</h3><p>It signs the mandate, takes its fee and locks the full limit in its stake. It can’t withdraw that lock while cover runs. Our first guess at who: the vendor of the agent, standing behind its own product. Nobody has agreed to that yet.</p></div>
+    <div class="col"><div class="eyebrow">Before</div><h3>A guarantor is named</h3><p>It signs the mandate, takes any agreed fee and locks the full limit in its stake. It can’t withdraw that lock while cover runs. Our first guess at who: the vendor of the agent, standing behind its own product. Nobody has agreed to that yet.</p></div>
     <div class="col"><div class="eyebrow">While it spends</div><h3>Every payment is recorded</h3><p>The contract checks payee, invoice, cap, budget, rate and expiry, and keeps the hash the agent reports of what it read and decided.</p></div>
     <div class="col"><div class="eyebrow">When it’s fooled</div><h3>The arbiter decides</h3><p>The company files a claim and its whole tree stops. The contract can’t tell if the agent was fooled, so a named arbiter rules. The limit caps what a wrong ruling costs.</p></div>
     <div class="col"><div class="eyebrow">After</div><h3>The stake repays</h3><p>The loss, minus the company’s share, moves from the stake to the company. The tree stays stopped until the company clears its agent.</p></div>
