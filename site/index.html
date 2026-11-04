@@ -4,30 +4,30 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Writ: who pays when your AI agent gets fooled</title>
-<meta name="description" content="For companies whose AI agents pay invoices. A spending limit stops the payment it can recognize. Writ covers the one it can’t: a named guarantor locks money on NEAR, and an arbiter decides. Testnet demo. Not audited. Not a licensed product.">
+<meta name="description" content="For vendors of accounts-payable agents. A named guarantor locks funds on NEAR; if an arbiter finds the agent was fooled inside its limits, the customer is repaid from those funds. Testnet demo.">
 <meta property="og:title" content="Writ: who pays when your AI agent gets fooled">
 <meta property="og:description" content="A named guarantor locks money on NEAR. If the arbiter finds the agent was fooled inside its limits, the loss is repaid from that money, minus the company’s share. Testnet demo.">
 <meta property="og:image" content="https://writ-near.112306007.workers.dev/og.png">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://writ-near.112306007.workers.dev/">
 <link rel="canonical" href="https://writ-near.112306007.workers.dev/">
-<meta name="theme-color" content="#f2eee3">
+<meta name="theme-color" content="#ffffff">
 <meta name="twitter:title" content="Writ: who pays when your AI agent gets fooled">
 <meta name="twitter:card" content="summary_large_image">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%238f1d14'/%3E%3Ctext x='16' y='24' font-family='Georgia,serif' font-size='24' font-weight='700' fill='%23fbf8f0' text-anchor='middle'%3EW%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23101828'/%3E%3Cpath d='M8 10l4 12 4-9 4 9 4-12' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&family=Hanken+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --paper:#f2eee3; --sheet:#fbf8f0; --ink:#17140f; --soft:#5f594d; --rule:#d5cfc0; --rule-strong:#17140f;
-    --ox:#8f1d14; --ox-bg:#f3dfda; --ok:#1c5f41; --ok-bg:#dfece2; --amber:#73540f; --amber-bg:#f1e6cc;
-    --serif:Fraunces,Georgia,serif; --sans:"Hanken Grotesk",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+    --paper:#f7f8fa; --sheet:#ffffff; --ink:#101828; --soft:#667085; --rule:#eaecf0; --rule-strong:#d5d9e0;
+    --ox:#b42318; --ox-bg:#fef3f2; --ok:#067647; --ok-bg:#ecfdf3; --amber:#a15c07; --amber-bg:#fffaeb;
+    --accent:#101828; --serif:Inter,system-ui,sans-serif; --sans:Inter,system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+    --r:12px;
   }
   * { box-sizing:border-box; }
   html { scroll-behavior:smooth; scroll-padding-top:76px; }
-  body { margin:0; color:var(--ink); font:17px/1.6 var(--sans); background:var(--paper); overflow-wrap:break-word;
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='.85' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 .1 0 0 0 0 .08 0 0 0 0 .05 0 0 0 .05 0'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  body { margin:0; color:var(--ink); font:15px/1.55 var(--sans); background:var(--paper); overflow-wrap:break-word; -webkit-font-smoothing:antialiased; font-feature-settings:"cv11","tnum";
   a { color:inherit; text-underline-offset:3px; }
   .wrap { max-width:1160px; margin:0 auto; padding:0 24px; }
   .mono { font-family:var(--mono); }
@@ -48,7 +48,7 @@
   .hero { display:grid; grid-template-columns:1.1fr .9fr; gap:56px; align-items:center; padding:64px 0 72px; }
   h1 { font:600 clamp(40px,5vw,62px)/1.04 var(--serif); letter-spacing:-.02em; margin:0 0 22px; }
   h1 em { font-style:italic; font-weight:400; color:var(--ox); display:block; }
-  .lead { font-size:20px; line-height:1.5; max-width:48ch; text-wrap:pretty; margin:0 0 30px; color:#37322a; }
+  .lead { font-size:20px; line-height:1.5; max-width:48ch; text-wrap:pretty; margin:0 0 30px; color:#475467; }
   .cta { display:flex; gap:12px; flex-wrap:wrap; }
   .btn { display:inline-block; font:600 16px var(--sans); padding:13px 20px; border-radius:4px; border:1.5px solid var(--ink); background:var(--ink); color:var(--sheet); cursor:pointer; text-decoration:none; transition:transform .12s, background .12s, color .12s; }
   .btn:hover:not(:disabled) { transform:translateY(-1px); }
@@ -71,12 +71,12 @@
   .st-ok { color:var(--ok); font-weight:600; } .st-stop { color:var(--ox); font-weight:600; } .st-warn { color:var(--amber); font-weight:600; }
   .verify { margin-top:12px; font-size:14px; }
   .verify summary { cursor:pointer; color:var(--soft); }
-  .verify pre { max-height:220px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:500 12px/1.45 var(--mono); background:#f5f1e6; padding:8px 10px; margin:8px 0; }
+  .verify pre { max-height:220px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:500 12px/1.45 var(--mono); background:#f2f4f7; padding:8px 10px; margin:8px 0; }
   .verify code { display:block; font:500 12px/1.45 var(--mono); overflow-wrap:anywhere; color:var(--soft); }
 
   section { padding:72px 0; border-top:1px solid var(--rule); }
   section h2.title { font:600 clamp(26px,3.2vw,36px)/1.15 var(--sans); letter-spacing:-.01em; margin:8px 0 10px; text-wrap:balance; }
-  .sub { max-width:640px; color:#3f3a31; margin:0 0 28px; font-size:18px; text-wrap:pretty; }
+  .sub { max-width:640px; color:#475467; margin:0 0 28px; font-size:18px; text-wrap:pretty; }
   .note { font-size:14px; color:var(--soft); margin:12px 0 0; max-width:760px; text-wrap:pretty; }
 
   /* #fool */
@@ -89,10 +89,10 @@
   .stage { scroll-margin-top:150px; }
   .stage[hidden] { display:none; }
   .stage h3 { font:600 18px var(--sans); margin:0 0 8px; }
-  .stage > p { margin:0 0 10px; font-size:16px; color:#3f3a31; max-width:720px; }
+  .stage > p { margin:0 0 10px; font-size:16px; color:#475467; max-width:720px; }
   .stage p.note { font-size:14px; color:var(--soft); margin:12px 0 0; }
   .stage label { display:block; font-weight:600; font-size:16px; color:var(--ink); margin:0 0 10px; }
-  .stage textarea { width:100%; font:14px/1.5 var(--mono); padding:10px 12px; border:1px solid var(--rule-strong); background:#fffdf7; color:var(--ink); resize:vertical; }
+  .stage textarea { width:100%; font:14px/1.5 var(--mono); padding:10px 12px; border:1px solid var(--rule-strong); background:#ffffff; color:var(--ink); resize:vertical; }
   .presets { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 12px; }
   .presets .sep { width:1px; background:var(--rule); margin:2px 4px; }
   .chip { font:500 14px var(--sans); padding:5px 11px; border:1px solid var(--rule-strong); border-radius:4px; background:transparent; color:var(--soft); cursor:pointer; }
@@ -100,7 +100,7 @@
   .chip[aria-pressed="true"] { background:var(--ink); color:var(--sheet); }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:12px; }
   .checks { display:grid; grid-template-columns:repeat(6,1fr); gap:6px; margin:4px 0 12px; padding:0; list-style:none; }
-  .checks li { font:500 12px/1.3 var(--mono); padding:9px 8px; border:1px solid var(--rule); background:#f5f1e6; color:var(--soft); min-width:0; }
+  .checks li { font:500 12px/1.3 var(--mono); padding:9px 8px; border:1px solid var(--rule); background:#f2f4f7; color:var(--soft); min-width:0; }
   .checks li::before { content:"·"; display:block; font-size:15px; line-height:1.1; }
   .checks li.pass { border-color:var(--ok); background:var(--ok-bg); color:var(--ok); animation:rise .35s both; animation-delay:calc(var(--i) * 130ms); }
   .checks li.pass::before { content:"✓"; }
@@ -124,7 +124,7 @@
   .state[hidden] { display:none; }
   .state .btn { padding:8px 14px; font-size:14px; margin-top:8px; display:block; width:max-content; max-width:100%; }
 
-  .out { grid-column:2 / -1; margin-top:10px; padding:10px 13px; font-size:14px; border-left:3px solid var(--rule); background:#f5f1e6; display:none; }
+  .out { grid-column:2 / -1; margin-top:10px; padding:10px 13px; font-size:14px; border-left:3px solid var(--rule); background:#f2f4f7; display:none; }
   .out.show { display:block; }
   .out.good { border-color:var(--ok); background:var(--ok-bg); }
   .out.block { border-color:var(--ox); background:var(--ox-bg); }
@@ -137,11 +137,11 @@
   .guards div { padding:16px 18px; border-left:1px solid var(--rule); }
   .guards div:first-child { border-left:0; }
   .guards code { font:600 16px var(--mono); color:var(--ox); display:block; margin-bottom:2px; }
-  .guards span { font-size:15px; color:#3f3a31; }
+  .guards span { font-size:15px; color:#475467; }
 
   /* steal */
   .steal { display:grid; grid-template-columns:1fr 1fr; gap:32px; align-items:start; }
-  .key { font:14px/1.55 var(--mono); overflow-wrap:anywhere; background:var(--ink); color:#f6d9d4; padding:13px 15px; border-radius:3px; }
+  .key { font:14px/1.55 var(--mono); overflow-wrap:anywhere; background:var(--ink); color:#d0d5dd; padding:13px 15px; border-radius:3px; }
   .tally { display:grid; grid-template-columns:repeat(3,1fr); margin-top:12px; border:1px solid var(--rule-strong); background:var(--sheet); }
   .tally div { padding:10px 8px; text-align:center; border-left:1px solid var(--rule); }
   .tally div:first-child { border:0; }
@@ -159,7 +159,7 @@
   #log li.error { border-color:var(--amber); background:var(--amber-bg); }
   #log b { font:600 14px var(--mono); }
   #log a { font-size:14px; margin-left:6px; }
-  #log .w { color:#3f3a31; }
+  #log .w { color:#475467; }
 
   /* numbers */
   .calc { display:grid; grid-template-columns:1fr 1fr; gap:28px; align-items:start; }
@@ -171,7 +171,7 @@
   .res div { display:flex; justify-content:space-between; gap:14px; padding:11px 16px; border-top:1px solid var(--rule); font-size:14px; }
   .res div:first-child { border-top:0; }
   .res b { font:600 16px var(--mono); white-space:nowrap; }
-  .res .main { background:#f4efe2; } .res .main b { font-size:24px; }
+  .res .main { background:#f6fef9; } .res .main b { font-size:24px; }
   .plain { font-size:18px; font-weight:600; max-width:640px; margin:0 0 24px; text-wrap:pretty; }
 
   /* tables */
@@ -181,14 +181,14 @@
   th { font:600 12px var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--soft); border-bottom:1px solid var(--rule-strong); }
   .cmp td { vertical-align:top; }
   .cmp th:first-child, .cmp td:first-child { font-weight:600; white-space:nowrap; }
-  .cmp tr.us td { background:#f4efe2; }
+  .cmp tr.us td { background:#f6fef9; }
   .cmp td small { color:var(--soft); }
 
   .how { display:grid; grid-template-columns:repeat(4,1fr); border-top:2px solid var(--ink); }
   .how div.col { padding:18px 22px 4px 0; }
   .how div.col + div.col { padding-left:22px; border-left:1px solid var(--rule); }
   .how h3 { font:600 19px/1.25 var(--sans); margin:6px 0 8px; }
-  .how p { margin:0 0 10px; font-size:16px; color:#3f3a31; }
+  .how p { margin:0 0 10px; font-size:16px; color:#475467; }
 
   /* #credit */
   .credit { display:grid; grid-template-columns:minmax(0,.86fr) minmax(0,1.14fr); gap:28px; align-items:start; }
@@ -197,7 +197,7 @@
   .rule label { margin:0; font-size:12px; line-height:1.25; display:flex; flex-direction:column; justify-content:flex-end; gap:4px; color:var(--soft); position:relative; }
   .rule input { padding:6px 7px; font-size:14px; }
   .rule span { position:absolute; right:7px; bottom:8px; font:500 12px var(--mono); color:var(--soft); pointer-events:none; }
-  .decision { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; margin-top:10px; padding:9px 12px; border:1.5px solid var(--rule-strong); background:#fffdf7; min-height:44px; }
+  .decision { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; margin-top:10px; padding:9px 12px; border:1.5px solid var(--rule-strong); background:#ffffff; min-height:44px; }
   .decision b { font:600 18px var(--mono); letter-spacing:.04em; }
   .decision span { font-size:14px; color:var(--soft); }
   .decision.ship { border-color:var(--ok); background:var(--ok-bg); } .decision.ship b { color:var(--ok); }
@@ -206,11 +206,11 @@
   .carddigest { font-size:14px; color:var(--soft); margin:8px 0 0; }
   .sealed { display:inline-block; background:var(--ink); color:var(--ink); border-radius:2px; padding:0 4px; user-select:none; }
   .named { color:var(--ox); font-weight:600; animation:rise .5s both; }
-  .node { position:relative; border:1px solid var(--rule); background:#fffdf7; padding:10px 13px; overflow:hidden; }
+  .node { position:relative; border:1px solid var(--rule); background:#ffffff; padding:10px 13px; overflow:hidden; }
   .node b { font:600 16px var(--sans); display:block; }
   .node span { font:500 12px var(--mono); color:var(--soft); display:block; overflow-wrap:anywhere; }
   .node .st { position:absolute; right:10px; top:10px; font:600 12px var(--mono); color:var(--ok); }
-  .node.dead { background:#f7ebe6; }
+  .node.dead { background:#fef3f2; }
   .mini { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:12px; }
   .mini .node { padding:7px 9px; }
   .mini .node b { font-size:12px; }
@@ -240,7 +240,7 @@
   .ledger ol { margin:6px 0 0; padding-left:22px; } .ledger li { margin:3px 0; }
   #again { margin-top:14px; }
   .pooltext { margin:14px 0 0; font-size:14px; color:var(--soft); }
-  .verdict4 { grid-column:2 / -1; margin-top:12px; padding:14px 16px; border:1px solid var(--rule-strong); background:#fffdf7; }
+  .verdict4 { grid-column:2 / -1; margin-top:12px; padding:14px 16px; border:1px solid var(--rule-strong); background:#ffffff; }
   .verdict4[hidden] { display:none; }
   .vname { margin:6px 0 10px; font:500 14px var(--mono); color:var(--ox); overflow-wrap:anywhere; }
   .poison { font:13px/1.45 var(--mono); color:var(--ox); background:var(--ox-bg); padding:6px 10px; margin-top:7px; max-width:640px; overflow-wrap:anywhere; }
@@ -258,11 +258,11 @@
   .more > summary::after { content:"+"; margin-left:12px; font:500 24px var(--mono); color:var(--soft); }
   .more[open] > summary::after { content:"\2212"; }
   .more[open] > summary { margin-bottom:12px; }
-  .proof a:hover { background:#efe9da; }
+  .proof a:hover { background:#f9fafb; }
   .proof b { display:block; font:600 28px/1.1 var(--sans); letter-spacing:-.01em; }
   .proof span { display:block; font-size:14px; color:var(--soft); margin-top:5px; }
   .proof code { display:block; font:500 12px var(--mono); color:var(--ink); margin-top:8px; }
-  .limits { margin:22px 0 0; padding-left:20px; font-size:16px; color:#3f3a31; max-width:800px; }
+  .limits { margin:22px 0 0; padding-left:20px; font-size:16px; color:#475467; max-width:800px; }
   .limits li { margin-bottom:5px; }
   .limits-more summary { cursor:pointer; font-weight:600; margin-top:14px; }
   .build { background:var(--ink); color:var(--sheet); padding:20px 22px; font:500 14px/1.6 var(--mono); overflow-wrap:anywhere; margin-top:14px; }
@@ -330,6 +330,142 @@
     .cmp td:first-child { font-size:16px; }
     .cmp td[data-l]::before { content:attr(data-l) ": "; font-weight:600; }
   }
+
+  /* App layout, after the structure of lending and cover apps: app bar, market header, panels, hairline tables */
+  .banner { background:var(--amber-bg); color:#7a4a06; border-bottom:1px solid #fedf89; font:500 12px/1.4 var(--sans); padding:6px 12px; }
+  nav { background:#fff; backdrop-filter:none; border-bottom:1px solid var(--rule); }
+  nav .wrap { height:60px; gap:28px; }
+  .mark { display:flex; align-items:center; gap:9px; font:700 18px var(--sans); letter-spacing:-.01em; }
+  .mark::before { content:""; width:24px; height:24px; border-radius:7px; background:var(--ink) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M8 10l4 12 4-9 4 9 4-12' fill='none' stroke='%23fff' stroke-width='2.6' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E") center/100% no-repeat; }
+  nav .links { margin-left:0; margin-right:auto; gap:4px; font-size:14px; font-weight:500; }
+  nav .links a { padding:7px 11px; border-radius:8px; color:var(--soft); }
+  nav .links a:hover { background:#f2f4f7; color:var(--ink); }
+  .live { font:500 12px var(--sans); border:1px solid var(--rule); border-radius:999px; padding:6px 11px; }
+  .wrap { max-width:1200px; }
+  .market { background:#fff; border-bottom:1px solid var(--rule); }
+  .hero { grid-template-columns:minmax(0,1fr) 400px; gap:64px; align-items:start; padding:44px 0 48px; }
+  h1 { font:700 clamp(30px,3.4vw,42px)/1.14 var(--sans); letter-spacing:-.025em; margin:0 0 14px; }
+  h1 em { font-style:normal; font-weight:700; color:var(--soft); }
+  .lead { font-size:16px; line-height:1.6; max-width:62ch; color:#475467; margin:0 0 24px; }
+  .btn { font:600 14px var(--sans); padding:10px 16px; border-radius:10px; border:1px solid var(--ink); }
+  .btn:hover:not(:disabled) { transform:none; background:#1d2939; }
+  .btn.ghost { border-color:var(--rule-strong); background:#fff; }
+  .btn.ghost:hover:not(:disabled) { background:#f2f4f7; color:var(--ink); }
+  .btn.danger { background:var(--ox); border-color:var(--ox); }
+  .btn.danger:hover:not(:disabled) { background:#912018; }
+  .org { background:#fff; border:1px solid var(--rule); border-radius:var(--r); padding:0; box-shadow:0 1px 2px rgba(16,24,40,.05); }
+  .org-in { border:0; padding:18px 20px; }
+  .eyebrow { font:600 11px var(--sans); letter-spacing:.05em; color:var(--soft); }
+  .card-row dt, .card-row dd { border-top-color:var(--rule); padding:9px 0; }
+  .card-row dd { font:500 13px var(--sans); text-align:right; }
+  .card-row { font-size:13px; gap:0; }
+  .card-row dd { padding-left:16px; }
+  section { padding:44px 0; border-top:0; }
+  section h2.title { font:700 22px/1.25 var(--sans); letter-spacing:-.015em; margin:0 0 14px; }
+  section h2.title + .sub, section h2.title + .plain { margin-top:-8px; }
+  .sub, .plain { font-size:15px; font-weight:400; color:#475467; max-width:720px; margin:0 0 20px; }
+  .note { font-size:13px; }
+  .app-grid { display:grid; grid-template-columns:minmax(0,1fr) 280px; gap:20px; align-items:start; }
+  .mirror { display:block; position:sticky; top:76px; margin:0; background:#fff; border:1px solid var(--rule); border-radius:var(--r); padding:6px 18px; }
+  .mirror::before { content:"This mandate"; display:block; font:600 13px var(--sans); padding:12px 0 8px; }
+  .mirror div { display:flex; justify-content:space-between; gap:10px; padding:11px 0; border-left:0; border-top:1px solid var(--rule); }
+  .mirror span { font:400 13px var(--sans); }
+  .mirror b { font:600 13px var(--sans); text-align:right; }
+  .stage { background:#fff; border:1px solid var(--rule); border-radius:var(--r); padding:20px; margin:0 0 12px; }
+  .stage h3 { font-size:15px; font-weight:600; }
+  .stage > p { font-size:14px; }
+  .stage label { font-size:14px; }
+  .stage textarea { font:13px/1.55 var(--mono); border:1px solid var(--rule-strong); border-radius:10px; background:#fff; padding:12px; }
+  .presets { gap:6px; }
+  .presets .sep { background:var(--rule); }
+  .chip { font:500 13px var(--sans); padding:6px 12px; border:1px solid var(--rule); border-radius:999px; background:#fff; color:var(--soft); }
+  .chip:hover { background:#f2f4f7; border-color:var(--rule); }
+  .chip[aria-pressed="true"] { background:var(--ink); border-color:var(--ink); color:#fff; }
+  .checks { gap:8px; }
+  .checks li { font:500 12px/1.3 var(--sans); border-radius:8px; padding:9px 10px; border-color:var(--rule); background:#f9fafb; }
+  .checks li.pass { border-color:#abefc6; }
+  .checks li.fail { border-color:#fecdca; }
+  .verdict { font:700 22px/1.2 var(--sans); letter-spacing:-.01em; }
+  .evidence dt, .evidence dd { border-top-color:var(--rule); }
+  .callout { font:500 14px/1.5 var(--sans); }
+  .moved { border:1px solid var(--rule); border-radius:10px; overflow:hidden; }
+  .moved span { font-size:12px; } .moved b { font:600 16px var(--sans); }
+  .clock { font:500 13px var(--sans); }
+  .state { border-left:0; border:1px solid #fedf89; border-radius:10px; font-size:14px; }
+  .out { border-left:0; border:1px solid var(--rule); border-radius:10px; }
+  .out.good { border-color:#abefc6; } .out.block { border-color:#fecdca; } .out.err { border-color:#fedf89; }
+  .guards { border:1px solid var(--rule); border-radius:var(--r); overflow:hidden; }
+  .guards code { font:600 13px var(--mono); }
+  .guards span { font-size:14px; }
+  .calc { grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:20px; }
+  .calc .inputs, .res { background:#fff; border:1px solid var(--rule); border-radius:var(--r); overflow:hidden; }
+  .calc label { font-size:13px; }
+  .calc input { border-color:var(--rule-strong); border-radius:8px; font:500 13px var(--sans); }
+  input { border-color:var(--rule-strong); border-radius:8px; }
+  .res div { font-size:13px; }
+  .res b { font:600 14px var(--sans); }
+  .res .main { background:#f9fafb; } .res .main b { font:700 26px var(--sans); letter-spacing:-.02em; }
+  .scroll { background:#fff; border:1px solid var(--rule); border-radius:var(--r); }
+  table { background:transparent; font-size:13px; }
+  th { font:500 12px var(--sans); letter-spacing:0; text-transform:none; color:var(--soft); background:#f9fafb; border-bottom:1px solid var(--rule); }
+  th, td { padding:12px 16px; }
+  tr:last-child td { border-bottom:0; }
+  .cmp tr.us td { background:#f6fef9; }
+  .how { border-top:0; gap:12px; }
+  .how div.col, .how div.col + div.col { background:#fff; border:1px solid var(--rule); border-radius:var(--r); padding:18px; }
+  .how h3 { font:600 15px var(--sans); }
+  .how p { font-size:14px; }
+  .proof { border:1px solid var(--rule); border-radius:var(--r); overflow:hidden; }
+  .proof b { font:700 24px/1.15 var(--sans); letter-spacing:-.02em; }
+  .proof span { font-size:13px; }
+  .proof code { color:var(--soft); }
+  .limits { font-size:14px; }
+  .build { border-radius:var(--r); font:500 13px/1.6 var(--mono); }
+  .key { border-radius:10px; font-size:13px; }
+  .tally, .steps, .attacks button { border-color:var(--rule); border-radius:10px; overflow:hidden; }
+  .tally b { font:600 18px var(--sans); }
+  .tally span { font:500 11px var(--sans); }
+  .attacks button { font-size:13px; }
+  .attacks button:hover:not(:disabled) { background:#f2f4f7; color:var(--ink); }
+  .steps { background:#fff; border-radius:var(--r); }
+  .step .n { font:600 14px var(--sans); width:26px; height:26px; border-radius:50%; background:#f2f4f7; display:grid; place-items:center; }
+  .step h3 { font-size:15px; }
+  .step p { font-size:14px; }
+  .decision { border-radius:10px; border-width:1px; }
+  .decision b { font:600 15px var(--sans); }
+  .node { border-radius:8px; border-color:var(--rule); }
+  .more { background:#fff; border:1px solid var(--rule); border-radius:var(--r); }
+  .more > summary { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; }
+  .more > summary h2.title { display:block; font:600 15px var(--sans); letter-spacing:0; margin:0; }
+  .more > summary::after { margin:0; font:400 20px var(--sans); }
+  .more[open] > summary { margin:0; border-bottom:1px solid var(--rule); }
+  .more > *:not(summary) { margin-left:20px; margin-right:20px; }
+  .more > *:last-child { margin-bottom:20px; }
+  .more > p.sub:first-of-type { margin-top:16px; }
+  #steal, #credit, #fire { padding:6px 0; }
+  .morehead { padding-top:30px; padding-bottom:8px; }
+  footer { background:#fff; margin-top:36px; font-size:13px; }
+  .tag { font:600 15px/1.4 var(--sans); }
+  .reveal { animation:none; }
+  @media (max-width:980px) {
+    .app-grid { grid-template-columns:1fr; }
+    .mirror { position:static; order:-1; }
+    .hero { grid-template-columns:1fr; gap:24px; padding:28px 0 32px; }
+    .how { grid-template-columns:1fr 1fr; }
+  }
+  @media (max-width:880px) {
+    .mirror { display:block; }
+    .mirror div:nth-child(n+3) { border-top:1px solid var(--rule); }
+    nav .wrap { height:auto; flex-wrap:wrap; padding-top:10px; padding-bottom:8px; row-gap:6px; }
+    nav .links { margin-right:0; order:3; width:100%; flex-wrap:wrap; gap:2px 6px; }
+    nav .links a { padding:4px 6px; }
+    .live { margin-left:auto; }
+    .how { grid-template-columns:1fr; }
+    .how div.col + div.col { border:1px solid var(--rule); padding:18px; }
+    .calc { grid-template-columns:1fr; }
+    h1 { font-size:30px; }
+    section { padding:30px 0; }
+  }
 </style>
 </head>
 <body>
@@ -340,12 +476,12 @@
   <div class="live" id="live"><i></i><span id="liveText">connecting…</span></div>
 </div></nav>
 
-<main id="top" class="wrap">
+<main id="top" class="market"><div class="wrap">
   <div class="hero">
     <div>
       <h1 class="reveal">Your agent can be fooled. <em>Know who pays.</em></h1>
       <p class="lead reveal d1">For vendors of accounts-payable agents. A spending limit stops the payment it can recognize. It can’t stop the one your agent is talked into, like a bill it already paid, with a fake note from the controller. Back your agent with money: a named guarantor locks funds on NEAR, and if the arbiter named in the mandate finds the agent was fooled inside its limits, your customer is repaid from those funds, minus its share.</p>
-      <div class="cta reveal d2"><a class="btn" href="#fool">Fool the model</a><a class="btn ghost" href="#numbers">See the numbers</a></div>
+      <div class="cta reveal d2"><a class="btn" href="#fool">Try the demo</a><a class="btn ghost" href="#numbers">See the numbers</a><a class="btn ghost" href="https://github.com/zuemen/writ">GitHub</a></div>
     </div>
     <div class="org reveal d2" id="whoPays"><div class="org-in">
       <div class="eyebrow" style="margin-bottom:10px">Who pays · live on testnet · <span id="wpNo">…</span></div>
@@ -362,17 +498,12 @@
       <details class="verify"><summary>Check this card yourself</summary><pre id="wpJson">…</pre><code id="wpCmd"></code></details>
     </div></div>
   </div>
-</main>
+</div></main>
 
 <section id="fool"><div class="wrap">
   <h2 class="title">Fool a real model. Then decide who pays.</h2>
   <p class="sub">One mandate, a real model, real testnet transactions signed in your browser. The money goes to a test seller.</p>
-  <div class="mirror" aria-label="This mandate, live">
-    <div><span>Guarantor’s lock</span><b id="mLocked">…</b></div>
-    <div><span>Claims paid</span><b id="mPaid">…</b></div>
-    <div><span>Upheld, denied</span><b id="mRuled">…</b></div>
-    <div><span>Agent</span><b id="mAgent">…</b></div>
-  </div>
+  <div class="app-grid"><div class="app-main">
   <div class="state" id="fState" aria-live="polite" hidden></div>
 
   <div class="stage" id="sInvoice">
@@ -389,7 +520,7 @@
     <textarea id="inv" rows="5" maxlength="800" spellcheck="false"></textarea>
     <p class="note" id="presetWhy" aria-live="polite"></p>
     <div class="row"><button class="btn" id="askModel" disabled>Let the model read it</button></div>
-    <p class="note">A link is one unit of the agent’s budget, 0.01 USDC here. An employee releases links one at a time; the agents under that employee are its tree. The fake controller note and the real purchase may reuse the model’s last answer, to save free quota: change a word and the model reads it live. The agent’s ledger: PO-77 paper stock, already paid by INV-1. PO-78 toner, 2 links (0.01 USDC each), open. Llama 3.3 on Cloudflare’s free tier, not NEAR AI, no TEE. Measured twice, 2026-11-03 and 11-04, 10 runs each at low temperature, so the runs are close to repeats: plain re-bill paid 0 of 10, fake controller note 10 of 10, real purchase 10 of 10, mismatched invoices 0 of 30. <a href="https://github.com/zuemen/writ/blob/main/docs/TESTING.md#the-live-model">A small sample, not a rate.</a> <span id="liveStat"></span></p>
+    <details class="verify"><summary>What a link is, and how the model was measured</summary><p class="note">A link is one unit of the agent’s budget, 0.01 USDC here. An employee releases links one at a time; the agents under that employee are its tree. The fake controller note and the real purchase may reuse the model’s last answer, to save free quota: change a word and the model reads it live. The agent’s ledger: PO-77 paper stock, already paid by INV-1. PO-78 toner, 2 links (0.01 USDC each), open. Llama 3.3 on Cloudflare’s free tier, not NEAR AI, no TEE. Measured twice, 2026-11-03 and 11-04, 10 runs each at low temperature, so the runs are close to repeats: plain re-bill paid 0 of 10, fake controller note 10 of 10, real purchase 10 of 10, mismatched invoices 0 of 30. <a href="https://github.com/zuemen/writ/blob/main/docs/TESTING.md#the-live-model">A small sample, not a rate.</a> <span id="liveStat"></span></p></details>
   </div>
 
   <div class="stage" id="sDecision" aria-live="polite" hidden></div>
@@ -397,6 +528,14 @@
   <div class="stage" id="sClaim" aria-live="polite" hidden></div>
   <div class="stage" id="sArb" aria-live="polite" hidden></div>
   <div class="stage" id="sResult" aria-live="polite" hidden></div>
+  </div>
+  <aside class="mirror" aria-label="This mandate, live">
+    <div><span>Guarantor’s lock</span><b id="mLocked">…</b></div>
+    <div><span>Claims paid</span><b id="mPaid">…</b></div>
+    <div><span>Upheld, denied</span><b id="mRuled">…</b></div>
+    <div><span>Agent</span><b id="mAgent">…</b></div>
+  </aside>
+  </div>
 </div></section>
 
 <section id="guards"><div class="wrap">
@@ -512,7 +651,7 @@
   <p class="note">The threat model has <a href="https://github.com/zuemen/writ/blob/main/docs/THREAT_MODEL.md#limits">the rest</a>. <span class="mono">make verify</span> reruns the build, the bench, the stories and the credential checks, and prints a scorecard.</p>
 </div></section>
 
-<div class="wrap"><p class="note" style="margin:0">More on this page: the same contract also blocks a stolen agent key, backs net-30 orders for sellers, and stops a tree when an employee leaves.</p></div>
+<div class="wrap morehead"><h2 class="title" style="font:700 22px/1.25 var(--sans);letter-spacing:-.015em;margin:0 0 6px">More from the same contract</h2><p class="sub" style="margin:0">It also blocks a stolen agent key, backs net-30 orders for sellers, and stops a tree when an employee leaves.</p></div>
 
 <section id="steal"><div class="wrap"><details class="more"><summary><h2 class="title">This is an AI agent’s private key. Steal its money.</h2></summary>
   <p class="sub">With a plain spending limit, a thief holding the key can spend up to that limit. Here, without the employee’s next budget link, the key alone moves nothing. A thief who also takes released links can spend those, to permitted payees only.</p>
@@ -671,7 +810,7 @@
 
 <footer><div class="wrap"><div class="foot">
   <div><p class="tag">Trust isn’t proving an AI won’t fail. It’s knowing who pays when it does.</p>Testnet only. No real guarantor, no real customers, not audited, no actuarial basis. Offering this for real money may be regulated insurance or guarantee business depending on the jurisdiction; no lawyer has reviewed it. A guarantor would need its own licence or legal opinion. Writ is software. Built at NEAR HACKATHON by Ting-Yi Chu.</div>
-  <div><b>Product</b><a href="#fool">Fool the model</a><a href="#numbers">The numbers</a><a href="#credit">Net-30 for sellers</a><a href="#steal">Steal the key</a></div>
+  <div><b>Product</b><a href="#fool">Try the demo</a><a href="#numbers">The numbers</a><a href="#credit">Net-30 for sellers</a><a href="#steal">Steal the key</a></div>
   <div><b>Developers</b><a href="https://github.com/zuemen/writ/blob/main/docs/INTEGRATE.md">Integrate</a><a href="https://github.com/zuemen/writ/blob/main/docs/CONTRACT.md">Contract interface</a><a href="https://github.com/zuemen/writ/blob/main/docs/ERRORS.md">Error codes</a><a href="https://github.com/zuemen/writ/blob/main/SECURITY.md">Security</a></div>
   <div><b>Project</b><a href="https://github.com/zuemen/writ">GitHub</a><a href="#proof">Proof</a><a href="https://github.com/zuemen/writ/blob/main/docs/THREAT_MODEL.md">Threat model</a><a href="https://github.com/zuemen/writ/blob/main/LICENSE">MIT License</a></div>
 </div></div></footer>
