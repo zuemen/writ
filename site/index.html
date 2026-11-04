@@ -490,6 +490,7 @@
     <li>Not audited. The vLEI issuers are mocks with a fictional LEI.</li>
   </ul>
   <details class="limits-more"><summary>All known limits</summary><ul class="limits">
+    <li><b>The owner can take a guarantor’s free stake.</b> It can overwrite the guarantor’s key, sign a mandate in its name, and collect a default. Found by reading the code in review, not run. A real deployment needs a timelock or the guarantor’s own signature; the contract has neither, and its owner is a demo account. The <a href="https://github.com/zuemen/writ/blob/main/docs/THREAT_MODEL.md#limits">threat model</a> has two smaller ones from the same review.</li>
     <li><b>Moral hazard is capped, not stopped.</b> A company that fools its own agent, with a seller it controls, can take the loss minus its share, up to the limit, if the arbiter upholds.</li>
     <li><b>Seller refunds are invisible.</b> If a seller refunds a fooled payment, the contract can’t see it, so a company could be repaid twice. The terms ask for a statement; nothing on-chain checks it.</li>
     <li><b>No company-wide total.</b> Each mandate has its own limit. Nothing adds up a company’s mandates or a guarantor’s view of them.</li>
