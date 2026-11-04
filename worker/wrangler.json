@@ -1,5 +1,6 @@
 {
   "name": "writ-near",
+  "routes": [{ "pattern": "writ.zuemen.net", "custom_domain": true }],
   "main": "index.js",
   "compatibility_date": "2026-10-01",
   "assets": { "directory": "../.demo-testnet/site", "binding": "ASSETS", "run_worker_first": ["/api/*"] },

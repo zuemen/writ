@@ -6,7 +6,7 @@ Writ lets the vendor of an AI agent stand behind it with money. If a customer's 
 
 Trust isn't proving an AI won't fail. It's knowing who pays when it does.
 
-**Demo:** <https://writ-near.112306007.workers.dev> Fool a real model, then rule on the claim yourself. Your browser signs testnet transactions.
+**Demo:** <https://writ.zuemen.net> Fool a real model, then rule on the claim yourself. Your browser signs testnet transactions.
 
 A live model paid a re-billed invoice with a fake controller note 10 of 10 times, and a version without the note 0 of 10 (small sample, at low temperature so the runs are close to repeats, [how to re-run it](docs/TESTING.md)). The same invoice [sent on chain](docs/testnet-cover.md) passes every check. Matching invoices to the ledger would stop that one. That's the point of asking the vendor to back its agent: with money at stake, it has a reason to build that check, and cover pays for what it misses, if the seller won't refund. We can't yet name a bill that passes a good order match and isn't that kind of theft, which is why this may be a thin market. We found no public case of an agent losing money this way.
 
@@ -15,7 +15,7 @@ Cover isn't for everything. A thief with a real seller's payout keys billing a r
 | Previous NEAR hackathons judged | Where to check it |
 |---|---|
 | Technical implementation | `make verify` reruns the build, the bench, the main stories and the credential checks ([from a clean checkout](https://github.com/zuemen/writ/actions/runs/41722437748)). [126 attacks](docs/bench.md), exact-value tests, a fuzz of the books, [8 real transactions through the live site](docs/testnet-cover.md) |
-| Design | [The demo](https://writ-near.112306007.workers.dev): the visitor is the arbiter, and the checks, the stake and the claim are on screen |
+| Design | [The demo](https://writ.zuemen.net): the visitor is the arbiter, and the checks, the stake and the claim are on screen |
 | Impact | Unproven: no customer yet. [What you'd have to believe](docs/ECONOMICS.md#what-you-would-have-to-believe), and [what people say in public, pushback included](docs/ECONOMICS.md#what-people-say-in-public) |
 | Originality | It doesn't try to stop the fooled payment. It names who repays it, before the agent spends |
 | Sustainability | MIT. Writ takes no fee today; a business would need a share of the fee from separate guarantors, or tools sold to vendors and guarantors. [Who might pay](docs/ECONOMICS.md#who-would-pay-if-not-the-company) |
