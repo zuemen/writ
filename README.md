@@ -50,6 +50,17 @@ The contract can't tell whether an agent was fooled. Someone has to decide, and 
 
 **Second use: net-30 for sellers.** The same stake can back an order on credit: a seller sets a rule, ships if a guarantor has locked money for that order, and claims if the buyer doesn't pay. [`docs/INTEGRATE.md`](docs/INTEGRATE.md#second-use-net-30-for-sellers).
 
+## NEAR features used
+
+| Feature | Where | What it does here |
+|---|---|---|
+| Function-call keys | `contract/src/lib.rs` (`add_access_key_allowance`, `delete_key`) | The contract adds and deletes agent keys on its own account. A key can call agent methods only, and the protocol refuses other methods before contract code runs, so a revoked agent's transactions never get created. |
+| Account with no full-access key | `writ-cover.testnet` | The deployed account has no full-access key; the code hash is rebuilt in CI. |
+| NEP-141 tokens | `contract/src/lib.rs`, `make credit-usdc-demo` | A mandate can settle in a token. The demo uses a mock 6-decimal stablecoin. |
+| NEAR AI Cloud | `app/src/agent-live.ts`, `make attack-live` | Default endpoint for the optional live-model run; any OpenAI-compatible API works. The hosted demo uses Cloudflare Workers AI instead. |
+
+Not used: NEAR Intents, Chain Signatures.
+
 ## Try it
 
 Requirements: Rust 1.97 + `wasm32-unknown-unknown`, Node 22, Python 3.12.6+ with libsodium (`apt install libsodium23` / `brew install libsodium`), `make`, `gcc`, `pkg-config`, `libssl-dev`. Linux or macOS; on Windows use WSL or Docker. Ubuntu 24.04 ships Python 3.12.3, which is too old: install a newer one (`uv python install 3.12`) and pass it with `make setup PY=/path/to/python3.12`, or use the `Dockerfile`. Network is needed once. Nothing here sends a transaction to testnet or mainnet. No API keys, except for the optional live-model runs.
